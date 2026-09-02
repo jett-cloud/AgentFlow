@@ -1,0 +1,112 @@
+/* src/components/theme.css */
+:root {
+  /* =========================================================
+   * 1. 基础画布与节点底色 (Canvas & Base Node)
+   * ========================================================= */
+  --workflow-canvas-bg: #f2f4f7;
+  --workflow-canvas-dot: rgb(133 133 173 / 0.15);
+  --workflow-block-bg: #fcfcfd;
+  --workflow-block-bg-transparent: rgb(252 252 253 / 0.9);
+  --workflow-block-border: #ffffff;
+  --workflow-block-border-highlight: rgb(0 51 255 / 0.14);
+  --workflow-block-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --workflow-block-shadow-hover: 0 8px 20px rgba(16, 24, 40, 0.12);
+  --workflow-link-line-normal: #d0d5dc;
+  --workflow-link-line-active: #085afc;
+  --workflow-link-line-handle: #085afc;
+  --workflow-link-line-success-handle: #17b26a;
+  --workflow-link-line-error-handle: #f04438;
+  --workflow-link-line-failure-handle: #f79009;
+  --workflow-edge-stroke: #d0d5dc;
+  --workflow-minimap-block: rgb(200 206 218 / 0.45);
+  --workflow-minimap-bg: #e9ebf0;
+  --workflow-minimap-mask: rgb(242 244 247 / 0.65);
+  --text-primary: #101828;
+  --text-secondary: #354052;
+  --text-accent: #0033ff;
+  --components-panel-bg: #ffffff;
+  --components-panel-border: rgb(16 24 40 / 0.08);
+  --components-actionbar-bg: rgb(255 255 255 / 0.95);
+  --components-actionbar-border: rgb(16 24 40 / 0.04);
+  --components-actionbar-item-bg-hover: #f9fafb;
+  --components-actionbar-item-bg-active: rgb(0 51 255 / 0.08);
+
+  /* =========================================================
+   * 2. 节点运行状态高亮 (Running Status Borders & Glows)
+   * ========================================================= */
+  --state-accent-border: #0033ff;
+  /* 蓝色运行中 (Running) */
+  --state-success-border: #17b26a;
+  /* 绿色成功 (Success) */
+  --state-destructive-border: #f04438;
+  /* 红色失败 (Failed) */
+  --state-warning-border: #f79009;
+  /* 橙黄色异常/警告 (Warning) */
+
+  /* =========================================================
+   * 3. Dify 官方不同节点类型的 Icon 主题色 (Node Icon Palette)
+   * ========================================================= */
+  /* [Start / Trigger] 开始 & 触发器节点 - 品牌蓝 */
+  --node-icon-start-bg: #155eef;
+  --node-icon-start-color: #ffffff;
+
+  /* [LLM / Agent] 大模型与 Agent 节点 - 靛紫 */
+  --node-icon-llm-bg: #6172f3;
+  --node-icon-llm-color: #ffffff;
+
+  /* [Code / Template / Tool] 代码与工具节点 - 天蓝 */
+  --node-icon-code-bg: #2e90fa;
+  --node-icon-code-color: #ffffff;
+
+  /* [IfElse / Loop / Iteration] 分支与循环节点 - 青绿 */
+  --node-icon-branch-bg: #06aed4;
+  --node-icon-branch-color: #ffffff;
+
+  /* [KnowledgeRetrieval / QuestionClassifier] 知识库检索 - 翡翠绿 */
+  --node-icon-knowledge-bg: #12b76a;
+  --node-icon-knowledge-color: #ffffff;
+
+  /* [End / Answer / KnowledgeBase] 结束与回答 - 暖橙 */
+  --node-icon-end-bg: #f79009;
+  --node-icon-end-color: #ffffff;
+
+  /* [HttpRequest / Schedule] HTTP与定时器 - 魅紫 */
+  --node-icon-http-bg: #875bf7;
+  --node-icon-http-color: #ffffff;
+
+  /* =========================================================
+   * 4. VueFlow 连线锚点与连接线样式 (Handles & Edges)
+   * ========================================================= */
+  --workflow-handle-bg: #ffffff;
+  --workflow-handle-border: #085afc;
+  --workflow-handle-hover-border: #0033ff;
+  --workflow-edge-selected-stroke: #085afc;
+}
+
+/* =========================================================
+ * 暗黑模式支持 (Dark Mode Overrides)
+ * ========================================================= */
+[data-theme='dark'] {
+  --workflow-canvas-bg: #1d1d20;
+  --workflow-canvas-dot: rgb(255 255 255 / 0.12);
+  --workflow-block-bg: #1d1e22;
+  --workflow-block-border: #2e3038;
+  --workflow-block-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  --workflow-block-shadow-hover: 0 8px 24px rgba(0, 0, 0, 0.6);
+
+  --state-accent-border: #2970ff;
+  --state-success-border: #17b26a;
+  --state-destructive-border: #f04438;
+  --state-warning-border: #f79009;
+
+  --workflow-handle-bg: #1d1e22;
+  --workflow-handle-border: #5d6b82;
+  --workflow-edge-stroke: #475467;
+  --text-primary: #f9fafb;
+  --text-secondary: #d0d5dd;
+  --components-panel-bg: #1d1e22;
+  --components-panel-border: rgb(255 255 255 / 0.08);
+  --components-actionbar-bg: rgb(29 30 34 / 0.95);
+  --components-actionbar-border: rgb(255 255 255 / 0.08);
+  --components-actionbar-item-bg-hover: #2e3038;
+}

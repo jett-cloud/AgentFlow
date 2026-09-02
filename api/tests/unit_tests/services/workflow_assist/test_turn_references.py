@@ -1,0 +1,95 @@
+from services.workflow_assist.turn_references import (
+    UnknownTurnReferenceError,
+    append_hard_bound_resources,
+    bind_session_references,
+    bind_turn_references,
+    normalize_turn_references,
+)
+from core.workflow.generator.agent.types import AgentMessage, AgentSession
+
+
+def test_normalize_drops_malformed_items_and_rejects_oversize_lists() -> None:
+    assert normalize_turn_references(None) is None
+    assert normalize_turn_references([{"kind": "node"}, {"kind": "nope", "id": "x"}]) is None
+    kept = normalize_turn_references(
+        [
+            {"kind": "node", "id": "n1", "label": "知识库检索"},
+            {"kind": "node", "id": "n1", "label": "dup"},
+            {"kind": "tool", "id": "time/current_time", "label": "当前时间", "provider": "time", "tool_name": "current_time"},
+            "bad",
+        ]
+    )
+    assert kept == [
+        {"kind": "node", "id": "n1", "label": "知识库检索"},
+        {
+            "kind": "tool",
+            "id": "time/current_time",
+            "label": "当前时间",
+            "provider": "time",
+            "tool_name": "current_time",
+        },
+    ]
+    try:
+        normalize_turn_references([{"kind": "node", "id": f"n{index}"} for index in range(9)])
+    except ValueError as exc:
+        assert "exceeds 8" in str(exc)
+    else:
+        raise AssertionError("expected oversize references to fail")
+
+
+def test_bind_rejects_unknown_canvas_and_catalogue_ids() -> None:
+    refs = [{"kind": "node", "id": "missing", "label": "Gone"}]
+    try:
+        bind_turn_references(
+            refs,
+            canvas_graph={"nodes": [{"id": "n1"}]},
+            installed_tools=set(),
+            installed_datasets=set(),
+        )
+    except UnknownTurnReferenceError as exc:
+        assert "missing" in str(exc)
+    else:
+        raise AssertionError("expected unknown node to fail")
+
+    bound = bind_turn_references(
+        [
+            {"kind": "node", "id": "n1", "label": "知识库检索"},
+            {"kind": "tool", "id": "time/current_time", "label": "当前时间", "provider": "time", "tool_name": "current_time"},
+            {"kind": "dataset", "id": "ds-1", "label": "产品文档"},
+        ],
+        canvas_graph={"nodes": [{"id": "n1"}]},
+        installed_tools={("time", "current_time")},
+        installed_datasets={"ds-1"},
+    )
+    assert bound is not None
+    assert [item["id"] for item in bound] == ["n1", "time/current_time", "ds-1"]
+
+
+def test_hard_bind_prompt_forbids_search_and_fills_session_lists() -> None:
+    session = AgentSession(
+        messages=[
+            AgentMessage(sequence=1, event_type="message", role="user", status="completed", payload={"text": "x"}),
+        ],
+        candidate_graph={"nodes": [], "edges": [], "viewport": {"x": 0.0, "y": 0.0, "zoom": 1.0}},
+        candidate_revision=0,
+        candidate_base_hash=None,
+        compacted_until_sequence=None,
+        compacted_state=None,
+        generation_mode="workflow",
+        last_validation=None,
+    )
+    references = [
+        {"kind": "node", "id": "n1", "label": "知识库检索"},
+        {"kind": "tool", "id": "time/current_time", "label": "当前时间", "provider": "time", "tool_name": "current_time"},
+        {"kind": "dataset", "id": "ds-1", "label": "产品文档"},
+    ]
+    bind_session_references(session, references)
+    assert [item["id"] for item in session.referenced_nodes] == ["n1"]
+    assert [item["id"] for item in session.referenced_tools] == ["time/current_time"]
+    assert [item["id"] for item in session.referenced_datasets] == ["ds-1"]
+    text = append_hard_bound_resources("connect them", references)
+    assert "Bound user references (HARD)" in text
+    assert "time/current_time" in text
+    assert "ds-1" in text
+    assert "search_tools" in text
+    assert "ask_user" in text

@@ -1,0 +1,24 @@
+{
+  "instruction": "修掉缺边的图",
+  "fake_acceptance_fail_first": true,
+  "initial_graph": {
+    "nodes": [
+      {"id": "start", "data": {"type": "start", "title": "开始", "desc": "", "variables": []}},
+      {"id": "end", "data": {"type": "end", "title": "结束", "desc": ""}}
+    ],
+    "edges": [],
+    "viewport": {"x": 0, "y": 0, "zoom": 0.7}
+  },
+  "queued_tool_calls": [
+    [{"id": "v1", "name": "validate_graph", "arguments": {}}],
+    [{"id": "c1", "name": "connect", "arguments": {"source": "start", "target": "end"}}],
+    [{"id": "a1", "name": "run_acceptance", "arguments": {}}],
+    [{"id": "f1", "name": "finish", "arguments": {"summary": "还不行"}}],
+    [{"id": "a2", "name": "run_acceptance", "arguments": {}}],
+    [{"id": "f2", "name": "finish", "arguments": {"summary": "修好了"}}]
+  ],
+  "expect": {
+    "terminal": "done",
+    "saw_no_evidence": false
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "instruction": "绑一个不存在的知识库",
+  "initial_graph": {
+    "nodes": [
+      {"id": "start", "data": {"type": "start", "title": "开始", "desc": "", "variables": []}},
+      {"id": "kr", "data": {"type": "knowledge-retrieval", "title": "检索", "desc": "", "dataset_ids": ["unknown-ds"]}},
+      {"id": "end", "data": {"type": "end", "title": "结束", "desc": ""}}
+    ],
+    "edges": [
+      {"source": "start", "target": "kr"},
+      {"source": "kr", "target": "end"}
+    ],
+    "viewport": {"x": 0, "y": 0, "zoom": 0.7}
+  },
+  "queued_tool_calls": [
+    [{"id": "s1", "name": "search_datasets", "arguments": {"query": "kb"}}],
+    [{"id": "f1", "name": "finish", "arguments": {"summary": "绑好了"}}]
+  ],
+  "installed_dataset_ids": ["ds-1"],
+  "expect": {
+    "terminal": "error",
+    "forbid_done": true
+  }
+}

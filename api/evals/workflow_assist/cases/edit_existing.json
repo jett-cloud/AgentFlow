@@ -1,0 +1,27 @@
+{
+  "instruction": "只改检索节点的提示",
+  "initial_graph": {
+    "nodes": [
+      {"id": "start", "data": {"type": "start", "title": "开始", "desc": "", "variables": []}},
+      {"id": "kr", "data": {"type": "knowledge-retrieval", "title": "检索", "desc": "", "dataset_ids": ["ds-1"]}},
+      {"id": "end", "data": {"type": "end", "title": "结束", "desc": ""}},
+      {"id": "extra", "data": {"type": "llm", "title": "多余", "desc": ""}}
+    ],
+    "edges": [
+      {"source": "start", "target": "kr"},
+      {"source": "kr", "target": "end"}
+    ],
+    "viewport": {"x": 0, "y": 0, "zoom": 0.7}
+  },
+  "queued_tool_calls": [
+    [{"id": "d1", "name": "delete_node", "arguments": {"node_id": "extra"}}],
+    [{"id": "a1", "name": "run_acceptance", "arguments": {}}],
+    [{"id": "f1", "name": "finish", "arguments": {"summary": "已改"}}]
+  ],
+  "installed_dataset_ids": ["ds-1"],
+  "expect": {
+    "terminal": "done",
+    "node_ids_contains": ["start", "kr", "end"],
+    "node_ids_excludes": ["extra"]
+  }
+}

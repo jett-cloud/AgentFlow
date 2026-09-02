@@ -1,0 +1,25 @@
+{
+  "instruction": "按条件分支",
+  "initial_graph": {
+    "nodes": [
+      {"id": "start", "data": {"type": "start", "title": "开始", "desc": "", "variables": []}},
+      {"id": "branch", "data": {"type": "if-else", "title": "分支", "desc": ""}},
+      {"id": "end_true", "data": {"type": "end", "title": "是", "desc": ""}},
+      {"id": "end_false", "data": {"type": "end", "title": "否", "desc": ""}}
+    ],
+    "edges": [{"source": "start", "target": "branch"}],
+    "viewport": {"x": 0, "y": 0, "zoom": 0.7}
+  },
+  "queued_tool_calls": [
+    [
+      {"id": "c1", "name": "connect", "arguments": {"source": "branch", "target": "end_true", "source_handle": "true"}},
+      {"id": "c2", "name": "connect", "arguments": {"source": "branch", "target": "end_false", "source_handle": "false"}}
+    ],
+    [{"id": "a1", "name": "run_acceptance", "arguments": {}}],
+    [{"id": "f1", "name": "finish", "arguments": {"summary": "分支好了"}}]
+  ],
+  "expect": {
+    "terminal": "done",
+    "handles_contains": ["true", "false"]
+  }
+}

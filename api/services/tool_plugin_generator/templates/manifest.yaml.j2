@@ -1,0 +1,27 @@
+version: 0.0.1
+type: plugin
+author: "{{ author }}"
+name: "{{ plugin_name }}"
+label:
+  en_US: "{{ provider_label }}"
+created_at: "2026-01-01T00:00:00.000000000Z"
+icon: icon.svg
+description:
+  en_US: "{{ provider_label }} tool plugin"
+resource:
+  memory: 1048576
+  permission:
+    tool:
+      enabled: true
+plugins:
+  tools:
+    - "{{ provider_yaml }}"
+meta:
+  version: 0.0.1
+  arch:
+    - amd64
+    - arm64
+  runner:
+    language: python
+    version: "3.12"
+    entrypoint: main

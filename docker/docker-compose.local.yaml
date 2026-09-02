@@ -1,0 +1,33 @@
+# Local development override: build every modified backend component from this repository.
+x-agentflow-api-image: &agentflow-api-image
+  image: agentflow-api:local
+  build:
+    context: ..
+    dockerfile: api/Dockerfile
+
+services:
+  api:
+    <<: *agentflow-api-image
+    ports:
+      - "5001:5001"
+
+  api_websocket:
+    <<: *agentflow-api-image
+
+  worker:
+    <<: *agentflow-api-image
+
+  worker_beat:
+    <<: *agentflow-api-image
+
+  agent_backend:
+    image: agentflow-agent-backend:local
+    build:
+      context: ..
+      dockerfile: dify-agent/Dockerfile
+
+  local_sandbox:
+    image: agentflow-agent-runtime:local
+    build:
+      context: ../dify-agent-runtime
+      dockerfile: docker/Dockerfile

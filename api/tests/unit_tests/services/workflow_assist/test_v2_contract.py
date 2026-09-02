@@ -1,0 +1,149 @@
+import json
+from pathlib import Path
+
+CONTRACT_FIXTURE = Path(__file__).parents[3] / "fixtures" / "workflow_assist_v2_contract.json"
+FRONTEND_CONTRACT_MIRROR = (
+    Path(__file__).parents[5]
+    / "agent-flow-frontend"
+    / "src"
+    / "features"
+    / "workflow"
+    / "assistant"
+    / "workflowAssistV2Contract.json"
+)
+
+
+def test_workflow_assist_v2_contract_locks_transport_boundary() -> None:
+    assert CONTRACT_FIXTURE.exists(), "the v2 contract fixture must exist"
+    contract = json.loads(CONTRACT_FIXTURE.read_text(encoding="utf-8"))
+
+    assert contract == {
+        "version": 2,
+        "endpoints": {
+            "turns": {
+                "method": "POST",
+                "path": "/apps/{app_id}/workflow-assist/conversations/{conversation_id}/turns",
+                "success_status": 202,
+                "response": {
+                    "required": {
+                        "conversation_id": "string",
+                        "run_id": "string",
+                        "epoch": "integer",
+                        "cursor": 0,
+                    }
+                },
+            },
+            "runs": {
+                "method": "GET",
+                "path": "/conversations/{conversation_id}/runs",
+                "success_status": 200,
+                "query_defaults": {"after_epoch": 0, "limit": 50},
+            },
+            "timeline": {
+                "method": "GET",
+                "path": "/conversations/{conversation_id}/timeline",
+                "success_status": 200,
+                "query_defaults": {"after_epoch": 0, "after_sequence": 0, "limit": 200},
+            },
+            "events": {
+                "method": "GET",
+                "path": "/conversations/{conversation_id}/runs/{run_id}/events",
+                "success_status": 200,
+                "empty_terminal_status": 204,
+                "query_defaults": {"after": 0},
+                "resume_precedence": ["Last-Event-ID", "after"],
+            },
+            "candidate": {
+                "method": "GET",
+                "path": "/conversations/{conversation_id}/candidate",
+                "success_status": 200,
+            },
+            "abort": {
+                "method": "POST",
+                "path": "/conversations/{conversation_id}/runs/{run_id}/abort",
+                "success_status": 200,
+                "conflict_response": {
+                    "status": 409,
+                    "required": ["active_run", "latest_run"],
+                    "run_summary": ["run_id", "epoch", "status"],
+                },
+            },
+            "apply": {
+                "method": "POST",
+                "path": "/apps/{app_id}/workflow-assist/apply",
+                "success_status": 200,
+                "conflict_response": {
+                    "status": 409,
+                    "required": ["active_run", "latest_run"],
+                    "run_summary": ["run_id", "epoch", "status"],
+                },
+            },
+        },
+        "requests": {
+            "turns": {
+                "required": ["message", "mode", "model_config"],
+                "optional": ["selected_node", "references"],
+                "forbidden": ["graph", "draft_hash", "candidate_hash"],
+                "schema": {
+                    "message": {"type": "string"},
+                    "mode": {"enum": ["workflow", "advanced-chat"]},
+                    "model_config": {"type": "object"},
+                    "selected_node": {"type": "string"},
+                    "references": {"type": "array", "maxItems": 8},
+                },
+            },
+            "abort": {"required": ["epoch"], "schema": {"epoch": {"type": "integer"}}},
+            "apply": {
+                "required": ["conversation_id", "hash"],
+                "forbidden": ["graph", "force"],
+                "schema": {
+                    "conversation_id": {"type": "string"},
+                    "hash": {"algorithm": "sha256", "pattern": "^[0-9a-f]{64}$", "length": 64},
+                },
+            },
+        },
+        "events": [
+            "status",
+            "message.delta",
+            "reasoning.delta",
+            "tool_call",
+            "tool_result",
+            "candidate.updated",
+            "waiting_user",
+            "done",
+            "failed",
+            "error",
+            "aborted",
+            "turn_complete",
+        ],
+        "sse_envelope": ["event", "run_id", "epoch", "sequence", "step_id", "created_at", "data"],
+        "event_payloads": {
+            "message.delta": {"required": ["text"], "optional": ["message_id", "delta_index", "stream_mode"]},
+            "reasoning.delta": {"required": ["text"], "optional": ["message_id", "delta_index", "stream_mode"]},
+        },
+        "timeline_cursor": ["epoch", "sequence"],
+        "frontend_storage": {
+            "key_template": "workflow-assist:v2:${appId}",
+            "persisted_coordinates": ["conversation_id", "run_id", "epoch", "cursor"],
+            "forbidden": ["graph", "messages", "completion_evidence"],
+        },
+        "limits": {
+            "input_bytes": 65536,
+            "event_payload_bytes": 262144,
+            "candidate_graph_bytes": 4194304,
+            "message_delta_interval_ms": 100,
+            "message_delta_bytes": 8192,
+            "runs_limit_max": 100,
+            "timeline_limit_max": 500,
+        },
+    }
+
+
+def test_frontend_workflow_assist_v2_contract_mirror_matches_authority() -> None:
+    assert FRONTEND_CONTRACT_MIRROR.exists(), "the frontend v2 contract mirror must exist"
+
+    backend_contract = json.loads(CONTRACT_FIXTURE.read_text(encoding="utf-8"))
+    frontend_contract = json.loads(FRONTEND_CONTRACT_MIRROR.read_text(encoding="utf-8"))
+
+    assert frontend_contract == backend_contract
+    assert FRONTEND_CONTRACT_MIRROR.read_bytes() == CONTRACT_FIXTURE.read_bytes()

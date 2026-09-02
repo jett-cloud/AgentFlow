@@ -1,0 +1,24 @@
+{
+  "instruction": "加一个循环容器",
+  "initial_graph": {
+    "nodes": [
+      {"id": "start", "data": {"type": "start", "title": "开始", "desc": "", "variables": []}},
+      {"id": "loop", "data": {"type": "iteration", "title": "循环", "desc": ""}},
+      {"id": "body", "data": {"type": "llm", "title": "循环体", "desc": ""}, "parentId": "loop"},
+      {"id": "end", "data": {"type": "end", "title": "结束", "desc": ""}}
+    ],
+    "edges": [
+      {"source": "start", "target": "loop"},
+      {"source": "loop", "target": "end"}
+    ],
+    "viewport": {"x": 0, "y": 0, "zoom": 0.7}
+  },
+  "queued_tool_calls": [
+    [{"id": "a1", "name": "run_acceptance", "arguments": {}}],
+    [{"id": "f1", "name": "finish", "arguments": {"summary": "循环好了"}}]
+  ],
+  "expect": {
+    "terminal": "done",
+    "parent_of": {"body": "loop"}
+  }
+}

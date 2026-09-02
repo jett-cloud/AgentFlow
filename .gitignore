@@ -1,0 +1,86 @@
+# Local environment files. Commit only documented examples.
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# JavaScript and Vite output
+node_modules/
+.pnpm-store/
+/agent-flow-frontend/dist/
+/dify-agent/build/
+/agent-flow-frontend/.vite/
+.turbo/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python environments, caches, packaging, and generated coverage
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage/
+htmlcov/
+coverage.xml
+coverage.json
+.benchmarks/
+.import_linter_cache/
+
+# Runtime data and task schedules
+/storage/
+/api/storage/
+docker/volumes/
+docker/nginx/ssl/
+celerybeat-schedule*
+*.sqlite
+*.sqlite3
+*.db
+
+# Docker local state
+docker/.env
+docker/*.log
+
+# Editors, operating systems, and browser profiles
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.chrome/
+chrome-profile/
+ChromeProfile/
+.chrome-vnode-profile/
+
+# Nested repositories and agent workspaces
+.git/
+.worktrees/
+.agents/
+.superpowers/
+.codex/
+.claude/
+.cursor/
+.gemini/
+.codex-rollback/
+
+# Local test artifacts
+playwright-report/
+test-results/
+*.lcov

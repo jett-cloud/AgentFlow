@@ -1,0 +1,227 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import {
+  buildCreateInlineBindingPayload,
+  buildSaveComposerPayload,
+  buildAgentSoulForSave,
+  hasAgentNodeModel,
+  hasValidAgentBinding,
+  hasValidInlineAgentBinding,
+  needsInlineAgentBindingCreation,
+  normalizeAgentV2NodeData,
+  pickRicherBinding,
+  soulModelToUiModel,
+  uiModelToSoulModel,
+} from './agentBinding.js'
+import { normalizeAgentSoul, withSoulDifyTools, withSoulKnowledgeSets } from './agentSoul.js'
+import { addDifyTool, catalogToolToDifyTool } from './agentTools.js'
+import { addKnowledgeSet, filterPersistableKnowledgeSets } from './agentKnowledge.js'
+
+test('normalizeAgentV2NodeData forces agent type and v2 identity', () => {
+  const normalized = normalizeAgentV2NodeData(
+    { type: 'agent-v2', title: 'Agent', agent_task: 'do it' },
+    { agent_binding: { binding_type: 'inline_agent', agent_id: 'a1', current_snapshot_id: 's1' } },
+  )
+  assert.equal(normalized.type, 'agent')
+  assert.equal(normalized.version, '2')
+  assert.equal(normalized.agent_node_kind, 'dify_agent')
+  assert.equal(normalized.agent_binding.agent_id, 'a1')
+  assert.equal(normalized.agent_task, 'do it')
+})
+
+test('hasAgentNodeModel requires provider and name', () => {
+  assert.equal(hasAgentNodeModel({}), false)
+  assert.equal(hasAgentNodeModel({ model: { name: 'gpt-4o' } }), false)
+  assert.equal(hasAgentNodeModel({ model: { provider: 'openai', name: 'gpt-4o' } }), true)
+})
+
+test('inline binding requires agent_id and current_snapshot_id', () => {
+  assert.equal(hasValidInlineAgentBinding({ binding_type: 'inline_agent' }), false)
+  assert.equal(hasValidInlineAgentBinding({
+    binding_type: 'inline_agent',
+    agent_id: 'a1',
+  }), false)
+  assert.equal(hasValidInlineAgentBinding({
+    binding_type: 'inline_agent',
+    agent_id: 'a1',
+    current_snapshot_id: 's1',
+  }), true)
+  assert.equal(needsInlineAgentBindingCreation({ binding_type: 'inline_agent' }), true)
+})
+
+test('roster binding only needs agent_id', () => {
+  assert.equal(hasValidAgentBinding({
+    binding_type: 'roster_agent',
+    agent_id: 'roster-1',
+  }), true)
+})
+
+test('create inline payload uses node_job_only', () => {
+  const payload = buildCreateInlineBindingPayload({ provider: 'openai', name: 'gpt-4o' })
+  assert.equal(payload.save_strategy, 'node_job_only')
+  assert.equal(payload.variant, 'workflow')
+  assert.equal(payload.binding.binding_type, 'inline_agent')
+  assert.equal(payload.agent_soul.model.model_provider, 'openai')
+  assert.equal(payload.agent_soul.model.model, 'gpt-4o')
+  assert.equal(payload.agent_soul.prompt.system_prompt, '')
+  assert.ok(Array.isArray(payload.agent_soul.tools.dify_tools))
+  assert.ok(Array.isArray(payload.agent_soul.knowledge.sets))
+})
+
+test('save composer payload preserves tools and knowledge', () => {
+  let soul = normalizeAgentSoul({})
+  soul = withSoulDifyTools(soul, [
+    catalogToolToDifyTool({
+      provider_id: 'langgenius/google',
+      provider_type: 'builtin',
+      provider_name: 'Google',
+      tool_name: 'search',
+      description: 'Search',
+    }),
+  ])
+  soul = withSoulKnowledgeSets(soul, addKnowledgeSet([], { name: 'Docs' }, [
+    { id: 'ds-1', name: 'Dataset 1' },
+  ]))
+
+  const payload = buildSaveComposerPayload({
+    binding: { binding_type: 'inline_agent', agent_id: 'a1', current_snapshot_id: 's1' },
+    soul,
+    model: { provider: 'openai', name: 'gpt-4o' },
+    prompt: 'You are helpful',
+    agentTask: 'Summarize {{#start.query#}}',
+    declaredOutputs: [
+      { name: 'text', type: 'string', required: false },
+      { name: 'attachment', type: 'file', required: false },
+    ],
+  })
+
+  assert.equal(payload.save_strategy, 'node_job_only')
+  assert.equal(payload.soul_lock.locked, false)
+  assert.equal(payload.node_job.workflow_prompt, 'Summarize {{#start.query#}}')
+  assert.equal(payload.node_job.declared_outputs.length, 2)
+  assert.equal(payload.node_job.declared_outputs[1].type, 'file')
+  assert.equal(payload.agent_soul.prompt.system_prompt, 'You are helpful')
+  assert.equal(payload.agent_soul.model.model, 'gpt-4o')
+  assert.equal(payload.agent_soul.tools.dify_tools.length, 1)
+  assert.equal(payload.agent_soul.tools.dify_tools[0].tool_name, 'search')
+  assert.equal(payload.agent_soul.tools.dify_tools[0].credential_type, 'unauthorized')
+  assert.equal(payload.agent_soul.knowledge.sets.length, 1)
+  assert.equal(payload.agent_soul.knowledge.sets[0].datasets[0].id, 'ds-1')
+})
+
+test('buildAgentSoulForSave does not wipe existing tools when only prompt changes', () => {
+  const soul = normalizeAgentSoul({
+    tools: {
+      dify_tools: [{
+        provider_id: 'p1',
+        provider_type: 'api',
+        tool_name: 'ping',
+        credential_type: 'unauthorized',
+      }],
+      cli_tools: [],
+    },
+    knowledge: {
+      sets: [{
+        id: 'ks1',
+        name: 'KB',
+        datasets: [{ id: 'd1', name: 'D1' }],
+        query: { mode: 'generated_query' },
+        retrieval: { mode: 'multiple', top_k: 4 },
+      }],
+    },
+  })
+  const saved = buildAgentSoulForSave({
+    soul,
+    model: { provider: 'openai', name: 'gpt-4o' },
+    prompt: 'new prompt',
+  })
+  assert.equal(saved.prompt.system_prompt, 'new prompt')
+  assert.equal(saved.tools.dify_tools.length, 1)
+  assert.equal(saved.tools.dify_tools[0].tool_name, 'ping')
+  assert.equal(saved.knowledge.sets.length, 1)
+})
+
+test('roster save uses node_job_only and omits agent_soul', () => {
+  const payload = buildSaveComposerPayload({
+    binding: { binding_type: 'roster_agent', agent_id: 'roster-1' },
+    soul: normalizeAgentSoul({ prompt: { system_prompt: 'should not send' } }),
+    model: { provider: 'openai', name: 'gpt-4o' },
+    prompt: 'ignored',
+    agentTask: 'Do the job',
+    declaredOutputs: [{ name: 'text', type: 'string' }],
+  })
+  assert.equal(payload.save_strategy, 'node_job_only')
+  assert.equal(payload.soul_lock.locked, false)
+  assert.equal(payload.agent_soul, undefined)
+  assert.equal(payload.node_job.workflow_prompt, 'Do the job')
+  assert.equal(payload.node_job.declared_outputs[0].name, 'text')
+})
+
+test('inline save never defaults to locked soul_lock', () => {
+  const payload = buildSaveComposerPayload({
+    binding: { binding_type: 'inline_agent', agent_id: 'a1', current_snapshot_id: 's1' },
+    soul: normalizeAgentSoul({}),
+    model: { provider: 'openai', name: 'gpt-4o' },
+    prompt: 'hi',
+    agentTask: 'task',
+  })
+  assert.equal(payload.save_strategy, 'node_job_only')
+  assert.deepEqual(payload.soul_lock, { locked: false })
+  assert.ok(payload.agent_soul.model)
+})
+
+test('ui/soul model round-trip', () => {
+  const soul = uiModelToSoulModel({ provider: 'langgenius/openai', name: 'gpt-4o-mini' })
+  assert.equal(soul.model_provider, 'langgenius/openai')
+  assert.equal(soul.plugin_id, 'langgenius/openai')
+  const ui = soulModelToUiModel(soul)
+  assert.equal(ui.provider, 'langgenius/openai')
+  assert.equal(ui.name, 'gpt-4o-mini')
+})
+
+test('pickRicherBinding upgrades incomplete local binding', () => {
+  const richer = pickRicherBinding(
+    { binding_type: 'inline_agent' },
+    { binding_type: 'inline_agent', agent_id: 'a1', current_snapshot_id: 's1' },
+  )
+  assert.equal(richer.agent_id, 'a1')
+  assert.equal(pickRicherBinding(
+    { binding_type: 'inline_agent', agent_id: 'a1', current_snapshot_id: 's1' },
+    { binding_type: 'inline_agent', agent_id: 'a1', current_snapshot_id: 's1' },
+  ), null)
+})
+
+test('catalogToolToDifyTool blocks dataset-retrieval', () => {
+  assert.equal(catalogToolToDifyTool({
+    provider_id: 'dataset',
+    provider_type: 'dataset-retrieval',
+    tool_name: 'retrieve',
+  }), null)
+})
+
+test('addDifyTool is idempotent by provider+tool', () => {
+  const catalog = {
+    provider_id: 'p1',
+    provider_type: 'builtin',
+    provider_name: 'P',
+    tool_name: 't1',
+  }
+  let tools = addDifyTool([], catalog)
+  tools = addDifyTool(tools, catalog)
+  assert.equal(tools.length, 1)
+})
+
+test('filterPersistableKnowledgeSets drops empty datasets', () => {
+  const sets = addKnowledgeSet([], { name: 'Empty' }, [])
+  // create with empty datasets yields null from normalize → add may push nothing
+  const withEmpty = [{
+    id: 'ks-empty',
+    name: 'Empty',
+    datasets: [],
+    query: { mode: 'generated_query' },
+    retrieval: { mode: 'multiple', top_k: 4 },
+    metadata_filtering: { mode: 'disabled' },
+  }]
+  assert.equal(filterPersistableKnowledgeSets(withEmpty).length, 0)
+  assert.equal(filterPersistableKnowledgeSets(sets).length, 0)
+})
