@@ -18,12 +18,6 @@ depends_on = None
 
 def upgrade() -> None:
     with op.batch_alter_table("workflow_assist_conversations", schema=None) as batch_op:
-        batch_op.alter_column(
-            "active_run_id",
-            existing_type=sa.String(length=255),
-            type_=models.types.StringUUID(),
-            existing_nullable=True,
-        )
         batch_op.add_column(sa.Column("latest_run_id", models.types.StringUUID(), nullable=True))
         batch_op.add_column(sa.Column("completion_run_id", models.types.StringUUID(), nullable=True))
         batch_op.add_column(sa.Column("completion_epoch", sa.Integer(), nullable=True))
@@ -137,9 +131,3 @@ def downgrade() -> None:
         batch_op.drop_column("completion_epoch")
         batch_op.drop_column("completion_run_id")
         batch_op.drop_column("latest_run_id")
-        batch_op.alter_column(
-            "active_run_id",
-            existing_type=models.types.StringUUID(),
-            type_=sa.String(length=255),
-            existing_nullable=True,
-        )

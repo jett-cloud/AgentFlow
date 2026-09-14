@@ -27,6 +27,9 @@ COPY api/providers ./providers
 COPY dify-agent/pyproject.toml dify-agent/README.md /app/dify-agent/
 COPY dify-agent/src /app/dify-agent/src
 # Trust the checked-in lock during image builds; local path sources are copied from the repository context.
+# PyPI (files.pythonhosted.org) often times out from China; uv still verifies hashes from uv.lock.
+ENV UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+ENV UV_HTTP_TIMEOUT=120
 RUN uv sync --frozen --no-dev --no-editable
 
 # production stage
