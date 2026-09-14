@@ -20,6 +20,11 @@ services:
   worker_beat:
     <<: *agentflow-api-image
 
+  plugin_daemon:
+    dns:
+      - ${PLUGIN_DNS_PRIMARY:-223.5.5.5}
+      - ${PLUGIN_DNS_SECONDARY:-1.1.1.1}
+
   agent_backend:
     image: agentflow-agent-backend:local
     build:
