@@ -1,66 +1,47 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { flattenToolCatalog, groupSelectableTools, toolIdentityMatches } from './toolCatalog.js'
 
-async function loadSubject() {
-  return import('./toolCatalog.js').catch(() => ({}))
+const groups = {
+  builtin: [{
+    id: 'time',
+    label: 'Time',
+    tools: [{ name: 'now', label: 'Now', parameters: [{ name: 'tz' }], output_schema: { type: 'object' } }],
+  }],
+  api: [{
+    id: 'crm',
+    name: 'CRM',
+    tools: [{ name: 'lookup', label: 'Lookup' }],
+  }],
+  workflow: [{
+    id: 'wf-1',
+    name: 'Summarizer',
+    tools: [{ name: 'summarize', label: 'Summarize' }],
+  }],
+  mcp: [{
+    id: 'github',
+    name: 'GitHub',
+    tools: [{ name: 'get_file', label: 'Get file' }],
+  }],
 }
 
-test('tool catalog keeps MCP provider type and runtime provider identifier', async () => {
-  const { flattenToolCatalog } = await loadSubject()
-  assert.equal(typeof flattenToolCatalog, 'function')
-
-  const tools = flattenToolCatalog({
-    builtin: [],
-    mcp: [{
-      id: 'github-official',
-      name: 'GitHub MCP',
-      label: { zh_Hans: 'GitHub MCP' },
-      tools: [{ name: 'get_file_contents', label: { zh_Hans: '读取文件' } }],
-    }],
-  })
-
-  assert.deepEqual(tools.map(tool => ({
-    provider_id: tool.provider_id,
-    provider_type: tool.provider_type,
-    tool_name: tool.tool_name,
-    tool_label: tool.tool_label,
-  })), [{
-    provider_id: 'github-official',
-    provider_type: 'mcp',
-    tool_name: null,
-    tool_label: '全部工具',
-  }, {
-    provider_id: 'github-official',
-    provider_type: 'mcp',
-    tool_name: 'get_file_contents',
-    tool_label: '读取文件',
-  }])
+test('flattenToolCatalog preserves api and workflow provider_type', () => {
+  const tools = flattenToolCatalog(groups)
+  const byName = Object.fromEntries(tools.filter(item => item.tool_name).map(item => [item.tool_name, item]))
+  assert.equal(byName.now.provider_type, 'builtin')
+  assert.equal(byName.lookup.provider_type, 'api')
+  assert.equal(byName.summarize.provider_type, 'workflow')
+  assert.equal(byName.get_file.provider_type, 'mcp')
+  assert.equal(tools.some(item => item.provider_type === 'mcp' && item.tool_name === null), true)
 })
 
-test('groupSelectableTools exposes builtin and MCP as separate groups', async () => {
-  const { groupSelectableTools } = await loadSubject()
-  assert.equal(typeof groupSelectableTools, 'function')
-
-  const groups = groupSelectableTools([
-    { provider_type: 'builtin', provider_id: 'weather', tool_name: 'forecast' },
-    { provider_type: 'mcp', provider_id: 'github-official', tool_name: 'get_file_contents' },
-  ])
-
-  assert.deepEqual(groups.map(group => ({ type: group.type, label: group.label })), [
-    { type: 'builtin', label: '工具插件' },
-    { type: 'mcp', label: 'MCP 工具' },
-  ])
+test('groupSelectableTools keeps four catalogue groups', () => {
+  const grouped = groupSelectableTools(flattenToolCatalog(groups))
+  assert.deepEqual(grouped.map(group => group.type), ['builtin', 'api', 'workflow', 'mcp'])
 })
 
-test('plugin provider type matches builtin catalog tools', async () => {
-  const { normalizeToolProviderType, toolIdentityMatches } = await loadSubject()
-  assert.equal(normalizeToolProviderType('plugin'), 'builtin')
-  assert.equal(toolIdentityMatches(
-    { provider_type: 'builtin', provider_id: 'ghy/doubao-image/doubao-image', tool_name: 'image_gerenate_image' },
-    { provider_type: 'plugin', provider_id: 'ghy/doubao-image/doubao-image', tool_name: 'image_gerenate_image' },
-  ), true)
-  assert.equal(toolIdentityMatches(
-    { provider_type: 'mcp', provider_id: 'github-official', tool_name: 'get_file_contents' },
-    { provider_type: 'plugin', provider_id: 'github-official', tool_name: 'get_file_contents' },
-  ), false)
+test('toolIdentityMatches treats plugin as builtin for catalogue lookup', () => {
+  const item = flattenToolCatalog(groups).find(tool => tool.tool_name === 'now')
+  assert.equal(toolIdentityMatches(item, { provider_type: 'plugin', provider_id: 'time', tool_name: 'now' }), true)
+  assert.equal(toolIdentityMatches(item, { provider_type: 'api', provider_id: 'time', tool_name: 'now' }), false)
 })

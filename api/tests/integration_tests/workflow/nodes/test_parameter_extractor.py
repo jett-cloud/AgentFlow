@@ -7,8 +7,8 @@ import pytest
 
 from core.app.entities.app_invoke_entities import InvokeFrom, UserFrom
 from core.model_manager import ModelInstance
-from core.workflow.node_runtime import DifyPromptMessageSerializer
-from core.workflow.system_variables import build_system_variables
+from core.workflow.runtime.adapters.llm import DifyPromptMessageSerializer
+from core.workflow.runtime.variables.system_variables import build_system_variables
 from extensions.ext_database import db
 from graphon.enums import WorkflowNodeExecutionStatus
 from graphon.model_runtime.entities import AssistantPromptMessage, UserPromptMessage

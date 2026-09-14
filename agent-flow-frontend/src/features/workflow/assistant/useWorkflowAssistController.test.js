@@ -57,6 +57,63 @@ function harness(streamHandler, overrides = {}) {
   return { controller, state, messages, lastInstruction, conversationId, abortCalls }
 }
 
+test('expired stream authentication preserves the running task and blocks retry or new turns', async () => {
+  const phases = []
+  const statuses = []
+  let writes = 0
+  const { controller, state, messages, abortCalls } = harness(async () => {}, {
+    onRecoveryState: phase => phases.push(phase),
+    onRunStatus: status => statuses.push(status),
+    submitTurn: async () => { writes += 1; return { run_id: 'run-auth', epoch: 1 } },
+    streamRunEvents: async () => {
+      throw Object.assign(new Error('Sign in again'), { status: 401, data: { code: 'ASSIST_AUTH_REQUIRED' } })
+    },
+    retryRun: async () => { writes += 1 },
+  })
+  await controller.submitMessage('build')
+  assert.equal(phases.at(-1), 'auth_required')
+  assert.equal(state.value.phase, 'running')
+  assert.equal(state.value.retryable, false)
+  assert.equal(statuses.includes('error'), false)
+  assert.equal(messages.value.some(message => message.text === 'Sign in again'), false)
+  assert.deepEqual(await controller.submitMessage('accidental retry'), { accepted: false })
+  assert.deepEqual(await controller.retryFailedStep(), { accepted: false })
+  assert.equal(writes, 1)
+  assert.equal(abortCalls.length, 0)
+})
+
+test('a real SSE reconnect after 401 keeps the original task and appends only its unseen suffix', async () => {
+  const { fetchSse } = await import('./fetchSse.js')
+  const urls = []
+  let refreshes = 0
+  let writes = 0
+  const { controller, state, messages } = harness(async () => {}, {
+    submitTurn: async () => { writes += 1; return { run_id: 'same-run', epoch: 1 } },
+    waitForReconnect: async () => true,
+    streamRunEvents: (run, options) => fetchSse(`/runs/${run.run_id}/events?after=${options.after}`, {
+      ...options,
+      onEvent: frame => options.onEvent(frame.data),
+      refreshAuth: async () => { refreshes += 1 },
+      fetchImpl: async (url) => {
+        urls.push(url)
+        if (urls.length === 2)
+          return { ok: false, status: 401 }
+        const events = urls.length === 1
+          ? [envelope('same-run', 1, 1, 'message.delta', { message_id: 'reply', text: '开始' })]
+          : [envelope('same-run', 1, 2, 'message.delta', { message_id: 'reply', text: '搭建' }), envelope('same-run', 1, 3, 'done')]
+        return new Response(events.map(event => `id: ${event.sequence}\ndata: ${JSON.stringify(event)}\n\n`).join(''))
+      },
+    }),
+  })
+  await controller.submitMessage('build')
+  assert.equal(writes, 1)
+  assert.equal(refreshes, 1)
+  assert.deepEqual(urls, ['/runs/same-run/events?after=0', '/runs/same-run/events?after=1', '/runs/same-run/events?after=1'])
+  assert.equal(messages.value.find(message => message.kind === 'assistant_text')?.text, '开始搭建')
+  assert.notEqual(state.value.phase, 'failed')
+  assert.equal(state.value.retryable, false)
+})
+
 test('every turn awaits draft synchronization before submitting the v2 body', async () => {
   const calls = []
   const submitted = []
@@ -665,15 +722,279 @@ test('recoverable mount loads conversations, full timeline, candidate, reconcili
   assert.deepEqual(calls, [
     'conversations',
     'select:conversation-1',
+    'candidate',
     'timeline:0:0',
     'timeline:1:1',
-    'candidate',
     'reconcile:run-1',
     'sse:run-1:2',
     'candidate',
     'reconcile:run-1',
   ])
   assert.equal(messages.value.some(message => message.role === 'user' && message.text === 'restored'), true)
+  assert.equal(messages.value.find(message => message.kind === 'assistant_text')?.text, 'continued')
+})
+
+test('timeline recovery paints each page while keeping submission blocked', async () => {
+  const secondPage = deferred()
+  const paints = []
+  const { controller, messages } = harness(async () => {}, {
+    selectConversation: async () => true,
+    loadTimeline: async (_id, params) => {
+      paints.push(messages.value.filter(message => message.role === 'user').map(message => message.text))
+      if (params.after_epoch === 0 && params.after_sequence === 0) {
+        return {
+          items: [envelope('run-1', 1, 0, 'user.message', { text: 'first' })],
+          has_more: true,
+          cursor: { epoch: 1, sequence: 0 },
+        }
+      }
+      await secondPage.promise
+      return {
+        items: [envelope('run-1', 1, 1, 'user.message', { text: 'second' })],
+        has_more: false,
+        cursor: { epoch: 1, sequence: 1 },
+      }
+    },
+    loadCandidate: async () => ({
+      revision: 0,
+      active_run: null,
+      latest_run: { run_id: 'run-1', epoch: 1, status: 'done' },
+    }),
+  })
+
+  const recovery = controller.selectConversation('conversation-1')
+  while (paints.length < 2)
+    await Promise.resolve()
+  assert.deepEqual(paints[0], [])
+  assert.deepEqual(paints[1], ['first'])
+  assert.deepEqual(await controller.submitMessage('accidental input'), { accepted: false })
+  secondPage.resolve()
+  await recovery
+  assert.deepEqual(
+    messages.value.filter(message => message.role === 'user').map(message => message.text),
+    ['first', 'second'],
+  )
+})
+
+test('history snapshot is visible before candidate and timeline finish loading', async () => {
+  const candidate = deferred()
+  const timeline = deferred()
+  const phases = []
+  const { controller, messages } = harness(async () => {}, {
+    onRecoveryState: phase => phases.push(phase),
+    loadConversation: async () => ({ messages: [
+      { id: 'u1', role: 'user', event_type: 'message', payload: { text: 'previous request' } },
+    ] }),
+    loadCandidate: () => candidate.promise,
+    loadTimeline: () => timeline.promise,
+  })
+  const recovery = controller.selectConversation('conversation-1')
+  for (let index = 0; index < 10; index += 1)
+    await Promise.resolve()
+  assert.equal(messages.value[0]?.text, 'previous request')
+  assert.equal(phases.at(-1), 'loading')
+  assert.deepEqual(await controller.submitMessage('too early'), { accepted: false })
+  candidate.resolve({ revision: 0, active_run: null })
+  timeline.resolve({ items: [envelope('run-1', 1, 0, 'user.message', { text: 'previous request' })], has_more: false })
+  assert.equal(await recovery, true)
+  assert.equal(phases.at(-1), 'ready')
+  assert.equal(messages.value.filter(message => message.role === 'user').length, 1)
+})
+
+test('failed initial history load blocks turns and retries until recovery or explicit new conversation', async () => {
+  const listing = deferred()
+  const phases = []
+  let writes = 0
+  const { controller } = harness(async () => {}, {
+    onRecoveryState: phase => phases.push(phase),
+    loadConversations: () => listing.promise,
+    loadConversation: async () => ({ messages: [] }),
+    loadCandidate: async () => ({ revision: 0 }),
+    submitTurn: async () => { writes += 1 },
+    retryRun: async () => { writes += 1 },
+  })
+  const recovery = controller.mountRecoverableSession()
+  assert.deepEqual(await controller.submitMessage('before list'), { accepted: false })
+  listing.reject(new Error('history unavailable'))
+  await recovery
+  assert.equal(phases.at(-1), 'error')
+  assert.deepEqual(await controller.submitMessage('after error'), { accepted: false })
+  await controller.retryFailedStep()
+  assert.equal(writes, 0)
+  await controller.newConversation()
+  assert.equal(phases.at(-1), 'ready')
+})
+
+test('terminal recovery prefers conversation snapshot over timeline deltas', async () => {
+  let timelineCalls = 0
+  const { controller, messages } = harness(async () => {}, {
+    selectConversation: async () => true,
+    loadConversation: async () => ({
+      conversation: { id: 'conversation-1' },
+      messages: [
+        { id: 'u1', role: 'user', event_type: 'message', payload: { text: 'snapshot user' } },
+        { id: 'a1', role: 'assistant', event_type: 'message', payload: { text: 'snapshot assistant' } },
+      ],
+    }),
+    loadTimeline: async () => {
+      timelineCalls += 1
+      return {
+        items: [
+          envelope('run-1', 1, 0, 'user.message', { text: 'timeline user' }),
+          envelope('run-1', 1, 1, 'message.delta', { text: 'a' }),
+          envelope('run-1', 1, 2, 'message.delta', { text: 'b' }),
+        ],
+        has_more: false,
+      }
+    },
+    loadCandidate: async () => ({
+      revision: 0,
+      active_run: null,
+      latest_run: { run_id: 'run-1', epoch: 1, status: 'done' },
+    }),
+  })
+
+  await controller.selectConversation('conversation-1')
+
+  assert.equal(timelineCalls, 0)
+  assert.equal(messages.value.some(message => message.text === 'snapshot user'), true)
+  assert.equal(messages.value.some(message => message.text === 'snapshot assistant'), true)
+  assert.equal(messages.value.some(message => message.text === 'timeline user'), false)
+  assert.equal(messages.value.some(message => message.streaming), false)
+})
+
+test('terminal recovery falls back to timeline when the latest snapshot reply has no text', async () => {
+  let timelineCalls = 0
+  const { controller, messages } = harness(async () => {}, {
+    selectConversation: async () => true,
+    loadConversation: async () => ({
+      conversation: { id: 'conversation-1' },
+      messages: [
+        { id: 'u1', role: 'user', event_type: 'message', sequence: 1, payload: { text: '这个工作流是干什么的？' } },
+        {
+          id: 'a1',
+          role: 'assistant',
+          event_type: 'message',
+          sequence: 2,
+          payload: { text: '', reasoning: '先读取工作流结构', message_id: 'agent-message-1' },
+        },
+        {
+          id: 'c1',
+          role: 'assistant',
+          event_type: 'tool_call',
+          sequence: 3,
+          payload: { id: 'call-1', name: 'read_graph', arguments: {} },
+        },
+        {
+          id: 'r1',
+          role: 'assistant',
+          event_type: 'tool_result',
+          sequence: 4,
+          payload: { tool_call_id: 'call-1', name: 'read_graph', ok: true, content: { summary: 'empty' } },
+        },
+      ],
+    }),
+    loadTimeline: async () => {
+      timelineCalls += 1
+      return {
+        items: [
+          envelope('run-1', 1, 0, 'user.message', { text: '这个工作流是干什么的？' }),
+          envelope('run-1', 1, 1, 'reasoning.delta', { text: '先读取工作流结构', message_id: 'agent-message-1' }),
+          envelope('run-1', 1, 2, 'tool_call', { tool_call_id: 'call-1', name: 'read_graph', arguments: {} }),
+          envelope('run-1', 1, 3, 'tool_result', { tool_call_id: 'call-1', name: 'read_graph', ok: true }),
+          envelope('run-1', 1, 4, 'message.delta', { text: '当前工作流画布是空的，', message_id: 'agent-message-2' }),
+          envelope('run-1', 1, 5, 'message.delta', { text: '还没有任何节点和连线。', message_id: 'agent-message-2' }),
+          envelope('run-1', 1, 6, 'turn_complete', {}),
+        ],
+        has_more: false,
+      }
+    },
+    loadCandidate: async () => ({
+      revision: 0,
+      active_run: null,
+      latest_run: { run_id: 'run-1', epoch: 1, status: 'turn_complete' },
+    }),
+  })
+
+  await controller.selectConversation('conversation-1')
+
+  assert.equal(timelineCalls, 1)
+  assert.equal(
+    messages.value.find(message => message.kind === 'assistant_text' && message.message_id === 'agent-message-2')?.text,
+    '当前工作流画布是空的，还没有任何节点和连线。',
+  )
+  const activities = messages.value.filter(message => message.kind === 'activity')
+  assert.equal(activities.length, 1)
+  assert.deepEqual(activities[0].items.map(item => item.key), ['tool:call-1'])
+  assert.equal(messages.value.filter(message => message.role === 'user').length, 1)
+})
+
+test('terminal recovery never opens an EventSource', async () => {
+  let streamCalls = 0
+  const { controller } = harness(async () => {}, {
+    selectConversation: async () => true,
+    loadConversation: async () => ({
+      conversation: { id: 'conversation-1' },
+      messages: [{ id: 'u1', role: 'user', event_type: 'message', payload: { text: 'done' } }],
+    }),
+    loadTimeline: async () => ({ items: [], has_more: false }),
+    loadCandidate: async () => ({
+      revision: 0,
+      active_run: null,
+      latest_run: { run_id: 'run-1', epoch: 1, status: 'done' },
+    }),
+    streamRunEvents: async () => {
+      streamCalls += 1
+      return { status: 200, lastEventId: '0' }
+    },
+  })
+
+  await controller.selectConversation('conversation-1')
+  assert.equal(streamCalls, 0)
+})
+
+test('switching recoverable conversations aborts the previous live stream', async () => {
+  const firstStream = deferred()
+  const subscribed = deferred()
+  let firstSignal
+  let firstOnEvent
+  const { controller, messages, conversationId } = harness(async () => {}, {
+    selectConversation: async (id) => {
+      conversationId.value = String(id)
+      return true
+    },
+    loadTimeline: async (id) => ({
+      items: [envelope(`run-${id.at(-1)}`, Number(id.at(-1)), 0, 'user.message', { text: id })],
+      has_more: false,
+    }),
+    loadCandidate: async (id) => ({
+      revision: 0,
+      active_run: { run_id: `run-${id.at(-1)}`, epoch: Number(id.at(-1)), status: 'running' },
+      latest_run: { run_id: `run-${id.at(-1)}`, epoch: Number(id.at(-1)), status: 'running' },
+    }),
+    streamRunEvents: async (run, options) => {
+      if (run.run_id === 'run-2') {
+        firstSignal = options.signal
+        firstOnEvent = options.onEvent
+        subscribed.resolve()
+        await firstStream.promise
+        return { status: 200, lastEventId: '0' }
+      }
+      return { status: 204, lastEventId: '0' }
+    },
+  })
+
+  const first = controller.selectConversation('conversation-2')
+  await subscribed.promise
+  await controller.selectConversation('conversation-3')
+  firstOnEvent(envelope('run-2', 2, 1, 'message.delta', { text: 'stale delta' }))
+  firstStream.resolve()
+  await first
+
+  assert.equal(firstSignal.aborted, true)
+  assert.equal(conversationId.value, 'conversation-3')
+  assert.equal(messages.value.some(message => message.text === 'stale delta'), false)
+  assert.equal(messages.value.some(message => message.text === 'conversation-3'), true)
 })
 
 test('recovering an authoritative running Run never regresses its announcement to queued', async () => {
@@ -921,6 +1242,31 @@ test('answering a waiting-user terminal creates and adopts a new run', async () 
   assert.deepEqual(streamed, ['run-old', 'run-new'])
   assert.equal(messages.value.find(message => message.kind === 'clarification').resolved, true)
 })
+
+for (const approved of [true, false]) {
+  test(`live trial ${approved ? 'approval' : 'decline'} preserves explicit consent at Turn submission`, async () => {
+    const submitted = []
+    const requestId = 'b'.repeat(32)
+    const { controller } = harness(async () => {}, {
+      submitTurn: async (payload) => {
+        submitted.push(payload)
+        return { conversation_id: 'conversation-1', run_id: `run-${submitted.length}`, epoch: submitted.length, cursor: 0 }
+      },
+      streamRunEvents: async (run, options) => {
+        options.onEvent(envelope(run.run_id, run.epoch, 1, run.epoch === 1 ? 'waiting_user' : 'done', run.epoch === 1 ? {
+          tool_call_id: 'ask-live',
+          questions: [{ id: 'live_run_consent', kind: 'live_acceptance', execution_request: { request_id: requestId } }],
+        } : { summary: 'complete' }))
+        return { status: 200, lastEventId: '1' }
+      },
+    })
+    await controller.submitMessage('build')
+    await controller.submitClarification('ask-live', [{ question_id: 'live_run_consent', approved, text: approved ? 'Approve' : 'Simulate' }])
+    assert.equal(submitted[1].live_acceptance_request_id, approved ? requestId : undefined)
+    await controller.submitMessage('continue')
+    assert.equal('live_acceptance_request_id' in submitted[2], false)
+  })
+}
 
 test('candidate refresh coalesces bursts, remains single-flight, and drops older responses', async () => {
   const timers = manualTimers()
@@ -1256,17 +1602,17 @@ test('mount rejects a candidate snapshot older than the highest timeline revisio
     }),
     loadCandidate: async (_conversationId, requestedRevision) => {
       requestedRevisions.push(requestedRevision)
-      if (requestedRevisions.length === 1) {
+      if (requestedRevision === 5) {
         return {
-          revision: 4,
-          active_run: null,
-          latest_run: { run_id: 'stale-run', epoch: 99, status: 'done' },
+          revision: 5,
+          active_run: { run_id: 'run-1', epoch: 1, status: 'running' },
+          latest_run: { run_id: 'run-1', epoch: 1, status: 'running' },
         }
       }
       return {
-        revision: 5,
-        active_run: { run_id: 'run-1', epoch: 1, status: 'running' },
-        latest_run: { run_id: 'run-1', epoch: 1, status: 'running' },
+        revision: 4,
+        active_run: null,
+        latest_run: { run_id: 'stale-run', epoch: 99, status: 'done' },
       }
     },
     onCandidate: candidate => accepted.push(candidate.revision),
@@ -1276,8 +1622,8 @@ test('mount rejects a candidate snapshot older than the highest timeline revisio
 
   await controller.mountRecoverableSession()
 
-  assert.deepEqual(requestedRevisions.slice(0, 2), [5, 5])
-  assert.deepEqual(accepted, [5, 5])
+  assert.deepEqual(requestedRevisions.slice(0, 2), [0, 5])
+  assert.equal(accepted[0], 5)
   assert.equal(reconciles.some(item => item.latest_run?.run_id === 'stale-run'), false)
   assert.equal(reconciles[0].active_run.run_id, 'run-1')
 })
@@ -1590,9 +1936,9 @@ test('history selection repeats the full authoritative recovery path and restore
   assert.equal(state.value.phase, 'running')
   assert.deepEqual(calls.slice(0, 5), [
     'select:conversation-2',
+    'candidate:conversation-2',
     'timeline:conversation-2:0:0',
     'language:restored history',
-    'candidate:conversation-2',
     'reconcile:conversation-2',
   ])
   assert.equal(calls[5], 'sse:run-2:0')
@@ -1622,12 +1968,12 @@ test('selecting the already-current conversation still replays full recovery', a
 
   assert.deepEqual(calls, [
     'select:conversation-1',
-    'timeline:conversation-1:0:0',
     'candidate:conversation-1',
+    'timeline:conversation-1:0:0',
     'reconcile:conversation-1',
     'select:conversation-1',
-    'timeline:conversation-1:0:0',
     'candidate:conversation-1',
+    'timeline:conversation-1:0:0',
     'reconcile:conversation-1',
   ])
 })
@@ -2325,4 +2671,3 @@ test('user stop does not retry the failed step', async () => {
   await controller.retryFailedStep()
   assert.equal(retries.length, 0)
 })
-

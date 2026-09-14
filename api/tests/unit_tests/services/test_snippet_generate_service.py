@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from core.workflow.snippet_start import SNIPPET_VIRTUAL_START_NODE_ID
+from core.workflow.runtime.snippet_start import SNIPPET_VIRTUAL_START_NODE_ID
 from models.workflow import Workflow, WorkflowKind, WorkflowType
 from services.snippet_generate_service import SnippetGenerateService
 

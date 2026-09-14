@@ -1,5 +1,12 @@
 <template>
-  <form class="clarification-card" @submit.prevent="submit">
+  <AssistLiveAcceptance
+    v-if="liveRequest"
+    :request="liveRequest"
+    :language="language"
+    :disabled="disabled"
+    @submit="answers => emit('submit', answers)"
+  />
+  <form v-else class="clarification-card" @submit.prevent="submit">
     <fieldset :disabled="disabled">
       <div
         v-for="question in questions"
@@ -37,6 +44,7 @@
 
 <script setup>
 import { computed, reactive } from 'vue'
+import AssistLiveAcceptance from './AssistLiveAcceptance.vue'
 import {
   buildClarificationAnswers,
   canSubmitClarification,
@@ -57,6 +65,7 @@ const props = defineProps({
 
 const emit = defineEmits(['submit'])
 const copy = computed(() => assistCopy(props.language))
+const liveRequest = computed(() => props.questions.find(question => question?.kind === 'live_acceptance')?.execution_request)
 const draft = reactive({})
 
 function draftFor(question) {

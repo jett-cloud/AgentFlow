@@ -21,12 +21,13 @@ from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import uuid4
 
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from werkzeug.exceptions import NotFound
 
+from configs import dify_config
 from libs.datetime_utils import naive_utc_now
 from libs.pagination import PaginatedResult, paginate_query
 from models.workflow_assist import (
@@ -35,6 +36,7 @@ from models.workflow_assist import (
     WorkflowAssistRun,
     WorkflowAssistRunEvent,
 )
+from services.workflow_assist.protocol_rollout import protocol_for_new_conversation
 
 
 class WorkflowAssistConversationNotFound(NotFound):
@@ -129,6 +131,9 @@ class WorkflowAssistConversationService:
             title=title.strip()[:255] or "New workflow chat",
             draft_hash=draft_hash,
             state=sanitized_state,
+            contract_protocol_version=protocol_for_new_conversation(
+                dify_config.WORKFLOW_ASSIST_CONTRACT_ROLLOUT
+            ),
         )
         self.session.add(conversation)
         self.session.flush()
@@ -564,6 +569,10 @@ class WorkflowAssistConversationService:
         base_hash: str | None,
         compacted_until_sequence: int | None,
         compacted_state: dict[str, Any] | None,
+        contract_protocol_version: int | None = None,
+        workflow_contract: dict[str, object] | None = None,
+        contract_revision: int | None = None,
+        contract_hash: str | None = None,
         extra_state: dict[str, Any] | None = None,
     ) -> bool:
         """Persist candidate graph and compaction checkpoint if `lease` still owns the row.
@@ -577,9 +586,10 @@ class WorkflowAssistConversationService:
         draft hash, and update it only after a successful Apply. Compaction
         columns are written only when ``compacted_until_sequence`` is not None
         so a later persist cannot store None over a previous checkpoint.
-        ``extra_state`` is merged into the existing ``state`` JSON (it does not
-        replace the whole blob), so ``last_accepted_finish`` can sit beside
-        unrelated resume keys.
+        A supplied workflow contract uses revision/hash compare-and-set; equal
+        replay is allowed only for the same hash. ``extra_state`` is merged
+        into the existing ``state`` JSON (it does not replace the whole blob),
+        so ``last_accepted_finish`` can sit beside unrelated resume keys.
         """
         sanitized_graph = _sanitize_payload(graph)
         _ensure_payload_size(sanitized_graph, max_bytes=_MAX_CANDIDATE_GRAPH_BYTES)
@@ -595,6 +605,47 @@ class WorkflowAssistConversationService:
                 _ensure_payload_size(sanitized_compacted_state, max_bytes=_MAX_COMPACTED_STATE_BYTES)
             values["compacted_until_sequence"] = compacted_until_sequence
             values["compacted_state"] = sanitized_compacted_state
+        contract_predicate = None
+        if workflow_contract is not None:
+            if contract_protocol_version != 1 or not isinstance(contract_revision, int) or contract_revision < 1:
+                raise ValueError("Workflow contract metadata is invalid")
+            if not isinstance(contract_hash, str) or len(contract_hash) != 64:
+                raise ValueError("Workflow contract hash is invalid")
+            sanitized_contract = _sanitize_payload(workflow_contract)
+            _ensure_payload_size(sanitized_contract, max_bytes=_MAX_STATE_BYTES)
+            if (
+                sanitized_contract.get("protocol_version") != contract_protocol_version
+                or sanitized_contract.get("revision") != contract_revision
+                or sanitized_contract.get("contract_hash") != contract_hash
+            ):
+                raise ValueError("Workflow contract metadata does not match its body")
+            values.update(
+                {
+                    "workflow_contract": sanitized_contract,
+                    "contract_revision": contract_revision,
+                    "contract_hash": contract_hash,
+                    "completion_run_id": None,
+                    "completion_epoch": None,
+                    "completion_candidate_revision": None,
+                    "completion_candidate_base_hash": None,
+                    "completion_app_mode": None,
+                    "completion_assertion": None,
+                    "completion_contract_protocol_version": None,
+                    "completion_contract_revision": None,
+                    "completion_contract_hash": None,
+                }
+            )
+            current_revision = func.coalesce(WorkflowAssistConversation.contract_revision, 0)
+            contract_predicate = and_(
+                WorkflowAssistConversation.contract_protocol_version == contract_protocol_version,
+                or_(
+                    current_revision == contract_revision - 1,
+                    and_(
+                        current_revision == contract_revision,
+                        WorkflowAssistConversation.contract_hash == contract_hash,
+                    ),
+                ),
+            )
         if extra_state is not None:
             current = self.session.get(WorkflowAssistConversation, conversation_id)
             merged: dict[str, Any] = {}
@@ -604,15 +655,14 @@ class WorkflowAssistConversationService:
             _ensure_payload_size(merged, max_bytes=_MAX_STATE_BYTES)
             values["state"] = merged
         _ = base_hash
-        result = self.session.execute(
-            update(WorkflowAssistConversation)
-            .where(
-                WorkflowAssistConversation.id == conversation_id,
-                WorkflowAssistConversation.active_run_id == lease.run_id,
-                WorkflowAssistConversation.run_epoch == lease.epoch,
-            )
-            .values(**values)
+        statement = update(WorkflowAssistConversation).where(
+            WorkflowAssistConversation.id == conversation_id,
+            WorkflowAssistConversation.active_run_id == lease.run_id,
+            WorkflowAssistConversation.run_epoch == lease.epoch,
         )
+        if contract_predicate is not None:
+            statement = statement.where(contract_predicate)
+        result = self.session.execute(statement.values(**values))
         updated = (result.rowcount or 0) > 0
         self.session.commit()
         return updated

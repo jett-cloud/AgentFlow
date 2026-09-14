@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.workflow.generator.compiler.agent_knowledge import collect_agent_knowledge_dataset_ids
+
 
 def append_soft_resource_preferences(
     instruction: str,
@@ -144,6 +146,16 @@ def assert_graph_resources_allowed(
                 continue
             for dataset_id in dataset_ids:
                 if not isinstance(dataset_id, str) or dataset_id not in allowed_dataset_ids:
+                    errors.append(
+                        {
+                            "code": "UNAUTHORIZED_RESOURCE",
+                            "detail": f"Dataset {dataset_id} is not authorized for this generation.",
+                            "node_id": node_id,
+                        }
+                    )
+        elif data.get("type") == "agent":
+            for dataset_id in collect_agent_knowledge_dataset_ids(data):
+                if dataset_id not in allowed_dataset_ids:
                     errors.append(
                         {
                             "code": "UNAUTHORIZED_RESOURCE",

@@ -1,7 +1,8 @@
 import pytest
 
-from core.workflow.generator.llm_response import StageSchemaError
-from core.workflow.generator.node_builder import BuilderInput, _build_node, assemble_graph
+from core.workflow.generator.compiler.node_builder import BuilderInput, _build_node, assemble_graph
+from core.workflow.generator.model_io.llm_response import StageSchemaError
+from core.workflow.generator.validation.graph_validator import GraphValidator
 from graphon.enums import BuiltinNodeTypes
 
 
@@ -46,6 +47,99 @@ def test_container_children_without_explicit_edges_are_connected_in_declaration_
         ("first", "second"),
         ("second", "third"),
     }
+
+
+def test_updated_container_preserves_existing_start_node_id():
+    graph = assemble_graph(
+        plan_nodes=[
+            {"id": "loop", "label": "Loop", "node_type": "loop", "purpose": "updated", "action": "update"},
+            {"id": "child", "label": "Child", "node_type": "code", "purpose": "x", "parent": "loop"},
+        ],
+        plan_edges=[],
+        configs_by_id={"loop": {}, "child": {}},
+        existing_by_id={
+            "loop": {
+                "id": "loop",
+                "data": {"type": "loop", "title": "Old loop", "start_node_id": "custom-loop-entry"},
+            }
+        },
+        existing_edges=[{"source": "custom-loop-entry", "target": "child"}],
+    )
+
+    loop = next(node for node in graph["nodes"] if node["id"] == "loop")
+    starts = [node for node in graph["nodes"] if (node.get("data") or {}).get("type") == "loop-start"]
+
+    assert loop["data"]["start_node_id"] == "custom-loop-entry"
+    assert [node["id"] for node in starts] == ["custom-loop-entry"]
+    assert any(edge["source"] == "custom-loop-entry" and edge["target"] == "child" for edge in graph["edges"])
+
+
+def test_replaced_node_uses_new_container_default_start_node_id():
+    graph = assemble_graph(
+        plan_nodes=[{"id": "step", "label": "New loop", "node_type": "loop", "purpose": "repeat", "action": "replace"}],
+        plan_edges=[],
+        configs_by_id={"step": {"loop_count": 2, "break_conditions": [], "logical_operator": "and"}},
+        existing_by_id={"step": {"id": "step", "data": {"type": "code", "start_node_id": "stale-entry"}}},
+    )
+
+    loop = next(node for node in graph["nodes"] if node["id"] == "step")
+
+    assert loop["data"]["start_node_id"] == "stepstart"
+    assert any(node["id"] == "stepstart" for node in graph["nodes"])
+    assert all(node["id"] != "stale-entry" for node in graph["nodes"])
+
+
+def test_reassembling_kept_container_does_not_duplicate_start_or_entry_edge():
+    plan_nodes = [
+        {"id": "loop", "label": "Loop", "node_type": "loop", "purpose": "x", "action": "keep"},
+        {"id": "child", "label": "Child", "node_type": "code", "purpose": "x", "parent": "loop", "action": "keep"},
+    ]
+    first = assemble_graph(
+        plan_nodes=plan_nodes,
+        plan_edges=[],
+        configs_by_id={},
+        existing_by_id={
+            "loop": {"id": "loop", "data": {"type": "loop", "title": "Loop"}},
+            "child": {"id": "child", "parentId": "loop", "data": {"type": "code", "title": "Child"}},
+        },
+    )
+
+    second = assemble_graph(
+        plan_nodes=plan_nodes,
+        plan_edges=[],
+        configs_by_id={},
+        existing_by_id={node["id"]: node for node in first["nodes"]},
+        existing_edges=first["edges"],
+    )
+
+    assert sum(node["id"] == "loopstart" for node in second["nodes"]) == 1
+    assert sum(edge["source"] == "loopstart" and edge["target"] == "child" for edge in second["edges"]) == 1
+    assert all(node.get("parentId") != "loop" or node["id"] in {"loopstart", "child"} for node in second["nodes"])
+
+
+def test_assemble_graph_does_not_duplicate_a_start_id_used_by_a_planned_child():
+    graph = assemble_graph(
+        plan_nodes=[
+            {"id": "loop", "label": "Loop", "node_type": "loop", "purpose": "x"},
+            {
+                "id": "loopstart",
+                "label": "Business step",
+                "node_type": "code",
+                "purpose": "x",
+                "parent": "loop",
+            },
+        ],
+        plan_edges=[],
+        configs_by_id={"loop": {}, "loopstart": {"outputs": {}}},
+        existing_by_id={},
+    )
+
+    conflicting = [node for node in graph["nodes"] if node["id"] == "loopstart"]
+
+    assert len(conflicting) == 1
+    assert conflicting[0]["data"]["type"] == "code"
+    errors = GraphValidator._collect_container_errors(nodes=graph["nodes"])
+    assert any(error["code"] == "INVALID_CONTAINER" for error in errors)
 
 
 def test_container_explicit_internal_edges_are_not_replaced_by_auto_wiring():
@@ -152,6 +246,59 @@ def test_builder_rejects_a_second_language_mismatch():
     assert client.calls == 2
 
 
+def test_start_builder_receives_canonical_json_object_input():
+    class CapturingClient:
+        messages = []
+
+        def iter_json(self, *, messages, stage):
+            self.messages = messages
+            yield from ()
+            return {
+                "config": {
+                    "variables": [
+                        {
+                            "variable": "payload",
+                            "label": "Payload",
+                            "type": "json_object",
+                            "required": True,
+                            "json_schema": {"type": "object", "properties": {}},
+                        }
+                    ]
+                }
+            }
+
+    client = CapturingClient()
+    request = BuilderInput(
+        provider="openai",
+        model_name="gpt-4o",
+        model_mode="chat",
+        mode="workflow",
+        instruction="Receive a JSON payload",
+        ideal_output="",
+        plan_nodes=[],
+        plan_edges=[],
+        tool_catalogue_text="",
+        knowledge_catalogue_text="",
+        start_inputs=[{"variable": "payload", "label": "Payload", "type": "json_object"}],
+        current_graph=None,
+        output_language="en-US",
+    )
+
+    config = _build_node(
+        client=client,
+        request=request,
+        target_node={"id": "start", "node_type": BuiltinNodeTypes.START, "label": "Start", "purpose": "Input"},
+        plan_json="{}",
+        mode_section="",
+        existing_node=None,
+        emit=None,
+    )
+
+    assert "Start inputs" in str(client.messages[1].content)
+    assert "type='json_object'" in str(client.messages[1].content)
+    assert config["variables"][0]["type"] == "json_object"
+
+
 from ._runner_test_support import (
     Any,
     MagicMock,
@@ -161,6 +308,7 @@ from ._runner_test_support import (
     cast,
     dify_config,
     json,
+    node_config,
     time,
 )
 
@@ -547,7 +695,7 @@ class TestParallelNodeBuilder:
             {
                 "node1": {"variables": []},
                 "node2": {
-                    "delivery_methods": [{"id": "webapp", "type": "webapp", "enabled": True}],
+                    "delivery_methods": [{"type": "webapp", "enabled": True}],
                     "form_content": "Approve this request.",
                     "inputs": [
                         {
@@ -637,7 +785,7 @@ class TestParallelNodeBuilder:
                 planner_calls += 1
                 return _llm_result(json.dumps(invalid_plan if planner_calls == 1 else valid_plan))
             prompt = "\n".join(str(message.content) for message in prompt_messages)
-            config = {"variables": []} if "id=node1, type=start" in prompt else {"outputs": []}
+            config = {"variables": []} if "id=node1, type=start" in prompt else node_config("end")
             return _llm_result(json.dumps({"config": config}))
 
         model = MagicMock()
@@ -812,3 +960,171 @@ class TestAssembleParallelGraph:
 
         entry = next(edge for edge in graph["edges"] if edge["source"] == "itstart")
         assert entry["target"] == "a"
+
+
+def _assist_builder_input() -> BuilderInput:
+    return BuilderInput(
+        provider="openai",
+        model_name="gpt-4o",
+        model_mode="chat",
+        mode="workflow",
+        instruction="生成中文摘要工作流",
+        ideal_output="",
+        plan_nodes=[],
+        plan_edges=[],
+        tool_catalogue_text="",
+        knowledge_catalogue_text="",
+        start_inputs=[],
+        current_graph=None,
+        output_language="zh-Hans",
+    )
+
+
+class _CaptureBuilderClient:
+    def __init__(self) -> None:
+        self.user_prompts: list[str] = []
+
+    def iter_json(self, *, messages, stage):
+        self.user_prompts.append(str(messages[-1].content))
+        yield from ()
+        return {"config": {}}
+
+
+def _plan_from_builder_prompt(prompt: str) -> dict:
+    marker = "# Normalized plan and topology"
+    _, _, rest = prompt.partition(marker)
+    blob = rest.strip().split("\n\n", 1)[0]
+    return json.loads(blob)
+
+
+def test_build_single_node_plan_includes_live_outputs_and_edges():
+    from core.workflow.generator.compiler.node_builder import build_single_node
+
+    client = _CaptureBuilderClient()
+    graph = {
+        "nodes": [
+            {
+                "id": "start",
+                "data": {
+                    "type": "start",
+                    "title": "开始",
+                    "variables": [{"variable": "query", "label": "问题", "type": "paragraph"}],
+                },
+            }
+        ],
+        "edges": [{"source": "start", "target": "llm1"}],
+    }
+    build_single_node(
+        client=client,
+        request=_assist_builder_input(),
+        node_id="llm1",
+        node_type="llm",
+        title="回答",
+        purpose="根据 query 回答",
+        topology_graph=graph,
+    )
+    plan = _plan_from_builder_prompt(client.user_prompts[0])
+    start = next(node for node in plan["nodes"] if node["id"] == "start")
+    assert start["outputs"] == ["query"]
+    assert start["outputs_kind"] == "confirmed"
+    assert plan["edges"] == [{"source": "start", "target": "llm1"}]
+    assert plan["start_inputs"][0]["variable"] == "query"
+
+
+def test_build_single_node_extra_plan_nodes_are_provisional_siblings():
+    from core.workflow.generator.compiler.node_builder import build_single_node
+
+    client = _CaptureBuilderClient()
+    build_single_node(
+        client=client,
+        request=_assist_builder_input(),
+        node_id="llm1",
+        node_type="llm",
+        title="回答",
+        purpose="引用 start.query",
+        extra_plan_nodes=[
+            {
+                "id": "start",
+                "node_type": "start",
+                "label": "开始",
+                "outputs": ["query"],
+                "outputs_kind": "provisional",
+            }
+        ],
+        topology_graph={"nodes": [], "edges": []},
+    )
+    plan = _plan_from_builder_prompt(client.user_prompts[0])
+    start = next(node for node in plan["nodes"] if node["id"] == "start")
+    assert start["outputs"] == ["query"]
+    assert start["outputs_kind"] == "provisional"
+
+
+def test_workflow_assist_build_single_node_rejects_tool_before_llm_call():
+    from core.workflow.generator.compiler.node_builder import build_single_node
+
+    client = _CaptureBuilderClient()
+
+    with pytest.raises(ValueError, match="compiled outside Node Builder"):
+        build_single_node(
+            client=client,
+            request=_assist_builder_input(),
+            node_id="tool_1",
+            node_type="tool",
+            title="Tool",
+            purpose="must not run",
+        )
+
+    assert client.user_prompts == []
+
+
+def test_cmdk_builder_plan_stays_planner_nodes(monkeypatch):
+    monkeypatch.setattr(dify_config, "WORKFLOW_GENERATOR_NODE_BUILDER_MAX_WORKERS", 3)
+    planner = {
+        "title": "URL Summarizer",
+        "description": "Summarize a URL.",
+        "nodes": [
+            {"id": "node1", "label": "Start", "node_type": "start", "purpose": "Receive URL."},
+            {"id": "node2", "label": "Summarize", "node_type": "llm", "purpose": "Summarize it."},
+            {"id": "node3", "label": "End", "node_type": "end", "purpose": "Return summary."},
+        ],
+        "edges": [
+            {"source": "node1", "target": "node2"},
+            {"source": "node2", "target": "node3"},
+        ],
+    }
+    captured: list[dict] = []
+
+    class _CapturePlanModel:
+        def invoke_llm(self, *, prompt_messages, model_parameters, stream):
+            if "workflow planner" in str(prompt_messages[0].content).lower():
+                return _llm_result(json.dumps(planner))
+            user_prompt = "\n".join(str(message.content) for message in prompt_messages)
+            if "# Normalized plan and topology" in user_prompt:
+                captured.append(_plan_from_builder_prompt(user_prompt))
+            node_id = next(n for n in ("node1", "node2", "node3") if f"id={n}, type=" in user_prompt)
+            configs = {
+                "node1": {"variables": []},
+                "node2": {
+                    "model": {"provider": "openai", "name": "gpt-4o", "mode": "chat", "completion_params": {}},
+                    "prompt_template": [{"role": "user", "text": "Summarize the input."}],
+                    "context": {"enabled": False, "variable_selector": []},
+                    "vision": {"enabled": False},
+                },
+                "node3": {"outputs": [{"variable": "summary", "value_selector": ["node2", "text"]}]},
+            }
+            return _llm_result(json.dumps({"config": configs[node_id]}))
+
+    result = WorkflowGenerator.generate_workflow_graph(
+        model_instance=_CapturePlanModel(),
+        model_parameters={},
+        provider="openai",
+        model_name="gpt-4o",
+        model_mode="chat",
+        mode="workflow",
+        instruction="Summarize a URL",
+    )
+    assert result["error"] == ""
+    assert captured
+    for plan in captured:
+        assert "outputs_kind" not in json.dumps(plan)
+        assert {node["id"] for node in plan["nodes"]} == {"node1", "node2", "node3"}

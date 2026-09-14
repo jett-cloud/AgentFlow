@@ -19,21 +19,14 @@ from uuid import uuid4
 from core.app.app_config.entities import ModelConfig
 from core.model_manager import ModelInstance, ModelManager
 from core.workflow.generator import WorkflowGenerator
-from core.workflow.generator.knowledge_catalogue import (
-    KnowledgeCatalogueEntry,
-    build_knowledge_catalogue,
-    format_knowledge_catalogue,  # noqa: F401 - retained as a stable test patch seam
-    installed_dataset_keys,
-)
-from core.workflow.generator.planner import PlannerPolicy
-from core.workflow.generator.planner_context import PlannerContextCheckpoint
-from core.workflow.generator.planning_session import UserTurn, begin_user_turn, empty_planning_session
-from core.workflow.generator.tool_catalogue import (
-    ToolCatalogueEntry,
-    build_tool_catalogue,
-    format_tool_catalogue,  # noqa: F401 - retained as a stable test patch seam
-    installed_tool_keys,
-)
+from core.workflow.generator.resources.knowledge_catalogue import KnowledgeCatalogueEntry, format_knowledge_catalogue, installed_dataset_keys
+from services.workflow_assist.knowledge_catalogue_loader import build_knowledge_catalogue
+from core.workflow.generator.pipeline.planner_support import PlannerPolicy
+from core.workflow.generator.pipeline.planner_context_values import PlannerContextCheckpoint
+from core.workflow.generator.pipeline.planning_types import UserTurn
+from core.workflow.generator.pipeline.planning_session import begin_user_turn, empty_planning_session
+from core.workflow.generator.resources.tool_catalogue import ToolCatalogueEntry, format_tool_catalogue, installed_tool_keys
+from services.workflow_assist.tool_catalogue_loader import build_tool_catalogue
 from core.workflow.generator.types import (
     WorkflowGenerateResultDict,
     WorkflowGenerationModeRequest,

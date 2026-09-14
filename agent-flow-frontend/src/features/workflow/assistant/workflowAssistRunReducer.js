@@ -4,7 +4,7 @@ import {
   finalizeAssistStreamMessages,
   normalizeAssistStreamEvent,
 } from './assistStreamMessage.js'
-import { detectAssistLanguage } from './assistLanguage.js'
+import { detectRecoveredAssistLanguage } from './assistLanguage.js'
 
 const TERMINAL_EVENTS = new Set(['waiting_user', 'done', 'failed', 'error', 'aborted', 'turn_complete'])
 
@@ -21,10 +21,10 @@ function hasSequence(tracker, sequence) {
     || tracker.pending.some(([start, end]) => sequence >= start && sequence <= end)
 }
 
-function addPendingRange(ranges, sequence) {
+function addPendingRange(ranges, sequence, lastSequence = sequence) {
   const pending = []
   let start = sequence
-  let end = sequence
+  let end = lastSequence
   let inserted = false
   for (const range of ranges) {
     if (range[1] + 1 < start) {
@@ -47,14 +47,15 @@ function addPendingRange(ranges, sequence) {
   return pending
 }
 
-function addSequence(tracker, sequence) {
-  if (sequence > tracker.through + 1)
-    return { through: tracker.through, pending: addPendingRange(tracker.pending, sequence) }
-  let through = sequence
-  if (tracker.pending[0]?.[0] !== through + 1)
-    return { through, pending: tracker.pending }
-  through = tracker.pending[0][1]
-  return { through, pending: tracker.pending.slice(1) }
+function addSequence(tracker, sequence, firstSequence = sequence) {
+  const pending = addPendingRange(tracker.pending, firstSequence, sequence)
+  let through = tracker.through
+  let consumed = 0
+  while (pending[consumed]?.[0] <= through + 1) {
+    through = Math.max(through, pending[consumed][1])
+    consumed += 1
+  }
+  return { through, pending: pending.slice(consumed) }
 }
 
 function normalizedQuestions(questions) {
@@ -102,19 +103,26 @@ export function workflowAssistRunCursor(state, runId) {
   return state?.cursorsByRun?.[String(runId || '')] || null
 }
 
-export function reduceWorkflowAssistRunEvent(state, event, selectedLanguage = '') {
+export function reduceWorkflowAssistRunEvent(state, event, selectedLanguage = '', options = {}) {
   const current = state || createWorkflowAssistRunState()
   const coordinate = eventCoordinate(event)
   if (!coordinate)
     return current
+  const mode = options.mode === 'hydrate' ? 'hydrate' : 'live'
 
   const { runId, sequence } = coordinate
   const previousTracker = current.eventSequencesByRun[runId] || { through: -1, pending: [] }
   if (hasSequence(previousTracker, sequence))
     return current
+  // Only history projections may cover a contiguous range of durable deltas.
+  const projectedStart = event.data?.sequence_start
+  const firstSequence = mode === 'hydrate'
+    && ['message.delta', 'reasoning.delta'].includes(event.event)
+    && Number.isInteger(projectedStart) && projectedStart > 0 && projectedStart <= sequence
+    ? projectedStart : sequence
   const eventSequencesByRun = {
     ...current.eventSequencesByRun,
-    [runId]: addSequence(previousTracker, sequence),
+    [runId]: addSequence(previousTracker, sequence, firstSequence),
   }
   const epoch = Number(event.epoch)
   const previousCursor = workflowAssistRunCursor(current, runId)
@@ -133,12 +141,16 @@ export function reduceWorkflowAssistRunEvent(state, event, selectedLanguage = ''
 
   const payload = normalizeAssistStreamEvent(event)
   const language = event.event === 'user.message' && String(payload.text || '').trim()
-    ? detectAssistLanguage(payload.text)
+    ? detectRecoveredAssistLanguage([...current.messages, { role: 'user', text: payload.text }])
     : selectedLanguage || current.language || 'zh-Hans'
   let messages = current.messages
   if (event.event === 'user.message') {
     messages = [
-      ...finalizeAssistStreamMessages(messages),
+      ...finalizeAssistStreamMessages(messages).map(message => (
+        message.kind === 'clarification' && !message.resolved
+          ? { ...message, status: 'resolved', resolved: true }
+          : message
+      )),
       { role: 'user', text: String(payload.text || ''), run_id: runId, epoch, sequence, ...(Array.isArray(payload.references) && payload.references.length ? { references: payload.references } : {}) },
     ]
   }
@@ -155,7 +167,7 @@ export function reduceWorkflowAssistRunEvent(state, event, selectedLanguage = ''
     messages = finalizeAssistStreamMessages(messages)
   }
   else {
-    messages = applyAssistStreamEvent(messages, event, language)
+    messages = applyAssistStreamEvent(messages, event, language, { mode })
   }
 
   const revision = event.event === 'candidate.updated' ? Number(payload.revision) : 0
@@ -171,7 +183,36 @@ export function reduceWorkflowAssistRunEvent(state, event, selectedLanguage = ''
   }
 }
 
-export function reduceWorkflowAssistTimeline(state, events) {
+export function reduceWorkflowAssistTimeline(state, events, options = {}) {
   return (Array.isArray(events) ? events : [])
-    .reduce((current, event) => reduceWorkflowAssistRunEvent(current, event), state)
+    .reduce((current, event) => reduceWorkflowAssistRunEvent(current, event, '', options), state)
+}
+
+export function hydrateWorkflowAssistTimeline(state, events) {
+  return reduceWorkflowAssistTimeline(state, events, { mode: 'hydrate' })
+}
+
+export function settleHydratedAssistRunState(state, { keepLiveTail = false } = {}) {
+  const current = state || createWorkflowAssistRunState()
+  if (keepLiveTail) {
+    const messages = Array.isArray(current.messages) ? [...current.messages] : []
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (message?.kind === 'assistant_text') {
+        messages[index] = { ...message, streaming: true }
+        break
+      }
+      if (message?.kind === 'activity' && message.status === 'running') {
+        messages[index] = { ...message, streaming: true, collapsed: false }
+        break
+      }
+      if (message?.role === 'user')
+        break
+    }
+    return { ...current, messages }
+  }
+  return {
+    ...current,
+    messages: finalizeAssistStreamMessages(current.messages),
+  }
 }

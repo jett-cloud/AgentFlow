@@ -3,8 +3,8 @@ from types import SimpleNamespace
 import pytest
 
 from core.app.apps.common.graph_runtime_state_support import GraphRuntimeStateSupport
-from core.workflow.system_variables import build_system_variables
-from core.workflow.variable_pool_initializer import add_variables_to_pool
+from core.workflow.runtime.variables.system_variables import build_system_variables
+from core.workflow.runtime.variables.variable_pool_initializer import add_variables_to_pool
 from graphon.runtime import GraphRuntimeState, VariablePool
 
 

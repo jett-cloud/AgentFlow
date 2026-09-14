@@ -1,6 +1,7 @@
+from copy import deepcopy
 from typing import cast
 
-from core.workflow.generator.graph_postprocessor import postprocess_graph
+from core.workflow.generator.graph.graph_postprocessor import postprocess_graph
 from core.workflow.generator.types import GraphDict
 
 
@@ -26,6 +27,63 @@ def test_postprocess_keeps_container_child_relative_position():
 
     child = next(node for node in result["nodes"] if node["id"] == "child")
     assert child["position"] == {"x": 240, "y": 60}
+
+
+def test_postprocess_unwraps_single_query_keeps_multi_selector_and_constants_and_is_idempotent():
+    graph = cast(
+        GraphDict,
+        {
+            "nodes": [
+                {"id": "start", "data": {"type": "start", "variables": [{"variable": "query"}]}},
+                {
+                    "id": "pe1",
+                    "data": {
+                        "type": "parameter-extractor",
+                        "query": [["start", "query"]],
+                        "parameters": [{"name": "topic", "type": "string", "required": True, "description": "t"}],
+                    },
+                },
+                {
+                    "id": "pe2",
+                    "data": {
+                        "type": "parameter-extractor",
+                        "query": [["start", "query"], ["start", "query"]],
+                        "parameters": [{"name": "topic", "type": "string", "required": True, "description": "t"}],
+                    },
+                },
+                {
+                    "id": "t1",
+                    "data": {
+                        "type": "tool",
+                        "provider_id": "google",
+                        "tool_name": "search",
+                        "tool_parameters": {
+                            "q": {"type": "constant", "value": "{{#start.query#}}"},
+                        },
+                    },
+                },
+                {"id": "end", "data": {"type": "end", "outputs": []}},
+            ],
+            "edges": [
+                {"source": "start", "target": "pe1"},
+                {"source": "pe1", "target": "pe2"},
+                {"source": "pe2", "target": "t1"},
+                {"source": "t1", "target": "end"},
+            ],
+            "viewport": {"x": 0, "y": 0, "zoom": 0.7},
+        },
+    )
+
+    first = postprocess_graph(graph=deepcopy(graph), mode="workflow")
+    by_id = {node["id"]: node for node in first["nodes"]}
+    assert by_id["pe1"]["data"]["query"] == ["start", "query"]
+    assert by_id["pe2"]["data"]["query"] == [["start", "query"], ["start", "query"]]
+    assert by_id["t1"]["data"]["tool_parameters"]["q"] == {"type": "constant", "value": "{{#start.query#}}"}
+
+    second = postprocess_graph(graph=deepcopy(first), mode="workflow")
+    first_data = {node["id"]: node["data"] for node in first["nodes"]}
+    second_data = {node["id"]: node["data"] for node in second["nodes"]}
+    assert second_data == first_data
 
 
 def test_postprocess_lays_out_piled_container_children_and_sizes_parent():
@@ -128,6 +186,45 @@ def test_postprocess_inserts_loop_start_and_wires_it_to_the_first_child() -> Non
     assert start["parentId"] == "loop1"
     assert loop["data"]["start_node_id"] == start["id"]
     assert any(edge.get("source") == start["id"] and edge.get("target") == "inner" for edge in result["edges"])
+
+
+def test_postprocess_container_start_is_idempotent() -> None:
+    graph = cast(
+        GraphDict,
+        {
+            "nodes": [
+                {"id": "loop1", "data": {"type": "loop", "title": "Loop"}},
+                {"id": "inner", "parentId": "loop1", "data": {"type": "code", "title": "Step"}},
+            ],
+            "edges": [],
+            "viewport": {"x": 0.0, "y": 0.0, "zoom": 0.7},
+        },
+    )
+
+    first = postprocess_graph(graph=graph, mode="workflow")
+    second = postprocess_graph(graph=first, mode="workflow")
+
+    assert second == first
+    assert sum(node["id"] == "loop1start" for node in second["nodes"]) == 1
+    assert sum(edge.get("source") == "loop1start" and edge.get("target") == "inner" for edge in second["edges"]) == 1
+
+
+def test_postprocess_does_not_duplicate_a_conflicting_start_node_id() -> None:
+    graph = cast(
+        GraphDict,
+        {
+            "nodes": [
+                {"id": "loop1", "data": {"type": "loop", "title": "Loop", "start_node_id": "inner"}},
+                {"id": "inner", "parentId": "loop1", "data": {"type": "code", "title": "Step"}},
+            ],
+            "edges": [],
+            "viewport": {"x": 0.0, "y": 0.0, "zoom": 0.7},
+        },
+    )
+
+    result = postprocess_graph(graph=graph, mode="workflow")
+
+    assert sum(node["id"] == "inner" for node in result["nodes"]) == 1
 
 
 def test_postprocess_wires_iteration_start_to_the_entry_child_not_downstream() -> None:
@@ -289,9 +386,7 @@ class TestWorkflowGeneratorFileVariables:
         assert "- if-else:" not in builder_prompt
         assert "- tool" not in builder_prompt
 
-    def test_promotes_mistyped_var_consumed_by_document_extractor(self):
-        # A direct unit test of the backstop: a document-extractor reading a
-        # paragraph-typed start var forces it to a file type.
+    def test_does_not_change_explicit_start_variable_type_for_document_extractor(self):
         nodes = [
             {
                 "id": "s",
@@ -311,8 +406,8 @@ class TestWorkflowGeneratorFileVariables:
         ]
         GraphPostprocessor._normalize_start_file_variables(nodes=nodes)
         doc = nodes[0]["data"]["variables"][0]
-        assert doc["type"] == "file"
-        assert doc["allowed_file_types"] == ["document"]
+        assert doc["type"] == "paragraph"
+        assert "allowed_file_types" not in doc
 
     def test_drops_custom_file_type_without_extensions(self):
         nodes = [
@@ -541,6 +636,38 @@ class TestWorkflowGeneratorBranchHandleRepair:
             },
         }
 
+    def test_derives_branch_metadata_from_cases_without_rewriting_reordered_ids(self):
+        first_case_id = "b61c92c8-2398-44e9-871a-278428a14c75"
+        nodes = [
+            {
+                "id": "branch",
+                "data": {
+                    "type": "if-else",
+                    "cases": [{"case_id": first_case_id}, {"case_id": "true"}],
+                    "_targetBranches": [{"id": "stale", "name": "STALE"}],
+                },
+            }
+        ]
+
+        GraphPostprocessor._derive_if_else_branches(nodes=nodes)
+
+        assert nodes[0]["data"]["cases"][0]["case_id"] == first_case_id
+        assert nodes[0]["data"]["_targetBranches"] == [
+            {"id": first_case_id, "name": "CASE 1"},
+            {"id": "true", "name": "CASE 2"},
+            {"id": "false", "name": "ELSE"},
+        ]
+
+    def test_derives_if_and_else_names_for_one_case(self):
+        nodes = [self._if_else_node()]
+
+        GraphPostprocessor._derive_if_else_branches(nodes=nodes)
+
+        assert nodes[0]["data"]["_targetBranches"] == [
+            {"id": "true", "name": "IF"},
+            {"id": "false", "name": "ELSE"},
+        ]
+
     def test_assigns_true_then_false_to_default_handle_edges(self):
         nodes = [self._if_else_node()]
         edges = [
@@ -616,7 +743,107 @@ def test_repair_branch_edge_handles():
     assert edges[0]["sourceHandle"] == "c1"
 
 
-def test_document_extractor_start_vars():
-    nodes = [{"id": "n1", "data": {"type": "document-extractor", "variable_selector": ["start", "doc"]}}]
-    res = GraphPostprocessor._document_extractor_start_vars(nodes=nodes, start_id="start")
-    assert res == {"doc": False}
+def test_postprocess_rewrites_bare_tool_image_path_to_variable_selector():
+    entry = {
+        "provider_name": "image",
+        "provider_type": "builtin",
+        "plugin_id": "image",
+        "tool_name": "img2img",
+        "tool_label": "Image to image",
+        "description": "Generate an image",
+        "parameters": (
+            {"name": "image", "type": "file", "form": "llm", "required": False},
+            {"name": "prompt", "type": "string", "form": "llm", "required": True},
+            {"name": "size", "type": "select", "form": "form", "required": False},
+            {"name": "note", "type": "string", "form": "llm", "required": False},
+        ),
+    }
+    graph = cast(
+        GraphDict,
+        {
+            "nodes": [
+                {
+                    "id": "1788615043935002",
+                    "data": {
+                        "type": "start",
+                        "variables": [{"variable": "source_image", "type": "file"}],
+                    },
+                },
+                {
+                    "id": "img2img",
+                    "data": {
+                        "type": "tool",
+                        "provider_id": "image",
+                        "tool_name": "img2img",
+                        "tool_parameters": {
+                            "image": {"type": "constant", "value": "1788615043935002.source_image"},
+                            "prompt": {"type": "mixed", "value": "{{#1788615043935002.source_image#}}"},
+                            "size": {"type": "constant", "value": "1024"},
+                            "note": {"type": "mixed", "value": "use {{#1788615043935002.source_image#}}"},
+                        },
+                    },
+                },
+                {"id": "end", "data": {"type": "end", "outputs": []}},
+            ],
+            "edges": [
+                {"source": "1788615043935002", "target": "img2img"},
+                {"source": "img2img", "target": "end"},
+            ],
+            "viewport": {"x": 0.0, "y": 0.0, "zoom": 0.7},
+        },
+    )
+
+    result = postprocess_graph(graph=graph, mode="workflow", tool_entries=[entry])
+    params = next(node["data"]["tool_parameters"] for node in result["nodes"] if node["id"] == "img2img")
+
+    assert params["image"] == {"type": "variable", "value": ["1788615043935002", "source_image"]}
+    assert params["prompt"] == {"type": "mixed", "value": "{{#1788615043935002.source_image#}}"}
+    assert params["size"] == {"type": "constant", "value": "1024"}
+    assert params["note"] == {"type": "mixed", "value": "use {{#1788615043935002.source_image#}}"}
+
+
+def typed_iteration_graph() -> GraphDict:
+    return {
+        "nodes": [
+            {
+                "id": "start",
+                "data": {
+                    "type": "start",
+                    "variables": [{"variable": "items", "type": "array[number]"}],
+                },
+            },
+            {
+                "id": "iter",
+                "data": {
+                    "type": "iteration",
+                    "iterator_selector": ["start", "items"],
+                    "output_selector": ["child", "score"],
+                },
+            },
+            {
+                "id": "child",
+                "parentId": "iter",
+                "data": {
+                    "type": "code",
+                    "outputs": {"score": {"type": "number", "children": None}},
+                },
+            },
+        ],
+        "edges": [],
+        "viewport": {"x": 0, "y": 0, "zoom": 1},
+    }
+
+
+def test_postprocess_derives_iteration_types_after_child_wiring():
+    result = postprocess_graph(graph=cast(GraphDict, typed_iteration_graph()), mode="workflow")
+    iteration = next(node for node in result["nodes"] if node["id"] == "iter")
+    assert iteration["data"]["iterator_input_type"] == "array[number]"
+    assert iteration["data"]["output_type"] == "array[number]"
+
+
+def test_postprocess_does_not_disguise_a_scalar_iterator_as_array():
+    graph = typed_iteration_graph()
+    graph["nodes"][0]["data"]["variables"] = [{"variable": "items", "type": "number"}]
+    result = postprocess_graph(graph=cast(GraphDict, graph), mode="workflow")
+    iteration = next(node for node in result["nodes"] if node["id"] == "iter")
+    assert iteration["data"]["iterator_input_type"] == "number"

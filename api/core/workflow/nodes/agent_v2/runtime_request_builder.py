@@ -54,7 +54,7 @@ from clients.agent_backend import (
 from configs import dify_config
 from core.app.entities.app_invoke_entities import DifyRunContext, InvokeFrom
 from core.model_manager import ModelManager
-from core.workflow.system_variables import SystemVariableKey, get_system_text, get_system_value
+from core.workflow.runtime.variables.system_variables import SystemVariableKey, get_system_text, get_system_value
 from graphon.file import File, FileTransferMethod, FileType
 from graphon.model_runtime.entities.model_entities import ModelType
 from graphon.variables.segments import Segment

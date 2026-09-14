@@ -262,8 +262,8 @@
           </el-form-item>
         </template>
 
-        <!-- 4.8 [json-object] 专属: JSON Schema 架构描述框 -->
-        <el-form-item v-if="varForm.type === 'json-object'" label="JSON Schema 架构 (必须为 type: object)">
+        <!-- 4.8 [json_object] 专属: JSON Schema 架构描述框 -->
+        <el-form-item v-if="varForm.type === 'json_object'" label="JSON Schema 架构 (必须为 type: object)">
           <el-input 
             v-model="varForm.json_schema" 
             type="textarea" 

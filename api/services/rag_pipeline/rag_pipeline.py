@@ -32,15 +32,15 @@ from core.rag.entities import DatasourceCompletedEvent, DatasourceErrorEvent, Da
 from core.repositories.factory import DifyCoreRepositoryFactory
 from core.repositories.sqlalchemy_workflow_node_execution_repository import SQLAlchemyWorkflowNodeExecutionRepository
 from core.workflow.node_factory import LATEST_VERSION, get_node_type_classes_mapping
-from core.workflow.system_variables import (
+from core.workflow.runtime.variables.system_variables import (
     SystemVariableKey,
     build_bootstrap_variables,
     build_system_variables,
     default_system_variables,
     get_system_segment,
 )
-from core.workflow.variable_pool_initializer import add_variables_to_pool
-from core.workflow.workflow_entry import WorkflowEntry
+from core.workflow.runtime.variables.variable_pool_initializer import add_variables_to_pool
+from core.workflow.runtime.workflow_entry import WorkflowEntry
 from enterprise.telemetry.draft_trace import enqueue_draft_node_execution_trace
 from extensions.ext_database import db
 from graphon.entities import WorkflowNodeExecution

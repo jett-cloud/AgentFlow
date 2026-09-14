@@ -7,6 +7,7 @@
       type="button"
       class="trigger"
       :disabled="disabled || readOnly"
+      :aria-label="ariaLabel || placeholder"
       @click="toggleOpen"
     >
       <span class="trigger-text" :class="{ placeholder: !displayText }">
@@ -30,8 +31,8 @@
           <button
             type="button"
             class="option"
-            :class="{ active: isSelected(row.selector), hovering: isHovering(group, row) }"
-            @click="selectSelector(row.selector)"
+            :class="{ active: isSelected(row.selector), hovering: isHovering(group, row), ancestor: !isRowSelectable(row) }"
+            @click="selectRoot(group, row)"
           >
             <span class="var-name">{{ row.displayName }}</span>
             <span class="var-type">{{ row.type }}</span>
@@ -60,24 +61,22 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useAvailableVariables } from '../../model/useAvailableVariables.js'
-import {
-  getRootSelectorPath,
-  hasNestedChildren,
-  buildNestedValueSelector,
-  getTreeRootLabel,
-} from '../../model/objectChildTree.js'
+import { isFilteredVariableSelectable, mapGroupsToPickerRows } from '../../model/objectChildTree.js'
 import { formatValueSelector } from '../../model/variableOutputs.js'
+import { resolveAvailableVariable } from '../../model/availableVariables.js'
 import ObjectChildTreePanel from './ObjectChildTreePanel.vue'
 
 const props = defineProps({
   modelValue: { type: Array, default: () => [] },
   nodeId: { type: String, required: true },
   placeholder: { type: String, default: '选择变量...' },
+  ariaLabel: { type: String, default: '' },
   disabled: { type: Boolean, default: false },
   readOnly: { type: Boolean, default: false },
   clearable: { type: Boolean, default: true },
   hideFileVars: { type: Boolean, default: false },
   filterVar: { type: Function, default: null },
+  includeDirectChildren: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:modelValue', 'change'])
@@ -87,6 +86,7 @@ const { availableVarGroups } = useAvailableVariables(
   {
     hideFileVars: computed(() => props.hideFileVars),
     filterVar: computed(() => props.filterVar),
+    includeDirectChildren: computed(() => props.includeDirectChildren),
   },
 )
 
@@ -96,30 +96,7 @@ const hoverKey = ref('')
 const nestedHovering = ref(false)
 let leaveTimer = null
 
-const pickerGroups = computed(() => (
-  availableVarGroups.value.map(group => ({
-    nodeId: group.nodeId,
-    title: group.title,
-    rows: (group.vars || [])
-      .filter(variable => (
-        (!props.hideFileVars || (variable.type !== 'file' && variable.type !== 'arrayFile'))
-        && (!props.filterVar || props.filterVar(variable))
-      ))
-      .map((variable) => {
-      const rootPath = getRootSelectorPath(variable)
-      return {
-        variable: variable.variable,
-        type: variable.type,
-        des: variable.des,
-        children: variable.children,
-        displayName: getTreeRootLabel(variable),
-        hasChildren: hasNestedChildren(variable),
-        rootPath,
-        selector: buildNestedValueSelector(group.nodeId, rootPath, []),
-      }
-    }),
-  })).filter(group => group.rows.length > 0)
-))
+const pickerGroups = computed(() => mapGroupsToPickerRows(availableVarGroups.value))
 
 const displayText = computed(() => formatValueSelector(props.modelValue))
 
@@ -141,9 +118,20 @@ function toggleOpen() {
   open.value = !open.value
 }
 
+function isRowSelectable(row) {
+  return isFilteredVariableSelectable(row, props.filterVar)
+}
+
+function selectRoot(_group, row) {
+  if (!isRowSelectable(row))
+    return
+  selectSelector(row.selector)
+}
+
 function selectSelector(selector) {
+  const variable = resolveAvailableVariable(selector, availableVarGroups.value)
   emit('update:modelValue', selector)
-  emit('change', selector)
+  emit('change', selector, variable)
   open.value = false
   hoverKey.value = ''
   nestedHovering.value = false
@@ -276,6 +264,9 @@ defineExpose({ displayText })
 .option.hovering,
 .option.active {
   background: #f2f4f7;
+}
+.option.ancestor {
+  cursor: default;
 }
 .var-name {
   font-family: ui-monospace, monospace;

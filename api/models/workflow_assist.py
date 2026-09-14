@@ -129,6 +129,10 @@ class WorkflowAssistConversation(DefaultFieldsMixin, Base):
     candidate_base_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     compacted_until_sequence: Mapped[int | None] = mapped_column(Integer, nullable=True)
     compacted_state: Mapped[dict[str, Any] | None] = mapped_column(AdjustedJSON(), nullable=True)
+    contract_protocol_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    workflow_contract: Mapped[dict[str, Any] | None] = mapped_column(AdjustedJSON(), nullable=True)
+    contract_revision: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    contract_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     active_run_id: Mapped[str | None] = mapped_column(StringUUID, nullable=True)
     latest_run_id: Mapped[str | None] = mapped_column(StringUUID, nullable=True)
     run_epoch: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=sa.text("0"))
@@ -143,6 +147,11 @@ class WorkflowAssistConversation(DefaultFieldsMixin, Base):
     completion_assertion: Mapped[WorkflowAssistCompletionAssertion | None] = mapped_column(
         EnumText(WorkflowAssistCompletionAssertion, length=64), nullable=True
     )
+    completion_contract_protocol_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_contract_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_contract_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    completion_graph_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    completion_validation_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_deleted: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False, server_default=sa.text("false"))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -212,6 +221,9 @@ class WorkflowAssistRun(DefaultFieldsMixin, Base):
     model_config: Mapped[dict[str, Any]] = mapped_column(AdjustedJSON(), nullable=False, default=dict)
     selected_node: Mapped[str | None] = mapped_column(String(255), nullable=True)
     references: Mapped[list[Any] | None] = mapped_column(AdjustedJSON(), nullable=True)
+    contract_protocol_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    contract_rollout_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    live_acceptance: Mapped[dict[str, Any] | None] = mapped_column(AdjustedJSON(), nullable=True)
     next_event_sequence: Mapped[int] = mapped_column(
         Integer,
         nullable=False,

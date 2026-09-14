@@ -19,7 +19,7 @@ from core.repositories.human_input_repository import (
     HumanInputFormRecipientEntity,
     HumanInputFormRepository,
 )
-from core.workflow.human_input_adapter import (
+from core.workflow.graph.adapters.human_input_adapter import (
     DeliveryMethodType,
     EmailDeliveryConfig,
     EmailDeliveryMethod,
@@ -30,7 +30,7 @@ from core.workflow.human_input_adapter import (
     WebAppDeliveryMethod,
     _WebAppDeliveryConfig,
 )
-from core.workflow.node_runtime import DifyHumanInputNodeRuntime
+from core.workflow.runtime.adapters.human_input import DifyHumanInputNodeRuntime
 from core.workflow.nodes.human_input.callback import (
     DifyHITLCallback,
 )
@@ -51,7 +51,7 @@ from core.workflow.nodes.human_input.enums import (
     TimeoutUnit,
     ValueSourceType,
 )
-from core.workflow.system_variables import build_system_variables
+from core.workflow.runtime.variables.system_variables import build_system_variables
 from graphon.entities import GraphInitParams
 from graphon.file import File, FileTransferMethod, FileType
 from graphon.node_events import PauseRequestedEvent
@@ -194,6 +194,18 @@ def _build_human_input_node(
         graph_runtime_state=graph_runtime_state,
         hitl_callback=callback,
     )
+
+
+def test_user_action_json_schema_exposes_identifier_constraint():
+    schema = UserActionConfig.model_json_schema()
+    assert schema["properties"]["id"]["pattern"] == r"^[A-Za-z_][A-Za-z0-9_]*$"
+
+
+def test_form_options_json_schema_describes_literal_and_variable_sources():
+    schema = StringListSource.model_json_schema()
+    assert "array[string]" in schema["properties"]["type"]["description"]
+    assert "variable" in schema["properties"]["selector"]["description"]
+    assert "constant" in schema["properties"]["value"]["description"]
 
 
 class TestDeliveryMethod:

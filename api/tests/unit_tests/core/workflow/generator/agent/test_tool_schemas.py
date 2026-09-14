@@ -1,8 +1,10 @@
+import json
 from dataclasses import MISSING, fields, replace
 from typing import Any
 
-from core.workflow.generator.agent.graph_ops import upsert_node
-from core.workflow.generator.agent.tools import (
+from jsonschema import Draft202012Validator
+
+from core.workflow.generator.agent.tools.tools import (
     TERMINAL_TOOLS,
     TOOL_NAMES,
     TOOL_SCHEMAS,
@@ -10,18 +12,26 @@ from core.workflow.generator.agent.tools import (
     ToolEnv,
     ToolTurnState,
 )
+from core.workflow.generator.graph.graph_ops import upsert_node
 
 _EXPECTED = {
+    "submit_workflow_plan",
     "read_graph",
     "read_node",
     "build_node",
+    "build_tool_node",
+    "build_agent_node",
+    "build_loop",
+    "build_iteration",
     "delete_node",
     "connect",
     "disconnect",
     "inspect_node_schema",
+    "activate_skills",
     "validate_graph",
     "search_datasets",
     "search_tools",
+    "inspect_tool",
     "run_acceptance",
     "inspect_attempt",
     "ask_user",
@@ -40,7 +50,17 @@ def _schema(name: str) -> dict[str, Any]:
 def test_tool_names_match_the_declared_schemas():
     assert TOOL_NAMES == _EXPECTED
     assert {schema["name"] for schema in TOOL_SCHEMAS} == _EXPECTED
-    assert len(TOOL_SCHEMAS) == 15
+    assert len(TOOL_SCHEMAS) == 22
+
+
+def test_workflow_plan_schema_exposes_structured_resources_but_not_verified_claims() -> None:
+    serialized = json.dumps(_schema("submit_workflow_plan")["parameters"], sort_keys=True)
+
+    assert '"dataset_id"' in serialized
+    assert '"provider_name"' in serialized
+    assert '"tool_name"' in serialized
+    assert '"provider"' in serialized
+    assert '"verified"' not in serialized
 
 
 def test_legacy_config_writing_tools_are_not_advertised():
@@ -80,7 +100,11 @@ def test_every_required_property_is_declared():
 
 def test_every_property_declares_a_json_type():
     def assert_typed(node: dict[str, Any], path: str) -> None:
-        assert node.get("type") in {"object", "array", "string"}, path
+        if "oneOf" in node:
+            for index, branch in enumerate(node["oneOf"]):
+                assert_typed(branch, f"{path}.oneOf[{index}]")
+            return
+        assert node.get("type") in {"object", "array", "string", "number", "integer", "boolean", "null"}, path
         for name, child in node.get("properties", {}).items():
             assert_typed(child, f"{path}.{name}")
         items = node.get("items")
@@ -98,12 +122,13 @@ def test_parameterless_tools_declare_an_empty_property_block():
         assert parameters["required"] == [], name
 
 
-def test_build_node_schema_has_no_config_and_update_forbids_type():
+def test_build_node_schema_has_structured_intent_and_update_forbids_type():
     parameters = _schema("build_node")["parameters"]
     properties = parameters["properties"]
 
     assert "config" not in properties
-    assert set(parameters["required"]) >= {"mode", "id", "purpose"}
+    assert "purpose" not in properties
+    assert set(parameters["required"]) >= {"mode", "id", "intent"}
     assert properties["mode"]["enum"] == ["create", "update", "replace"]
 
     update_then: dict[str, Any] | None = None
@@ -115,6 +140,136 @@ def test_build_node_schema_has_no_config_and_update_forbids_type():
 
     assert update_then is not None
     assert update_then.get("not") == {"required": ["type"]}
+    intent = properties["intent"]
+    assert intent["type"] == "object"
+    assert set(intent["properties"]) >= {
+        "objective",
+        "behavior",
+        "inputs",
+        "outputs",
+        "requirements",
+        "tool",
+        "tool_bindings",
+        "agent_knowledge",
+        "structure",
+    }
+    arguments = intent["properties"]["tool"]["properties"]["arguments"]["additionalProperties"]
+    assert {branch["properties"]["kind"]["const"] for branch in arguments["oneOf"]} == {
+        "variable",
+        "template",
+        "constant",
+    }
+
+    agent_knowledge = intent["properties"]["agent_knowledge"]
+    assert agent_knowledge["properties"]["operation"]["enum"] == ["replace", "clear"]
+    knowledge_set = agent_knowledge["properties"]["sets"]["items"]
+    assert knowledge_set["additionalProperties"] is False
+    assert knowledge_set["properties"]["retrieval_mode"]["enum"] == ["multiple"]
+    assert knowledge_set["properties"]["query_mode"]["enum"] == ["generated_query", "user_query"]
+    structure = intent["properties"]["structure"]
+    assert {branch["properties"]["kind"]["const"] for branch in structure["oneOf"]} == {
+        "start",
+        "end",
+        "answer",
+        "template-transform",
+        "llm",
+        "code",
+        "if-else",
+    }
+
+
+def test_build_node_constant_argument_schema_accepts_arbitrary_json_array_items() -> None:
+    intent = _schema("build_node")["parameters"]["properties"]["intent"]
+    arguments = intent["properties"]["tool"]["properties"]["arguments"]["additionalProperties"]
+    constant = next(branch for branch in arguments["oneOf"] if branch["properties"]["kind"]["const"] == "constant")
+    value_schema = constant["properties"]["value"]
+
+    assert Draft202012Validator(value_schema).is_valid(["text", 1, False, None, {"nested": ["value"]}])
+
+
+def test_build_node_variable_argument_schema_accepts_nested_selectors() -> None:
+    intent = _schema("build_node")["parameters"]["properties"]["intent"]
+    arguments = intent["properties"]["tool"]["properties"]["arguments"]["additionalProperties"]
+    variable = next(branch for branch in arguments["oneOf"] if branch["properties"]["kind"]["const"] == "variable")
+
+    assert Draft202012Validator(variable).is_valid(
+        {"kind": "variable", "selector": ["iteration", "item", "source_image"]}
+    )
+
+
+def test_build_node_input_schema_accepts_nested_selectors() -> None:
+    intent = _schema("build_node")["parameters"]["properties"]["intent"]
+
+    assert Draft202012Validator(intent).is_valid(
+        {
+            "objective": "Read the nested title",
+            "inputs": [{"source": ["iteration", "item", "title"], "role": "title"}],
+        }
+    )
+
+
+def test_build_loop_schema_exposes_typed_children_and_edges() -> None:
+    parameters = _schema("build_loop")["parameters"]
+    child_schema = parameters["properties"]["children"]["items"]
+    edge_schema = parameters["properties"]["edges"]["items"]
+
+    assert "oneOf" in child_schema
+    assert set(edge_schema["properties"]) >= {"source", "target", "source_handle"}
+    assert set(parameters["required"]) >= {
+        "mode",
+        "id",
+        "loop_count",
+        "loop_variables",
+        "children",
+        "edges",
+        "break_conditions",
+        "outputs",
+        "logical_operator",
+    }
+
+
+def test_build_iteration_schema_requires_complete_submission() -> None:
+    parameters = _schema("build_iteration")["parameters"]
+
+    assert set(parameters["required"]) >= {
+        "mode",
+        "id",
+        "iterator_selector",
+        "iterator_input_type",
+        "output_selector",
+        "children",
+        "edges",
+        "outputs",
+        "is_parallel",
+        "parallel_nums",
+        "error_handle_mode",
+        "flatten_output",
+    }
+
+
+def test_specialized_builder_schemas_hide_system_owned_and_secret_fields() -> None:
+    forbidden = {"credential", "credentials", "secret", "parentId", "start_node_id"}
+
+    for name in ("build_tool_node", "build_agent_node", "build_loop", "build_iteration"):
+        rendered = str(_schema(name)["parameters"])
+        for field in forbidden:
+            assert field not in rendered, f"{name} exposes {field}"
+
+
+def test_activate_skills_schema_enumerates_registered_skills():
+    from core.workflow.generator.prompts.loader import registered_skill_names
+
+    parameters = _schema("activate_skills")["parameters"]
+    names = parameters["properties"]["names"]
+    assert parameters["required"] == ["names"]
+    assert names["type"] == "array"
+    assert names["maxItems"] == 4
+    assert names["items"]["type"] == "string"
+    assert names["items"]["enum"] == list(registered_skill_names())
+    assert "create-from-scratch" in names["items"]["enum"]
+    assert "bind-resources" in names["items"]["enum"]
+    assert "build-container" in names["items"]["enum"]
+    assert "verify-and-finish" in names["items"]["enum"]
 
 
 def test_single_argument_tools_require_that_argument():
@@ -127,6 +282,16 @@ def test_single_argument_tools_require_that_argument():
     assert _schema("inspect_attempt")["parameters"]["required"] == ["attempt_id"]
     for name in ("search_datasets", "search_tools"):
         assert _schema(name)["parameters"]["required"] == ["query"], name
+
+
+def test_inspect_tool_requires_an_exact_binding():
+    parameters = _schema("inspect_tool")["parameters"]
+
+    assert parameters["required"] == ["provider_name", "tool_name"]
+    assert parameters["properties"] == {
+        "provider_name": {"type": "string"},
+        "tool_name": {"type": "string"},
+    }
 
 
 def test_connect_declares_an_optional_source_handle():
@@ -176,8 +341,20 @@ def test_tool_context_requires_every_field_a_tool_may_touch():
         "tools_available",
         "builder_input",
         "llm_client",
+        "agent_model_entries",
+        "models_available",
     }
-    env_optional = {"hydrate_graph", "acceptance_runner", "live_run_authorized"}
+    env_optional = {
+        "require_resource_context",
+        "hydrate_graph",
+        "acceptance_runner",
+        "authorize_live_acceptance",
+        "environment_variables",
+        "conversation_variables",
+        "run_id",
+        "run_epoch",
+        "contract_rollout_stage",
+    }
     state_names = {
         "graph",
         "candidate_revision",
@@ -186,6 +363,15 @@ def test_tool_context_requires_every_field_a_tool_may_touch():
         "last_mutation_changed",
         "attempts",
         "graph_hash",
+        "pending_plan_nodes",
+        "compile_cache",
+        "model_call_budget",
+        "contract_protocol_version",
+        "workflow_contract",
+        "contract_revision",
+        "contract_hash",
+        "candidate_base_hash",
+        "user_turn_evidence",
     }
     assert set(env_fields) == env_required | env_optional
     assert set(state_fields) == state_names
@@ -203,8 +389,13 @@ def test_tool_context_requires_every_field_a_tool_may_touch():
     assert state_fields["last_error_signature"].default is None
     assert state_fields["last_mutation_changed"].default is False
     assert env_fields["acceptance_runner"].default is None
-    assert env_fields["live_run_authorized"].default is False
     assert state_fields["graph_hash"].default is None
+    assert state_fields["contract_protocol_version"].default is None
+    assert state_fields["workflow_contract"].default is None
+    assert state_fields["contract_revision"].default == 0
+    assert state_fields["contract_hash"].default is None
+    assert state_fields["candidate_base_hash"].default is None
+    assert state_fields["pending_plan_nodes"].default == ()
 
 
 def test_tool_context_graph_is_rebindable(tool_context: ToolContext):

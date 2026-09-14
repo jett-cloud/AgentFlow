@@ -3,9 +3,9 @@
 HTTP SSE and durable Celery runs share this initializer so ``core`` stays free of
 service imports. Catalogue snapshots are captured once per run (``limit=None``)
 onto ``ToolContext``. Discovery is ``search_*``; a failed pull sets that side
-``available=false`` and ``installed_*=None``. Formatted catalogues go to the
-Builder via ``BuilderInput``; they are not concatenated into the live agent
-prompt.
+``available=false`` and ``installed_*=None``. The frozen ``BuilderInput`` does
+not contain the Tool catalogue. Agent-node builds receive only their explicitly
+selected short entries; Tool nodes bypass the Builder entirely.
 
 Runaway thresholds are ``WorkflowConfig`` fields on ``dify_config``
 (``WORKFLOW_ASSIST_MAX_MODEL_CALLS`` and siblings), not getattr fallbacks.
@@ -22,37 +22,32 @@ from typing import Any, Literal, Protocol, cast
 
 from sqlalchemy.orm import Session
 
+from configs import dify_config
 from core.app.app_config.entities import ModelConfig
 from core.db.session_factory import session_factory
 from core.model_manager import ModelManager
 from core.workflow.generator.agent.compaction import COMPACTED_STATE_KEYS, TokenLimits, compute_input_limit
-from core.workflow.generator.agent.graph_ops import empty_graph
 from core.workflow.generator.agent.loop import SYSTEM_PROMPT, iter_agent_events
-from core.workflow.generator.agent.session import apply_user_turn, restore_session
-from core.workflow.generator.agent.tools import TOOL_SCHEMAS, ToolContext, ToolEnv, ToolTurnState
-from core.workflow.generator.agent.types import (
-    AgentEvent,
-    AgentMessage,
-    AgentSession,
-    CandidateState,
-    MinimalGraphDict,
+from core.workflow.generator.agent.session import WorkflowAssistMessageRow, apply_user_turn, restore_session
+from core.workflow.generator.agent.tools.tools import TOOL_SCHEMAS, ToolContext, ToolEnv, ToolTurnState
+from core.workflow.generator.agent.types import AgentEvent, AgentMessage, AgentSession, CandidateState
+from core.workflow.generator.compiler.node_builder import BuilderInput
+from core.workflow.generator.graph.graph_ops import empty_graph
+from core.workflow.generator.graph.types import MinimalGraphDict
+from core.workflow.generator.model_io.llm_response import LLMJsonClient, ModelInvoker
+from core.workflow.generator.pipeline.planner_context import PlannerContextSession
+from core.workflow.generator.prompts.output_language import (
+    OutputLanguage,
+    output_language_name,
+    resolve_output_language,
 )
-from core.workflow.generator.knowledge_catalogue import (
+from core.workflow.generator.resources.knowledge_catalogue import (
     KnowledgeCatalogueEntry,
-    build_knowledge_catalogue,
     format_knowledge_catalogue,
     installed_dataset_keys,
 )
-from core.workflow.generator.llm_response import LLMJsonClient, ModelInvoker
-from core.workflow.generator.node_builder import BuilderInput
-from core.workflow.generator.output_language import detect_output_language, output_language_name
-from core.workflow.generator.planner_context import PlannerContextSession
-from core.workflow.generator.tool_catalogue import (
-    ToolCatalogueEntry,
-    build_tool_catalogue,
-    format_tool_catalogue,
-    installed_tool_keys,
-)
+from core.workflow.generator.resources.model_catalogue import AgentModelCatalogueEntry
+from core.workflow.generator.resources.tool_catalogue import ToolCatalogueEntry, installed_tool_keys
 from core.workflow.generator.types import WorkflowGenerationMode
 from graphon.model_runtime.entities.message_entities import (
     PromptMessage,
@@ -62,20 +57,21 @@ from graphon.model_runtime.entities.message_entities import (
 from graphon.model_runtime.entities.model_entities import ModelFeature, ModelType
 from models import Account, App
 from models.workflow_assist import WorkflowAssistConversation, WorkflowAssistMessage
-from services.workflow_assist.effect_policy import live_run_authorized_from_session
 from services.workflow_assist.hydrate import hydrate_agent_bindings
-from services.workflow_assist.run_types import AGENT_RESPONSE_OUTBOX_KEY
-from services.workflow_assist.sandbox import WorkflowAssistAcceptanceRunner
+from services.workflow_assist.knowledge_catalogue_loader import build_knowledge_catalogue
+from services.workflow_assist.live_acceptance import bind_live_authorizer
+from services.workflow_assist.model_catalogue import build_agent_model_catalogue
+from services.workflow_assist.run_types import AGENT_RESPONSE_OUTBOX_KEY, RunLease, RunOwner
+from services.workflow_assist.sandbox import build_acceptance_runner
+from services.workflow_assist.tool_catalogue_loader import build_tool_catalogue
 from services.workflow_assist.turn_references import append_hard_bound_resources, bind_session_references
+from services.workflow_assist.validation_context import namespace_names
 from services.workflow_service import WorkflowService
 
 logger = logging.getLogger(__name__)
 
 CHAT_SYSTEM_PROMPT = (
-    f"{SYSTEM_PROMPT}\n\n"
-    "Available node types: start, end, answer, llm, knowledge-retrieval, code, tool, agent, "
-    "and control-flow nodes (iteration, loop, if-else). Do not include node config schemas. "
-    "Write assistant narration in natural language. Never echo tool-call JSON in the message body."
+    f"{SYSTEM_PROMPT}\n\nWrite assistant narration in natural language. Never echo tool-call JSON in the message body."
 )
 
 
@@ -229,26 +225,27 @@ def _supports_native_tools(model_instance: object) -> bool:
 
 
 def _turn_from_llm_result(result: object) -> dict[str, Any]:
+    """Preserve malformed arguments so the loop can reject and retry them."""
     message = getattr(result, "message", result)
     text = ""
     get_text = getattr(message, "get_text_content", None)
     if callable(get_text):
         text = get_text() or ""
-    elif isinstance(getattr(message, "content", None), str):
-        text = message.content
+    else:
+        content = getattr(message, "content", None)
+        if isinstance(content, str):
+            text = content
     calls: list[dict[str, Any]] = []
     for item in getattr(message, "tool_calls", None) or []:
         function = getattr(item, "function", None)
         name = getattr(function, "name", None) if function is not None else getattr(item, "name", None)
         raw_args = getattr(function, "arguments", None) if function is not None else getattr(item, "arguments", None)
-        arguments: dict[str, Any] = {}
-        if isinstance(raw_args, dict):
-            arguments = raw_args
-        elif isinstance(raw_args, str) and raw_args:
+        arguments = raw_args
+        if isinstance(raw_args, str) and raw_args:
             try:
                 parsed = json.loads(raw_args)
             except json.JSONDecodeError:
-                parsed = {}
+                parsed = None
             if isinstance(parsed, dict):
                 arguments = parsed
         call_id = getattr(item, "id", None)
@@ -262,7 +259,7 @@ def _turn_from_llm_result(result: object) -> dict[str, Any]:
 
 
 def _llm_compact(json_client: LLMJsonClient) -> Callable[..., dict[str, object]]:
-    empty = {key: [] for key in COMPACTED_STATE_KEYS}
+    empty: dict[str, object] = {key: [] for key in COMPACTED_STATE_KEYS}
 
     def compact(
         *,
@@ -342,7 +339,7 @@ def _catalogue_snapshot(
     bool,
 ]:
     try:
-        tool_entries = build_tool_catalogue(tenant_id, limit=None)
+        tool_entries = build_tool_catalogue(tenant_id, limit=None, raise_on_error=True)
         installed_tools: set[tuple[str, str]] | None = installed_tool_keys(tool_entries)
         tools_available = True
     except Exception:
@@ -362,6 +359,49 @@ def _catalogue_snapshot(
     return tool_entries, knowledge_entries, installed_tools, installed_datasets, tools_available, knowledge_available
 
 
+def _agent_model_catalogue_snapshot(
+    tenant_id: str,
+) -> tuple[tuple[AgentModelCatalogueEntry, ...], bool]:
+    """Return one immutable model snapshot; distinguish empty from unavailable."""
+    try:
+        return build_agent_model_catalogue(tenant_id), True
+    except Exception:
+        logger.exception("Workflow assist: Agent model catalogue snapshot failed for tenant %s", tenant_id)
+        return (), False
+
+
+def _namespace_names_from_serialized(raw: str) -> set[str]:
+    """Collect variable names from draft JSON without decrypting Secret values."""
+    return namespace_names(raw)
+
+
+def _draft_namespace_names(app_model: App, session: Session) -> tuple[set[str] | None, set[str] | None]:
+    """Return env/conversation names, or ``None`` when that side could not load."""
+    try:
+        draft = WorkflowService().get_draft_workflow(app_model=app_model, session=session)
+    except Exception:
+        logger.exception("Workflow assist: failed to load draft namespaces for app %s", app_model.id)
+        return None, None
+    if draft is None:
+        return None, None
+    try:
+        env_names = _namespace_names_from_serialized(getattr(draft, "_environment_variables", "") or "{}")
+        conv_names = _namespace_names_from_serialized(getattr(draft, "_conversation_variables", "") or "{}")
+    except Exception:
+        logger.exception("Workflow assist: failed to parse draft namespaces for app %s", app_model.id)
+        return None, None
+    return env_names, conv_names
+
+
+def _draft_workflow_id(app_model: App, session: Session) -> str:
+    try:
+        draft = WorkflowService().get_draft_workflow(app_model=app_model, session=session)
+    except Exception:
+        logger.exception("Workflow assist: failed to load draft id for app %s", app_model.id)
+        return ""
+    return str(draft.id) if draft is not None else ""
+
+
 def _bind_hydrate(
     session: Session,
     app_model: App,
@@ -379,9 +419,26 @@ def _bind_hydrate(
             workflow_id=str(draft.id),
             graph=dict(graph),
         )
+        # Binding resolver opens a new session; live acceptance cannot see uncommitted rows.
+        session.commit()
         return cast(MinimalGraphDict, hydrated)
 
     return hydrate_graph
+
+
+def session_output_language(session: AgentSession, instruction: str) -> OutputLanguage:
+    """Resolve user language from durable history, including ask_user answers."""
+    instructions: list[str] = []
+    for message in session.messages:
+        if message.role == "user" and message.event_type == "message":
+            text = message.payload.get("text")
+        elif message.event_type == "tool_result" and message.payload.get("name") == "ask_user":
+            text = message.payload.get("content")
+        else:
+            continue
+        if isinstance(text, str):
+            instructions.append(text)
+    return resolve_output_language([*instructions, instruction])
 
 
 def _builder_input(
@@ -390,16 +447,17 @@ def _builder_input(
     instruction: str,
     current_graph: dict[str, Any] | None,
     *,
+    output_language: OutputLanguage,
     tool_entries: list[ToolCatalogueEntry],
     knowledge_entries: list[KnowledgeCatalogueEntry],
     tools_available: bool,
     knowledge_available: bool,
     references: list[dict[str, Any]] | None = None,
 ) -> BuilderInput:
-    """Builder sees the same HTTP-run catalogue snapshot as search/validate.
+    """Create frozen Builder context without copying the Tool snapshot.
 
-    Unavailable sides stay empty text (skip that section) rather than dumping
-    catalogues into the live agent prompt.
+    The complete Tool catalogue lives only on ``ToolEnv``. ``compile_build_node``
+    derives a per-Agent-node BuilderInput containing selected short entries.
     """
     return BuilderInput(
         provider=model_config.provider if model_config else "openai",
@@ -410,31 +468,49 @@ def _builder_input(
         ideal_output="",
         plan_nodes=[],
         plan_edges=[],
-        tool_catalogue_text=format_tool_catalogue(tool_entries) if tools_available else "",
+        tool_catalogue_text="",
         knowledge_catalogue_text=format_knowledge_catalogue(knowledge_entries) if knowledge_available else "",
         start_inputs=[],
         current_graph=current_graph,
-        output_language=detect_output_language(instruction),
+        output_language=output_language,
     )
 
 
-def _candidate_state(conversation: WorkflowAssistConversation) -> CandidateState:
+_USE_CONVERSATION_PROTOCOL = object()
+
+
+def _candidate_state(
+    conversation: WorkflowAssistConversation,
+    *,
+    contract_protocol_version: int | None | object = _USE_CONVERSATION_PROTOCOL,
+) -> CandidateState:
     last_validation = None
     if isinstance(conversation.state, dict):
         raw_validation = conversation.state.get("last_validation")
         if isinstance(raw_validation, dict):
             last_validation = raw_validation
+    frozen_protocol = (
+        getattr(conversation, "contract_protocol_version", None)
+        if contract_protocol_version is _USE_CONVERSATION_PROTOCOL
+        else contract_protocol_version
+    )
     state: CandidateState = {
         "revision": conversation.candidate_revision or 0,
         "base_hash": conversation.candidate_base_hash,
         "compacted_until_sequence": conversation.compacted_until_sequence,
         "compacted_state": conversation.compacted_state,
+        "contract_protocol_version": frozen_protocol if isinstance(frozen_protocol, int) else None,
+        "contract_revision": getattr(conversation, "contract_revision", 0) or 0,
+        "contract_hash": getattr(conversation, "contract_hash", None),
     }
     if last_validation is not None:
         state["last_validation"] = last_validation
     graph = conversation.candidate_graph
     if isinstance(graph, dict):
         state["graph"] = graph
+    workflow_contract = getattr(conversation, "workflow_contract", None)
+    if isinstance(frozen_protocol, int) and isinstance(workflow_contract, dict):
+        state["workflow_contract"] = workflow_contract
     return state
 
 
@@ -503,7 +579,7 @@ def restore_http_agent_session(
     """Rebuild the in-memory session for one HTTP chat/stream turn."""
     generation_mode = _generation_mode(app_model)
     agent_session = restore_session(
-        detail_messages,
+        cast(list[WorkflowAssistMessageRow], detail_messages),
         _candidate_state(conversation),
         generation_mode,
     )
@@ -535,6 +611,7 @@ def build_http_tool_context(
     tool_entries, knowledge_entries, installed_tools, installed_datasets, tools_available, knowledge_available = (
         _catalogue_snapshot(str(app_model.tenant_id))
     )
+    agent_model_entries, models_available = _agent_model_catalogue_snapshot(str(app_model.tenant_id))
     runtime = _resolve_runtime(
         tenant_id=str(app_model.tenant_id),
         model_config=model_config,
@@ -542,8 +619,11 @@ def build_http_tool_context(
     )
     bound_hydrate = hydrate_graph if hydrate_graph is not None else _bind_hydrate(db_session, app_model, account)
     graph = agent_session.candidate_graph if isinstance(agent_session.candidate_graph, dict) else empty_graph()
+    environment_variables, conversation_variables = _draft_namespace_names(app_model, db_session)
+    draft_workflow_id = _draft_workflow_id(app_model, db_session)
     context = ToolContext(
         env=ToolEnv(
+            require_resource_context=True,
             tenant_id=str(app_model.tenant_id),
             mode=generation_mode,
             tool_entries=tool_entries,
@@ -557,6 +637,7 @@ def build_http_tool_context(
                 generation_mode,
                 message,
                 current_graph,
+                output_language=session_output_language(agent_session, message),
                 tool_entries=tool_entries,
                 knowledge_entries=knowledge_entries,
                 tools_available=tools_available,
@@ -564,13 +645,18 @@ def build_http_tool_context(
                 references=references,
             ),
             llm_client=runtime.json_client,
+            agent_model_entries=agent_model_entries,
+            models_available=models_available,
             hydrate_graph=bound_hydrate,
-            acceptance_runner=WorkflowAssistAcceptanceRunner(
+            acceptance_runner=build_acceptance_runner(
                 tenant_id=str(app_model.tenant_id),
                 app_id=str(app_model.id),
                 user_id=str(account.id),
+                workflow_id=draft_workflow_id,
             ),
-            live_run_authorized=live_run_authorized_from_session(agent_session),
+            environment_variables=environment_variables,
+            conversation_variables=conversation_variables,
+            contract_rollout_stage=str(dify_config.WORKFLOW_ASSIST_CONTRACT_ROLLOUT),
         ),
         state=ToolTurnState(
             graph=cast(MinimalGraphDict, graph),
@@ -586,14 +672,30 @@ def run_workflow_assist_agent(
     invoker: object | None = None,
     hydrate_graph: Callable[[MinimalGraphDict], MinimalGraphDict] | None = None,
 ) -> Iterator[AgentEvent]:
-    """Restore one durable session and stream the real in-memory Agent loop."""
+    """Restore one durable session and stream the real in-memory Agent loop.
+
+    Native streaming appends its completed assistant message after the last
+    delta, so a following persistable event must carry that pending snapshot.
+    The first eligible event after those rows are appended owns the recovery
+    envelope; a completed protocol notice must not wait until the next model
+    retry's ``reasoning.delta``. ``tool_call`` also flushes already-appended
+    prose so ``waiting_user`` does not stuff both rows into the one-message outbox.
+    """
     try:
         model_config = ModelConfig.model_validate(context.run.model_config)
         generation_mode: WorkflowGenerationMode = (
             "advanced-chat" if str(context.run.mode) == "advanced-chat" else "workflow"
         )
-        session = restore_session(context.messages, _candidate_state(context.conversation), generation_mode)
+        session = restore_session(
+            context.messages,
+            _candidate_state(
+                context.conversation,
+                contract_protocol_version=getattr(context.run, "contract_protocol_version", None),
+            ),
+            generation_mode,
+        )
         _validate_applied_input(session.messages, str(context.run.input))
+        output_language = session_output_language(session, str(context.run.input))
         session.selected_node = getattr(context.run, "selected_node", None)
         bind_session_references(session, getattr(context.run, "references", None))
         try:
@@ -608,10 +710,15 @@ def run_workflow_assist_agent(
             model_config=model_config,
             invoker=invoker,
         )
+        agent_model_entries, models_available = _agent_model_catalogue_snapshot(str(context.app_model.tenant_id))
         graph = session.candidate_graph if isinstance(session.candidate_graph, dict) else empty_graph()
         bound_hydrate = hydrate_graph or _bind_durable_hydrate(context)
+        with session_factory.create_session() as db_session:
+            environment_variables, conversation_variables = _draft_namespace_names(context.app_model, db_session)
+            draft_workflow_id = _draft_workflow_id(context.app_model, db_session)
         tool_context = ToolContext(
             env=ToolEnv(
+                require_resource_context=True,
                 tenant_id=str(context.app_model.tenant_id),
                 mode=generation_mode,
                 tool_entries=tool_entries,
@@ -625,6 +732,7 @@ def run_workflow_assist_agent(
                     generation_mode,
                     str(context.run.input),
                     dict(graph),
+                    output_language=output_language,
                     tool_entries=tool_entries,
                     knowledge_entries=knowledge_entries,
                     tools_available=True,
@@ -632,13 +740,22 @@ def run_workflow_assist_agent(
                     references=getattr(context.run, "references", None),
                 ),
                 llm_client=runtime.json_client,
+                agent_model_entries=agent_model_entries,
+                models_available=models_available,
                 hydrate_graph=bound_hydrate,
-                acceptance_runner=WorkflowAssistAcceptanceRunner(
+                acceptance_runner=build_acceptance_runner(
                     tenant_id=str(context.app_model.tenant_id),
                     app_id=str(context.app_model.id),
                     user_id=str(context.account.id),
+                    workflow_id=draft_workflow_id,
+                    live_authorized=isinstance(getattr(context.run, "live_acceptance", None), dict),
                 ),
-                live_run_authorized=live_run_authorized_from_session(session),
+                authorize_live_acceptance=_durable_live_authorizer(context),
+                environment_variables=environment_variables,
+                conversation_variables=conversation_variables,
+                run_id=str(context.run.id),
+                run_epoch=context.run.epoch,
+                contract_rollout_stage=str(getattr(context.run, "contract_rollout_stage", None) or "default"),
             ),
             state=ToolTurnState(
                 graph=cast(MinimalGraphDict, graph),
@@ -662,20 +779,20 @@ def run_workflow_assist_agent(
         _FenceCancellation(context.should_stop),
         _limits_from_config(),
         compact=runtime.compact,
-        system_text=chat_system_prompt(detect_output_language(str(context.run.input))),
+        system_text=chat_system_prompt(output_language),
         token_counter=_token_counter(runtime.model_instance),
         token_limits=runtime.token_limits,
     ):
         payload = dict(raw_payload)
         pending_messages.extend(session.messages[observed_count:])
         observed_count = len(session.messages)
-        persist_now = event_name in {"message", "tool_result"} or (
-            event_name == "reasoning.delta" and bool(pending_messages)
-        ) or (
-            event_name == "tool_call"
-            and len(pending_messages) == 1
-            and pending_messages[0].event_type == "tool_call"
-            and pending_messages[0].status == "pending"
+        persist_now = (
+            event_name in {"message", "tool_result"}
+            or (event_name in {"message.delta", "reasoning.delta", "tool_call"} and bool(pending_messages))
+            or (
+                event_name in {"waiting_user", "done", "failed", "error", "aborted", "turn_complete"}
+                and bool(pending_messages)
+            )
         )
         if persist_now:
             payload["_agent_checkpoint"] = _serialize_agent_checkpoint(session)
@@ -689,12 +806,40 @@ def _serialize_agent_message(message: AgentMessage) -> dict[str, Any]:
     return asdict(message)
 
 
+def _durable_live_authorizer(context: DurableAgentRunContext) -> Callable[[int, str], bool] | None:
+    if not isinstance(getattr(context.run, "live_acceptance", None), dict):
+        return None
+    run = context.run
+    return bind_live_authorizer(
+        RunLease(
+            owner=RunOwner(
+                tenant_id=run.tenant_id,
+                app_id=run.app_id,
+                account_id=run.created_by,
+                conversation_id=run.conversation_id,
+            ),
+            run_id=run.id,
+            epoch=run.epoch,
+            attempt=run.attempt,
+            worker_id=run.worker_id,
+        )
+    )
+
+
 def _serialize_agent_checkpoint(session: AgentSession) -> dict[str, Any]:
-    return {
+    checkpoint: dict[str, Any] = {
         "compacted_until_sequence": session.compacted_until_sequence,
         "compacted_state": session.compacted_state,
         "last_validation": session.last_validation,
     }
+    if session.workflow_contract is not None:
+        checkpoint["workflow_contract"] = {
+            "protocol_version": session.contract_protocol_version,
+            "revision": session.contract_revision,
+            "contract_hash": session.contract_hash,
+            "contract": session.workflow_contract,
+        }
+    return checkpoint
 
 
 def _validate_applied_input(messages: list[AgentMessage], run_input: str) -> None:
@@ -738,7 +883,7 @@ def _bind_durable_hydrate(context: DurableAgentRunContext) -> Callable[[MinimalG
     return hydrate
 
 
-def _pending_agent_response(context: DurableAgentRunContext) -> list[tuple[str, dict[str, Any]]]:
+def _pending_agent_response(context: DurableAgentRunContext) -> list[AgentEvent]:
     messages = context.messages
     pending = [
         message
@@ -775,7 +920,7 @@ def _pending_agent_response(context: DurableAgentRunContext) -> list[tuple[str, 
         "status": "completed",
         "payload": payload,
     }
-    events: list[tuple[str, dict[str, Any]]] = []
+    events: list[AgentEvent] = []
     if isinstance(reasoning, str) and reasoning.strip():
         reasoning_event: dict[str, Any] = {
             "delta": reasoning,

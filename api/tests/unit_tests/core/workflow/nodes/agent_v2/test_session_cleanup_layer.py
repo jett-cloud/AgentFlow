@@ -15,7 +15,7 @@ from core.workflow.nodes.agent_v2.session_store import (
     WorkflowAgentRuntimeSessionStore,
     WorkflowAgentSessionScope,
 )
-from core.workflow.system_variables import build_system_variables
+from core.workflow.runtime.variables.system_variables import build_system_variables
 from graphon.entities.pause_reason import SchedulingPause
 from graphon.graph_engine.command_channels import CommandChannel
 from graphon.graph_events import (

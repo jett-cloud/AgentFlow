@@ -2,7 +2,7 @@ import time
 import uuid
 
 from core.app.entities.app_invoke_entities import InvokeFrom, UserFrom
-from core.workflow.system_variables import build_system_variables
+from core.workflow.runtime.variables.system_variables import build_system_variables
 from graphon.enums import WorkflowNodeExecutionStatus
 from graphon.nodes.answer.answer_node import AnswerNode
 from graphon.nodes.answer.entities import AnswerNodeData

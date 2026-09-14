@@ -3,7 +3,7 @@ from unittest.mock import Mock
 import pytest
 
 from core.repositories.human_input_repository import HumanInputFormSubmissionRepository
-from core.workflow.human_input_policy import FormDisposition, enrich_human_input_pause_reasons
+from core.workflow.nodes.human_input.human_input_policy import FormDisposition, enrich_human_input_pause_reasons
 from core.workflow.nodes.human_input.boundary import enrich_graph_pause_reasons
 from core.workflow.nodes.human_input.pause_reason import DifyHITLEventType
 from graphon.entities.pause_reason import HitlRequired

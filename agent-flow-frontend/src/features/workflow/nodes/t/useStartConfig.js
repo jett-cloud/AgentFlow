@@ -2,21 +2,9 @@
 import { reactive, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useResolvedNodeData } from '../../model/nodeProps.js'
+import { createStartVariable, InputVarType } from './startNode.js'
 
-/**
- * 1:1 对标 Dify 源码 InputVarType 枚举
- */
-export const InputVarType = {
-  textInput: 'text-input',
-  paragraph: 'paragraph',
-  select: 'select',
-  number: 'number',
-  checkbox: 'checkbox',
-  jsonObject: 'json-object',
-  // Keep Dify's persisted workflow contract; runtime normalizes legacy aliases.
-  singleFile: 'file',
-  multiFiles: 'file-list'
-}
+export { InputVarType }
 
 /**
  * 对应 Dify 官方选项下拉菜单列表 (buildSelectOptions)
@@ -42,47 +30,7 @@ export function formatVarTypeTag(type) {
  * 对应 Dify 源码 createPayloadForType() 工厂函数：按类型初始化标准 Payload
  */
 export function createPayloadForType(variableName = '', type = InputVarType.textInput) {
-  const base = {
-    variable: variableName.trim(),
-    label: variableName.trim(),
-    type,
-    required: true,
-    hide: false
-  }
-
-  switch (type) {
-    case InputVarType.textInput:
-      return { ...base, max_length: 256, default: '' }
-    case InputVarType.paragraph:
-      return { ...base, max_length: 500, default: '' }
-    case InputVarType.number:
-      return { ...base, default: undefined }
-    case InputVarType.checkbox:
-      return { ...base, default: false }
-    case InputVarType.select:
-      return { ...base, options: ['选项1', '选项2'], default: undefined }
-    case InputVarType.singleFile:
-      return {
-        ...base,
-        allowed_file_types: ['document', 'image'],
-        allowed_file_upload_methods: ['local_file', 'remote_url'],
-        max_length: 1
-      }
-    case InputVarType.multiFiles:
-      return {
-        ...base,
-        allowed_file_types: ['document', 'image'],
-        allowed_file_upload_methods: ['local_file', 'remote_url'],
-        max_length: 5
-      }
-    case InputVarType.jsonObject:
-      return {
-        ...base,
-        json_schema: '{\n  "type": "object",\n  "properties": {}\n}'
-      }
-    default:
-      return base
-  }
+  return createStartVariable(variableName, type)
 }
 
 /**

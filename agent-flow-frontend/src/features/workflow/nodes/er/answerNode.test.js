@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { buildWorkflowChecklist } from '../../model/checklist.js'
 import { flowToGraph, generateNewNode, graphToFlow } from '../../model/dsl.js'
+import { getNodeOutputBranches } from '../../model/nodeHandleBranches.js'
 import { CONTAINER_SELECTABLE_BLOCKS } from '../../model/nodeMeta.js'
+import { getNodeOutputVars } from '../../model/variableOutputs.js'
 import {
   ANSWER_DEFAULTS,
   getAnswerValidationErrors,
@@ -12,6 +13,7 @@ import {
   normalizeAnswerNodeData,
 } from './answerNode.js'
 
+// 1. Defaults and availability
 test('new Answer nodes use the official Dify defaults', () => {
   const { newNode } = generateNewNode({ type: 'answer', id: 'answer-1' })
   assert.deepEqual(newNode.data, {
@@ -21,39 +23,57 @@ test('new Answer nodes use the official Dify defaults', () => {
   })
 })
 
-test('Answer normalization preserves unknown fields and official variables', () => {
-  assert.deepEqual(normalizeAnswerNodeData({
-    answer: 42,
-    variables: [{ variable: 'legacy', value_selector: ['llm', 'text'] }],
-    future: true,
-  }), {
-    answer: '42',
-    variables: [{ variable: 'legacy', value_selector: ['llm', 'text'] }],
-    future: true,
-  })
-})
-
 test('Answer is available only in Chatflow mode', () => {
   assert.equal(isAnswerAllowedInMode('advanced-chat'), true)
   assert.equal(isAnswerAllowedInMode('workflow'), false)
   assert.equal(isAnswerAllowedInMode('chat'), false)
 })
 
-test('Answer can be added inside Chatflow iteration and loop containers', () => {
-  assert.equal(CONTAINER_SELECTABLE_BLOCKS.includes('answer'), true)
+// 2. Normalization, migration, and unknown-field preservation
+test('Answer normalization always writes the canonical backend type', () => {
+  const normalized = normalizeAnswerNodeData({ type: 'future-answer-alias', future: true })
+  assert.equal(normalized.type, 'answer')
+  assert.equal(normalized.future, true)
 })
 
+test('Answer normalization preserves unknown fields and official variables', () => {
+  assert.deepEqual(normalizeAnswerNodeData({
+    answer: 42,
+    variables: [{ variable: 'legacy', value_selector: ['llm', 'text'] }],
+    future: true,
+  }), {
+    type: 'answer',
+    answer: '42',
+    variables: [{ variable: 'legacy', value_selector: ['llm', 'text'] }],
+    future: true,
+  })
+})
+
+// 3. Selectable outputs
 test('Answer variable picker supports files but excludes array objects', () => {
   assert.equal(isAnswerVariableSupported({ type: 'string' }), true)
   assert.equal(isAnswerVariableSupported({ type: 'file' }), true)
   assert.equal(isAnswerVariableSupported({ type: 'arrayObject' }), false)
 })
 
-test('Answer requires non-empty reply content', () => {
+test('Answer has no selectable outputs but retains its control-flow branch', () => {
+  const data = { type: 'answer', answer: 'Hi', variables: [] }
+  assert.deepEqual(getNodeOutputVars({ id: 'answer', data }), [])
+  assert.deepEqual(getNodeOutputBranches(data).map(branch => branch.id), ['source'])
+})
+
+// 4. Handles and container placement
+test('Answer can be added inside Chatflow iteration and loop containers', () => {
+  assert.equal(CONTAINER_SELECTABLE_BLOCKS.includes('answer'), true)
+})
+
+test('Answer rejects blank reply content', () => {
   assert.deepEqual(getAnswerValidationErrors({ answer: '' }), ['请填写回复内容'])
+  assert.deepEqual(getAnswerValidationErrors({ answer: ' \n\t ' }), ['请填写回复内容'])
   assert.deepEqual(getAnswerValidationErrors({ answer: '{{#llm.text#}}' }), [])
 })
 
+// 5. DSL round-trip
 test('Answer DSL round-trip preserves official and unknown fields', () => {
   const flow = graphToFlow({
     nodes: [{
@@ -77,6 +97,7 @@ test('Answer DSL round-trip preserves official and unknown fields', () => {
   })
 })
 
+// 6. Checklist: invalid and valid graphs
 test('Checklist enforces Answer mode, presence, and upstream references', () => {
   const workflowIssues = buildWorkflowChecklist({
     nodes: [
@@ -103,11 +124,18 @@ test('Checklist enforces Answer mode, presence, and upstream references', () => 
   assert.ok(invalidReferenceIssues.some(issue => issue.id === 'invalid-var-answer'))
 })
 
-test('Answer panel uses the real upstream prompt variable picker', () => {
-  const source = readFileSync(new URL('./AnswerPanel.vue', import.meta.url), 'utf8')
-  assert.match(source, /PromptVariableTextarea/)
-  assert.match(source, /:filter-var="answerVariableFilter"/)
-  assert.doesNotMatch(source, /command="llm\.text"/)
-  assert.doesNotMatch(source, /command="start\.query"/)
-  assert.doesNotMatch(source, /command="code\.result"/)
+test('Answer checklist accepts non-blank replies and outgoing control flow', () => {
+  const issues = buildWorkflowChecklist({
+    nodes: [
+      { id: 'start', data: { type: 'start', title: '开始', variables: [] } },
+      { id: 'answer-1', data: { type: 'answer', title: '直接回复 1', answer: '处理中', variables: [] } },
+      { id: 'answer-2', data: { type: 'answer', title: '直接回复 2', answer: '完成', variables: [] } },
+    ],
+    edges: [
+      { id: 'e1', source: 'start', target: 'answer-1' },
+      { id: 'e2', source: 'answer-1', sourceHandle: 'source', target: 'answer-2' },
+    ],
+  }, { isChatMode: true })
+
+  assert.deepEqual(issues.filter(issue => issue.level === 'error'), [])
 })

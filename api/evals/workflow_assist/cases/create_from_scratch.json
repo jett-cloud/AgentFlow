@@ -2,9 +2,9 @@
   "instruction": "从零创建一个工作流",
   "initial_graph": {
     "nodes": [
-      {"id": "start", "data": {"type": "start", "title": "开始", "desc": "", "variables": []}},
-      {"id": "llm", "data": {"type": "llm", "title": "模型", "desc": ""}},
-      {"id": "end", "data": {"type": "end", "title": "结束", "desc": ""}}
+      {"id": "start", "data": {"type": "start", "title": "开始", "desc": "", "variables": [{"variable": "query", "label": "query", "type": "text-input"}]}},
+      {"id": "llm", "data": {"type": "llm", "title": "模型", "desc": "", "model": {"provider": "openai", "name": "gpt-4o", "mode": "chat", "completion_params": {}}, "prompt_template": [{"role": "user", "text": "{{#start.query#}}"}], "context": {"enabled": false, "variable_selector": []}}},
+      {"id": "end", "data": {"type": "end", "title": "结束", "desc": "", "outputs": [{"variable": "answer", "value_selector": ["llm", "text"], "value_type": "string"}]}}
     ],
     "edges": [
       {"source": "start", "target": "llm"},

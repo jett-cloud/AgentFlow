@@ -17,3 +17,8 @@ test('remote upload and uploaded files use dedicated styled rows', () => {
   assert.match(source, /class="file-item"/)
   assert.match(source, /class="remove-file-button"/)
 })
+
+test('JSON input renders from the canonical json_object type', () => {
+  assert.match(source, /normalizedType === 'json_object'/)
+  assert.doesNotMatch(source, /normalizedType === 'json-object'/)
+})

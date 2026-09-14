@@ -1,48 +1,58 @@
 // src/views/copilot/components/workflow/node/iteration/useIterationConfig.js
 import { computed } from 'vue'
 import { useResolvedNodeData } from '../../model/nodeProps.js'
-import { parseSelectorInput } from '../../model/availableVariables.js'
+import {
+  buildIterationInputPatch,
+  buildIterationOutputPatch,
+  normalizeIterationData,
+} from './iterationNode.js'
 
 export function useIterationConfig(props, emit) {
   const nodeData = useResolvedNodeData(props)
   const readOnly = computed(() => props.readOnly || false)
+  const normalized = computed(() => normalizeIterationData(nodeData.value))
+  const patch = partial => emit('update:nodeData', normalizeIterationData({ ...nodeData.value, ...partial }))
 
-  // 1. 待迭代的数组变量选择器 (iterator_selector)
-  const iteratorSelector = computed({
-    get: () => nodeData.value?.iterator_selector || ['start', 'files'],
-    set: (val) => {
-      const sel = parseSelectorInput(val)
-      emit('update:nodeData', { ...nodeData.value, iterator_selector: sel })
-    }
-  })
+  const iteratorSelector = computed(() => normalized.value.iterator_selector)
+  const outputSelector = computed(() => normalized.value.output_selector)
+  const outputType = computed(() => normalized.value.output_type)
 
-  // 2. 并行运行模式开关 (is_parallel)
+  const changeIterator = (selector, variable) => patch(buildIterationInputPatch(selector, variable))
+  const changeOutput = (selector, variable) => patch(buildIterationOutputPatch(selector, variable))
+
   const isParallel = computed({
-    get: () => nodeData.value?.is_parallel || false,
-    set: (val) => emit('update:nodeData', { ...nodeData.value, is_parallel: val })
+    get: () => normalized.value.is_parallel,
+    set: val => patch({ is_parallel: val }),
   })
 
-  // 3. 最大并发数限制 (parallel_nums)
   const parallelNums = computed({
-    get: () => nodeData.value?.parallel_nums || 10,
-    set: (val) => emit('update:nodeData', { ...nodeData.value, parallel_nums: val })
+    get: () => normalized.value.parallel_nums,
+    set: val => patch({ parallel_nums: val }),
   })
 
-  // 4. 对齐 Dify DSL 的 error_handle_mode
   const errorStrategy = computed({
-    get: () => nodeData.value?.error_handle_mode || nodeData.value?.error_strategy || 'terminated',
-    set: (val) => emit('update:nodeData', {
-      ...nodeData.value,
+    get: () => normalized.value.error_handle_mode,
+    set: val => patch({
       error_handle_mode: val,
       error_strategy: undefined,
-    })
+    }),
+  })
+
+  const flattenOutput = computed({
+    get: () => normalized.value.flatten_output,
+    set: val => patch({ flatten_output: val }),
   })
 
   return {
     readOnly,
     iteratorSelector,
+    outputSelector,
+    outputType,
+    changeIterator,
+    changeOutput,
     isParallel,
     parallelNums,
-    errorStrategy
+    errorStrategy,
+    flattenOutput,
   }
 }

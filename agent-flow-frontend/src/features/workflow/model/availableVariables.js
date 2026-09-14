@@ -11,6 +11,7 @@ import {
   getContainerInnerVars,
   mapRagPipelineVars,
   normalizeVarChildren,
+  OUTPUT_FILE_SUB_VARIABLES,
 } from './variableOutputs.js'
 
 /** Contrasts Dify VAR_SHOW_NAME_MAP — picker shows short names for Start sys vars. */
@@ -173,8 +174,63 @@ export function parseSelectorInput(input) {
   return []
 }
 
+const SKIP_SELECTOR_KEYS = new Set([
+  'options',
+  'required',
+  'dataset_ids',
+  'allowed_file_types',
+  'allowed_file_extensions',
+  'allowed_file_upload_methods',
+  'classes',
+])
+const SELECTOR_KEYS = new Set([
+  'selector',
+  'value_selector',
+  'variable_selector',
+  'iterator_selector',
+  'query_variable_selector',
+  'query_attachment_selector',
+  'output_selector',
+  'variable',
+  'file',
+])
+const ARRAY_NO_DRILL = new Set(['array', 'arrayObject', 'arrayString', 'arrayNumber', 'arrayBoolean'])
+
+function valueMode(parent) {
+  if (!parent || typeof parent !== 'object' || Array.isArray(parent))
+    return ''
+  const raw = parent.value_type || parent.input_type
+  if (raw === 'variable' || raw === 'constant' || raw === 'mixed')
+    return raw
+  if (parent.type === 'variable' || parent.type === 'constant' || parent.type === 'mixed')
+    return parent.type
+  return ''
+}
+
+function fieldScanKind(key, parent) {
+  if (SKIP_SELECTOR_KEYS.has(key))
+    return 'skip'
+  const mode = valueMode(parent)
+  if ((key === 'value' || key === 'text') && mode === 'constant')
+    return 'literal'
+  if (key === 'value' && mode === 'variable')
+    return 'selector'
+  if (key === 'query')
+    return 'query'
+  if (key === 'variables')
+    return 'selector_list'
+  if (SELECTOR_KEYS.has(key) || String(key).endsWith('_selector'))
+    return 'selector'
+  return 'walk'
+}
+
+function isSelectorList(value) {
+  return Array.isArray(value) && value.length >= 2 && value.every(item => typeof item === 'string' && item)
+}
+
 /**
  * Walk node data and collect value_selector arrays + {{#...#}} tokens.
+ * Constant strings are not references even when they contain ``{{#...#}}``.
  * @returns {string[][]}
  */
 export function collectUsedSelectors(data) {
@@ -191,9 +247,19 @@ export function collectUsedSelectors(data) {
     found.push(selector.map(String))
   }
 
-  function walk(val, key = '') {
+  function walk(val, key = '', parent = null) {
     if (val == null)
       return
+    const kind = key ? fieldScanKind(key, parent) : 'walk'
+    if (kind === 'literal')
+      return
+    if (kind === 'skip') {
+      if (val && typeof val === 'object' && !Array.isArray(val)) {
+        for (const [childKey, childVal] of Object.entries(val))
+          walk(childVal, childKey, val)
+      }
+      return
+    }
     if (typeof val === 'string') {
       const re = /\{\{#(.*?)#\}\}/g
       let match = re.exec(val)
@@ -203,19 +269,39 @@ export function collectUsedSelectors(data) {
       }
       return
     }
-    if (Array.isArray(val)) {
-      const keyLower = String(key || '').toLowerCase()
-      if (keyLower.includes('selector') && val.length >= 2 && val.every(item => typeof item === 'string')) {
+    if (kind === 'query') {
+      if (Array.isArray(val) && val.length > 1 && val.every(isSelectorList))
+        return
+      if (Array.isArray(val) && val.length === 1 && isSelectorList(val[0])) {
+        push(val[0])
+        return
+      }
+      if (isSelectorList(val)) {
         push(val)
         return
       }
+    }
+    if (kind === 'selector' && isSelectorList(val)) {
+      push(val)
+      return
+    }
+    if (kind === 'selector_list' && Array.isArray(val)) {
+      for (const item of val) {
+        if (isSelectorList(item))
+          push(item)
+        else
+          walk(item, key, parent)
+      }
+      return
+    }
+    if (Array.isArray(val)) {
       for (const item of val)
-        walk(item, key)
+        walk(item, key, parent)
       return
     }
     if (typeof val === 'object') {
       for (const [childKey, childVal] of Object.entries(val))
-        walk(childVal, childKey)
+        walk(childVal, childKey, val)
     }
   }
 
@@ -225,33 +311,87 @@ export function collectUsedSelectors(data) {
 
 /**
  * Whether a node-output selector is present in available groups.
- * Special prefixes (sys/env/conversation/rag) are accepted like Dify checklist skip.
- * Nested paths match children under the root field.
+ * sys/env/conversation/rag must match a declared group entry.
  */
 export function isSelectorAvailable(selector, availableGroups = []) {
   if (!Array.isArray(selector) || selector.length < 2)
     return true
-  if (isSpecialVarPrefix(selector[0]))
-    return true
+  if (isSpecialVarPrefix(selector[0])) {
+    for (const group of availableGroups) {
+      if (matchVarPath(group.vars || [], selector) || matchVarPath(group.vars || [], selector.slice(1)))
+        return true
+    }
+    return false
+  }
   const group = availableGroups.find(item => item.nodeId === selector[0])
   if (!group)
     return false
   return matchVarPath(group.vars || [], selector.slice(1))
 }
 
+export function resolveAvailableVariable(selector, availableGroups = []) {
+  if (!Array.isArray(selector) || selector.length < 2)
+    return null
+  if (isSpecialVarPrefix(selector[0])) {
+    for (const group of availableGroups) {
+      const found = findDeclaredVariable(group.vars || [], selector) || findDeclaredVariable(group.vars || [], selector.slice(1))
+      if (found)
+        return found
+    }
+    return null
+  }
+  const group = availableGroups.find(item => item.nodeId === selector[0])
+  if (!group)
+    return null
+  return findDeclaredVariable(group.vars || [], selector.slice(1))
+}
+
+function findDeclaredVariable(vars, path) {
+  if (!Array.isArray(path) || !path.length)
+    return null
+  const dotted = path.join('.')
+  for (const v of vars) {
+    if (v.variable === dotted)
+      return v
+    if (v.variable !== path[0])
+      continue
+    const rest = path.slice(1)
+    if (!rest.length)
+      return v
+    const children = normalizeVarChildren(v.children)
+    if (children.length)
+      return findDeclaredVariable(children, rest)
+    if (ARRAY_NO_DRILL.has(v.type))
+      return null
+    if (v.type === 'file' || v.type === 'arrayFile')
+      return findDeclaredVariable(OUTPUT_FILE_SUB_VARIABLES, rest)
+    return null
+  }
+  return null
+}
+
 function matchVarPath(vars, path) {
   if (!path.length)
     return true
-  const [head, ...rest] = path
+  const dotted = path.join('.')
   for (const v of vars) {
-    if (v.variable === head) {
-      if (!rest.length)
-        return true
-      return matchVarPath(normalizeVarChildren(v.children), rest)
-    }
-    // Dotted leaf name stored as single variable
-    if (v.variable === path.join('.'))
+    if (v.variable === dotted)
       return true
+    if (v.variable !== path[0])
+      continue
+    const rest = path.slice(1)
+    if (!rest.length)
+      return true
+    if (ARRAY_NO_DRILL.has(v.type))
+      return false
+    const children = normalizeVarChildren(v.children)
+    if (children.length)
+      return matchVarPath(children, rest)
+    if (v.type === 'file' || v.type === 'arrayFile')
+      return matchVarPath(OUTPUT_FILE_SUB_VARIABLES, rest)
+    if (v.type === 'object' || !v.type)
+      return true
+    return false
   }
   return false
 }
@@ -335,7 +475,7 @@ export function buildAvailableVariables({
     candidateNodes = [...siblings, ...outerNodes]
     const parentNode = nodes.find(n => n.id === parentId)
     if (parentNode) {
-      const innerVars = getContainerInnerVars(parentNode)
+      const innerVars = getContainerInnerVars(parentNode, { nodes })
       if (innerVars.length) {
         candidateNodes = [{
           id: parentId,
@@ -431,4 +571,40 @@ export function buildSpecialVarGroups({
   })
 
   return groups
+}
+
+/**
+ * Direct children of an iteration container (for output_selector scope).
+ * Nested container internals are not included.
+ */
+export function buildDirectChildOutputGroups(containerNode, nodes = []) {
+  if (!containerNode?.id)
+    return []
+  const groups = []
+  for (const child of nodes) {
+    const parent = child.parentNode || child.parentId
+    if (parent !== containerNode.id)
+      continue
+    const vars = getNodeOutputVars(child)
+    if (!vars.length)
+      continue
+    groups.push({
+      nodeId: child.id,
+      title: child.data?.title || child.id,
+      nodeType: child.data?.type,
+      vars,
+    })
+  }
+  return groups
+}
+
+export function selectAvailableVariableGroups({
+  nodeGroups = [],
+  directChildGroups = [],
+  specialGroups = [],
+  includeDirectChildren = false,
+} = {}) {
+  return includeDirectChildren
+    ? directChildGroups
+    : [...nodeGroups, ...specialGroups]
 }

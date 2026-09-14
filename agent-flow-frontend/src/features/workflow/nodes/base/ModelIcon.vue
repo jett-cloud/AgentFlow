@@ -14,12 +14,17 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { providerIconUrl } from '@/features/integrations/lib/modelProviderHelpers.js'
+import {
+  i18nText,
+  providerIconUrl,
+  resolveConsoleAssetUrl,
+} from '@/features/integrations/lib/modelProviderHelpers.js'
 import { useModelStore } from '@/features/integrations/state/useModelStore.js'
 
 const props = defineProps({
   modelName: { type: String, default: '' },
   provider: { type: String, default: '' },
+  icon: { type: [String, Object], default: null },
   /** sm = 16px (select options), md = 20px (node badge) */
   size: { type: String, default: 'sm' },
 })
@@ -41,7 +46,10 @@ const providerRow = computed(() => {
   return hit ? modelStore.getProvider?.(hit.provider) : null
 })
 
-const iconUrl = computed(() => providerIconUrl(providerRow.value))
+const iconUrl = computed(() => (
+  resolveConsoleAssetUrl(i18nText(props.icon, ''))
+  || providerIconUrl(providerRow.value)
+))
 
 const fallbackLetter = computed(() => {
   const raw = props.modelName || props.provider || '?'

@@ -33,7 +33,7 @@ from controllers.inner_api.plugin.plugin import (
     PluginInvokeTTSApi,
     PluginUploadFileRequestApi,
 )
-from core.workflow.file_reference import build_file_reference
+from core.workflow.runtime.adapters.file_reference import build_file_reference
 from models import Tenant
 
 

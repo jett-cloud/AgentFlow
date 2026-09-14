@@ -18,8 +18,8 @@ from typing import Any, Literal, Protocol, cast
 from sqlalchemy import select
 
 from core.db.session_factory import session_factory
-from core.workflow.generator.agent.graph_ops import empty_graph
-from core.workflow.generator.agent.types import AgentEvent, AgentSession
+from core.workflow.generator.agent.types import AgentEvent, AgentMessage, AgentMessageEventType, AgentSession
+from core.workflow.generator.graph.graph_ops import empty_graph
 from models.workflow_assist import (
     WorkflowAssistConversation,
     WorkflowAssistMessage,
@@ -34,6 +34,7 @@ from services.workflow_assist.run_types import (
     CandidateMutation,
     CommitStepOutcome,
     RunLease,
+    WorkflowContractCheckpoint,
 )
 
 MESSAGE_DELTA_INTERVAL_SECONDS = 0.1
@@ -124,6 +125,10 @@ def persist_tail(
         base_hash=session.candidate_base_hash,
         compacted_until_sequence=session.compacted_until_sequence if advanced else None,
         compacted_state=session.compacted_state if advanced else None,
+        contract_protocol_version=session.contract_protocol_version,
+        workflow_contract=session.workflow_contract,
+        contract_revision=session.contract_revision,
+        contract_hash=session.contract_hash,
     )
 
 
@@ -210,7 +215,12 @@ class MessageDeltaAggregator:
 
 
 class _TimedMessageDeltaWriter:
-    """Commit buffered text at the deadline even while the Agent source blocks."""
+    """Commit buffered text at the deadline even while the Agent source blocks.
+
+    A recovery envelope may include older completed assistant rows plus at most one
+    current stream message. Older rows are committed as ordinary history before the
+    current row is staged as the one-message response outbox.
+    """
 
     lease: RunLease
     aggregator: MessageDeltaAggregator
@@ -219,7 +229,6 @@ class _TimedMessageDeltaWriter:
     _timer: threading.Timer | None
     _fenced: bool
     _error: BaseException | None
-    _pending_recovery: list[dict[str, Any]]
     _pending_checkpoint: AgentCheckpoint | None
     _pending_response: AgentResponseOutbox | None
     _message_sequence: int | None
@@ -244,7 +253,6 @@ class _TimedMessageDeltaWriter:
         self._timer = None
         self._fenced = False
         self._error = None
-        self._pending_recovery = []
         self._pending_checkpoint = None
         self._pending_response = None
         self._message_id: str | None = None
@@ -278,17 +286,20 @@ class _TimedMessageDeltaWriter:
             self._message_id = incoming_id
             if stream_mode:
                 self._stream_mode = stream_mode
-            incoming_sequence = _recovery_message_sequence(recovery_messages)
-            if recovery_messages and self._pending_response is None:
-                response = _response_outbox(recovery_messages, checkpoint)
-                if not _stage_response_outbox(lease=self.lease, response=response):
+            history: list[dict[str, Any]] = []
+            response: AgentResponseOutbox | None = None
+            if recovery_messages:
+                history, response = _partition_stream_recovery(
+                    recovery_messages,
+                    message_identity=incoming_id,
+                    checkpoint=checkpoint,
+                )
+            if response is not None and self._pending_response is None:
+                if not _stage_response_outbox(lease=self.lease, history=history, response=response):
                     self._fenced = True
                     return False
                 self._pending_response = response
-                if incoming_sequence is not None:
-                    self._message_sequence = incoming_sequence
-            if recovery_messages:
-                self._pending_recovery.extend(recovery_messages)
+                self._message_sequence = response.sequence
             if checkpoint is not None:
                 self._pending_checkpoint = checkpoint
             if (
@@ -363,12 +374,10 @@ class _TimedMessageDeltaWriter:
             step_id=f"{self._step_prefix}:{self._message_id}:{index}",
             event=self._event_type,
             payload=payload,
-            recovery_messages=self._pending_recovery if final else None,
             checkpoint=self._pending_checkpoint if final else None,
             response_outbox=self._pending_response if final else None,
         )
         if final:
-            self._pending_recovery = []
             self._pending_checkpoint = None
             self._pending_response = None
         if not committed:
@@ -386,13 +395,6 @@ class _TimedMessageDeltaWriter:
     def _merge_reasoning_locked(self, reasoning: str) -> None:
         if self._event_type is not WorkflowAssistRunEventType.REASONING_DELTA or not reasoning:
             return
-        for recovery in self._pending_recovery:
-            payload = recovery.get("payload")
-            if not isinstance(payload, dict):
-                continue
-            existing = payload.get("reasoning")
-            if not (isinstance(existing, str) and existing.strip()):
-                payload["reasoning"] = reasoning
         if self._pending_response is None:
             return
         payload = dict(self._pending_response.payload)
@@ -485,6 +487,86 @@ def _recovery_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return raw
 
 
+def _is_assistant_prose_recovery(item: dict[str, Any]) -> bool:
+    return item.get("role") == "assistant" and item.get("event_type") == "message"
+
+
+def _recovery_message_identity(item: dict[str, Any]) -> str | None:
+    if not _is_assistant_prose_recovery(item):
+        return None
+    payload = _recovery_payload(item)
+    message_id = payload.get("message_id")
+    if isinstance(message_id, str) and message_id.strip():
+        return message_id.strip()
+    sequence = item.get("sequence")
+    return str(sequence) if isinstance(sequence, int) and sequence > 0 else None
+
+
+def _partition_stream_recovery(
+    recovery_messages: list[dict[str, Any]],
+    *,
+    message_identity: str,
+    checkpoint: AgentCheckpoint | None,
+) -> tuple[list[dict[str, Any]], AgentResponseOutbox]:
+    matching_indexes = [
+        index for index, item in enumerate(recovery_messages) if _recovery_message_identity(item) == message_identity
+    ]
+    if len(matching_indexes) != 1:
+        raise ValueError("Assistant stream identity must match exactly one durable recovery message")
+    current_index = matching_indexes[0]
+    if current_index != len(recovery_messages) - 1:
+        raise ValueError("Assistant stream recovery must be the trailing durable message")
+    current = recovery_messages[current_index]
+    return recovery_messages[:current_index], _response_outbox([current], checkpoint)
+
+
+def _partition_terminal_recovery(
+    recovery_messages: list[dict[str, Any]],
+    checkpoint: AgentCheckpoint | None,
+) -> tuple[list[dict[str, Any]], AgentResponseOutbox | None, list[dict[str, Any]]]:
+    """Split mixed terminal recovery into history, one prose outbox, and later rows.
+
+    Streamed replies often share a terminal envelope with a following ``ask_user``
+    tool_call. The outbox contract still allows only one assistant message.
+    """
+    prose_indexes = [index for index, item in enumerate(recovery_messages) if _is_assistant_prose_recovery(item)]
+    if not prose_indexes:
+        return recovery_messages, None, []
+    last_index = prose_indexes[-1]
+    outbox = _response_outbox([recovery_messages[last_index]], checkpoint)
+    return recovery_messages[:last_index], outbox, recovery_messages[last_index + 1 :]
+
+
+def _append_recovery_messages(*, lease: RunLease, recovery_messages: list[dict[str, Any]]) -> None:
+    """Write durable AgentSession rows that do not belong to the current response outbox."""
+    if not recovery_messages:
+        return
+    with session_factory.create_session() as session:
+        conversation = session.scalar(
+            select(WorkflowAssistConversation).where(
+                WorkflowAssistConversation.id == lease.owner.conversation_id,
+                WorkflowAssistConversation.tenant_id == lease.owner.tenant_id,
+                WorkflowAssistConversation.app_id == lease.owner.app_id,
+                WorkflowAssistConversation.account_id == lease.owner.account_id,
+            )
+        )
+        if conversation is None:
+            raise ValueError("recovery message conversation disappeared")
+        conversations = WorkflowAssistConversationService(session)
+        for recovery in recovery_messages:
+            row = conversations.append_message(
+                conversation=conversation,
+                role=_recovery_role(recovery),
+                event_type=_required_text(recovery, "event_type"),
+                payload=_recovery_payload(recovery),
+                status=str(recovery.get("status") or "completed"),
+            )
+            expected_sequence = recovery.get("sequence")
+            if isinstance(expected_sequence, int) and row.sequence != expected_sequence:
+                raise ValueError("recovery message sequence diverged from AgentSession")
+        session.commit()
+
+
 def _response_outbox(
     recovery_messages: list[dict[str, Any]] | None,
     checkpoint: AgentCheckpoint | None,
@@ -506,9 +588,35 @@ def _response_outbox(
     return AgentResponseOutbox(sequence=sequence, payload=payload, checkpoint=checkpoint)
 
 
-def _stage_response_outbox(*, lease: RunLease, response: AgentResponseOutbox) -> bool:
+def _recovery_agent_message(recovery: dict[str, Any]) -> AgentMessage:
+    sequence = recovery.get("sequence")
+    if not isinstance(sequence, int) or sequence < 1:
+        raise ValueError("Agent recovery history requires a positive durable sequence")
+    event_type = _required_text(recovery, "event_type")
+    if event_type not in {"message", "tool_call", "tool_result"}:
+        raise ValueError("Agent recovery history event type is invalid")
+    return AgentMessage(
+        sequence=sequence,
+        role=_recovery_role(recovery),
+        event_type=cast(AgentMessageEventType, event_type),
+        status=str(recovery.get("status") or "completed"),
+        payload=_recovery_payload(recovery),
+    )
+
+
+def _stage_response_outbox(
+    *,
+    lease: RunLease,
+    history: list[dict[str, Any]],
+    response: AgentResponseOutbox,
+) -> bool:
+    prepared_history = tuple(_recovery_agent_message(recovery) for recovery in history)
     with session_factory.create_session() as session:
-        outcome = RunCoordinator(session).stage_agent_response(lease=lease, response=response)
+        outcome = RunCoordinator(session).stage_agent_response(
+            lease=lease,
+            history=prepared_history,
+            response=response,
+        )
         session.commit()
         return outcome is not CommitStepOutcome.FENCED
 
@@ -522,6 +630,7 @@ def _agent_checkpoint(payload: dict[str, Any]) -> AgentCheckpoint | None:
     watermark = raw.get("compacted_until_sequence")
     compacted_state = raw.get("compacted_state")
     last_validation = raw.get("last_validation")
+    workflow_contract = _workflow_contract_checkpoint(raw.get("workflow_contract"))
     if watermark is not None and not isinstance(watermark, int):
         raise ValueError("Agent checkpoint watermark must be an integer")
     if compacted_state is not None and not isinstance(compacted_state, dict):
@@ -532,6 +641,28 @@ def _agent_checkpoint(payload: dict[str, Any]) -> AgentCheckpoint | None:
         compacted_until_sequence=watermark,
         compacted_state=compacted_state,
         last_validation=last_validation,
+        workflow_contract=workflow_contract,
+    )
+
+
+def _workflow_contract_checkpoint(value: object) -> WorkflowContractCheckpoint | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("Workflow contract checkpoint must be an object")
+    protocol_version = value.get("protocol_version")
+    revision = value.get("revision")
+    contract_hash = value.get("contract_hash")
+    contract = value.get("contract")
+    if not isinstance(protocol_version, int) or not isinstance(revision, int):
+        raise ValueError("Workflow contract checkpoint versions must be integers")
+    if not isinstance(contract_hash, str) or not isinstance(contract, dict):
+        raise ValueError("Workflow contract checkpoint requires hash and contract")
+    return WorkflowContractCheckpoint(
+        protocol_version=protocol_version,
+        revision=revision,
+        contract_hash=contract_hash,
+        contract=cast(dict[str, object], contract),
     )
 
 
@@ -620,6 +751,7 @@ def _terminate(
     status: WorkflowAssistRunStatus,
     payload: dict[str, Any],
     reason: str | None,
+    response_outbox: AgentResponseOutbox | None = None,
 ) -> bool:
     with session_factory.create_session() as session:
         terminated = RunCoordinator(session).terminate(
@@ -628,6 +760,7 @@ def _terminate(
             step_id=f"terminal:{status.value}",
             payload=payload,
             reason=reason,
+            response_outbox=response_outbox,
         )
         session.commit()
         return terminated
@@ -662,7 +795,13 @@ def persist_agent_events(
     should_stop: Callable[[], bool] = lambda: False,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> WorkflowAssistRunStatus | AgentEventPumpOutcome | None:
-    """Persist one Agent stream, stopping on a lost fence or terminal event."""
+    """Persist one Agent stream, stopping on a lost fence or terminal event.
+
+    A terminal envelope may own the completed response snapshot that became
+    observable only after the stream's final delta. Extra recovery rows around
+    that snapshot (for example a following ``ask_user`` tool_call) are written
+    as ordinary history instead of being forced into the one-message outbox.
+    """
     deltas = _TimedMessageDeltaWriter(lease)
     reasoning_deltas = _TimedMessageDeltaWriter(
         lease,
@@ -796,8 +935,9 @@ def persist_agent_events(
         status = terminal_statuses.get(event_name)
         if status is None:
             raise ValueError(f"unsupported Agent event: {event_name}")
-        _recovery_messages(payload)
+        recovery_messages = _recovery_messages(payload)
         checkpoint = _agent_checkpoint(payload)
+        history_before, response_outbox, history_after = _partition_terminal_recovery(recovery_messages, checkpoint)
         graph = payload.pop("graph", payload.pop("candidate_graph", None))
         if isinstance(graph, dict) and graph != candidate_graph:
             if last_tool_call_id is None:
@@ -814,11 +954,18 @@ def persist_agent_events(
                 return AgentEventPumpOutcome.FENCED
             candidate_graph = graph
             checkpoint = None
-        if checkpoint is not None:
+        _append_recovery_messages(lease=lease, recovery_messages=history_before)
+        if checkpoint is not None and response_outbox is None:
             raise ValueError("terminal Agent checkpoint requires a preceding durable step")
         reason_value = payload.get("reason", payload.get("termination_reason"))
         reason = reason_value if isinstance(reason_value, str) else None
-        if not _terminate(lease=lease, status=status, payload=payload, reason=reason):
+        if not _terminate(
+            lease=lease,
+            status=status,
+            payload=payload,
+            reason=reason,
+            response_outbox=response_outbox,
+        ):
             _cancel_pumps()
             if status is WorkflowAssistRunStatus.DONE and _lease_still_held(lease):
                 if _terminate(
@@ -826,9 +973,11 @@ def persist_agent_events(
                     status=WorkflowAssistRunStatus.ERROR,
                     payload={"status": "error", "reason": "completion_rejected"},
                     reason="completion_rejected",
+                    response_outbox=response_outbox,
                 ):
                     return WorkflowAssistRunStatus.ERROR
             return AgentEventPumpOutcome.FENCED
+        _append_recovery_messages(lease=lease, recovery_messages=history_after)
         _cancel_pumps()
         return status
 

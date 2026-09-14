@@ -214,6 +214,8 @@ const BLOCK_DESC = {
 
 const TYPE_LABEL = {
   builtin: '工具插件',
+  api: 'API 工具',
+  workflow: '工作流工具',
   mcp: 'MCP 工具',
 }
 

@@ -8,7 +8,7 @@ from sqlalchemy import Engine, select
 from sqlalchemy.orm import sessionmaker
 
 from configs import dify_config
-from core.workflow.human_input_adapter import (
+from core.workflow.graph.adapters.human_input_adapter import (
     DeliveryChannelConfig,
     EmailDeliveryConfig,
     EmailDeliveryMethod,

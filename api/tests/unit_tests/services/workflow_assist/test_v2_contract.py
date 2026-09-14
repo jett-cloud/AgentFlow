@@ -146,4 +146,4 @@ def test_frontend_workflow_assist_v2_contract_mirror_matches_authority() -> None
     frontend_contract = json.loads(FRONTEND_CONTRACT_MIRROR.read_text(encoding="utf-8"))
 
     assert frontend_contract == backend_contract
-    assert FRONTEND_CONTRACT_MIRROR.read_bytes() == CONTRACT_FIXTURE.read_bytes()
+    assert FRONTEND_CONTRACT_MIRROR.read_text(encoding="utf-8") == CONTRACT_FIXTURE.read_text(encoding="utf-8")

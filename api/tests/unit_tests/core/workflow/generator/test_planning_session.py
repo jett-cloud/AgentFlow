@@ -1,15 +1,12 @@
 import pytest
 
-from core.workflow.generator.llm_response import StageSchemaError
-from core.workflow.generator.planner_actions import (
+from core.workflow.generator.model_io.llm_response import StageSchemaError
+from core.workflow.generator.pipeline.planner_actions import (
     RequirementResolution,
     ResolveRequirementsAction,
     ResolveResourceAction,
 )
-from core.workflow.generator.planning_session import (
-    ResourceCandidate,
-    UserTurn,
-    VerifiedResourceSnapshot,
+from core.workflow.generator.pipeline.planning_session import (
     acknowledge_user_turn,
     begin_user_turn,
     complete_planning_session,
@@ -21,6 +18,7 @@ from core.workflow.generator.planning_session import (
     request_user_clarification,
     start_resource_resolution,
 )
+from core.workflow.generator.pipeline.planning_types import ResourceCandidate, UserTurn, VerifiedResourceSnapshot
 
 
 def _resolution(
@@ -282,9 +280,7 @@ def test_reducer_resolves_two_independent_requirements():
 def test_reducer_normalizes_case_and_whitespace_when_matching_evidence():
     transition = reduce_planning_session(
         empty_planning_session("goal-1", "Test RAG"),
-        ResolveRequirementsAction(
-            resolutions=(_resolution("rag.source", "Runtime upload", "rag source at runtime"),)
-        ),
+        ResolveRequirementsAction(resolutions=(_resolution("rag.source", "Runtime upload", "rag source at runtime"),)),
         _turn("Use RAG\n\tSource At Runtime, please."),
         _resources(),
     )
@@ -296,9 +292,7 @@ def test_reducer_rejects_evidence_absent_from_current_turn():
     with pytest.raises(StageSchemaError, match="evidence"):
         reduce_planning_session(
             empty_planning_session("goal-1", "Test RAG"),
-            ResolveRequirementsAction(
-                resolutions=(_resolution("rag.source", "Runtime upload", "upload at runtime"),)
-            ),
+            ResolveRequirementsAction(resolutions=(_resolution("rag.source", "Runtime upload", "upload at runtime"),)),
             _turn("Use the workspace knowledge base."),
             _resources(),
         )

@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from constants import HIDDEN_VALUE
 from core.helper import encrypter
-from core.workflow.file_reference import build_file_reference
+from core.workflow.runtime.adapters.file_reference import build_file_reference
 from factories.variable_factory import build_segment
 from graphon.file import File, FileTransferMethod, FileType
 from graphon.variables import FloatVariable, IntegerVariable, SecretVariable, StringVariable

@@ -18,9 +18,17 @@
 
         <div class="items-list">
           <div v-for="(it, idx) in items" :key="idx" class="item-card">
-            <span class="font-mono text-xs font-bold text-sky-600">{{ formatTarget(it) }}</span>
-            <span class="font-mono text-xs text-gray-500">← {{ formatSource(it) }}</span>
-            <button v-if="!readOnly" class="del-btn" @click="handleRemoveItem(idx)"><el-icon><Delete /></el-icon></button>
+            <span class="assignment-target" :title="formatTarget(it)">{{ formatTarget(it) }}</span>
+            <span class="assignment-arrow" aria-hidden="true">←</span>
+            <span class="assignment-source" :title="formatSource(it)">{{ formatSource(it) }}</span>
+            <button
+              v-if="!readOnly"
+              class="del-btn"
+              :aria-label="`删除赋值规则：${formatTarget(it)}`"
+              @click="handleRemoveItem(idx)"
+            >
+              <el-icon><Delete /></el-icon>
+            </button>
           </div>
         </div>
       </div>
@@ -138,9 +146,15 @@ const saveRule = () => {
 .section-header-flex { display: flex; align-items: center; justify-content: space-between; }
 .add-btn { background: transparent; border: none; cursor: pointer; color: #667085; }
 .items-list { display: flex; flex-direction: column; gap: 6px; }
-.item-card { display: flex; align-items: center; justify-content: space-between; background: #f8fafc; border: 1px solid #f1f5f9; padding: 4px 8px; border-radius: 6px; }
-.del-btn { background: transparent; border: none; cursor: pointer; color: #98a2b3; }
+.item-card { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 2px 6px; background: #f8fafc; border: 1px solid #f1f5f9; padding: 6px 8px; border-radius: 6px; }
+.assignment-target,
+.assignment-source { min-width: 0; overflow: hidden; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.assignment-target { grid-column: 1 / 3; color: #0284c7; font-weight: 700; }
+.assignment-arrow { grid-column: 1; grid-row: 2; color: #98a2b3; font-size: 12px; }
+.assignment-source { grid-column: 2; grid-row: 2; color: #667085; }
+.del-btn { grid-column: 3; grid-row: 1 / 3; background: transparent; border: none; cursor: pointer; color: #98a2b3; }
 .del-btn:hover { color: #f04438; }
+.del-btn:focus-visible { outline: 2px solid #175cd3; outline-offset: 2px; }
 .full-width { width: 100%; }
 .form-tip { margin: 6px 0 0; color: #98a2b3; font-size: 11px; line-height: 1.4; }
 </style>

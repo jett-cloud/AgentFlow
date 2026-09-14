@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 import controllers.web.human_input_file_upload as human_input_file_upload_module
-from core.workflow.human_input_adapter import (
+from core.workflow.graph.adapters.human_input_adapter import (
     EmailDeliveryConfig,
     EmailDeliveryMethod,
     EmailRecipients,

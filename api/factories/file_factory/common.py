@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from core.workflow.file_reference import resolve_file_record_id
+from core.workflow.runtime.adapters.file_reference import resolve_file_record_id
 
 
 def resolve_mapping_file_id(mapping: Mapping[str, Any], *keys: str) -> str | None:

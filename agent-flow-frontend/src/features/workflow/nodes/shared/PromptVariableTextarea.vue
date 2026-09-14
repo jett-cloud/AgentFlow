@@ -376,6 +376,24 @@ function setActiveByIds(nodeId, idxInGroup) {
   if (index >= 0)
     activeFlatIndex.value = index
 }
+
+function insertText(text) {
+  if (props.readOnly || props.disabled)
+    return
+  const el = textareaRef.value
+  const start = el?.selectionStart ?? String(props.modelValue || '').length
+  const end = el?.selectionEnd ?? start
+  const { text: next, caret } = insertAtRange(props.modelValue, start, end, String(text || ''))
+  emitValue(next)
+  nextTick(() => {
+    if (!el)
+      return
+    el.focus()
+    el.setSelectionRange(caret, caret)
+  })
+}
+
+defineExpose({ insertText })
 </script>
 
 <style scoped>

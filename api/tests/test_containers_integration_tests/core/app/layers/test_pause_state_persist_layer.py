@@ -32,7 +32,7 @@ from core.app.layers.pause_state_persist_layer import (
     PauseStatePersistenceLayer,
     WorkflowResumptionContext,
 )
-from core.workflow.system_variables import build_system_variables
+from core.workflow.runtime.variables.system_variables import build_system_variables
 from extensions.ext_storage import storage
 from graphon.entities.pause_reason import SchedulingPause
 from graphon.enums import WorkflowExecutionStatus

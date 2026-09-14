@@ -4,9 +4,9 @@ from collections import defaultdict
 
 import pytest
 
-from core.workflow.system_variables import build_system_variables, system_variables_to_mapping
-from core.workflow.variable_pool_initializer import add_node_inputs_to_pool, add_variables_to_pool
-from core.workflow.variable_prefixes import (
+from core.workflow.runtime.variables.system_variables import build_system_variables, system_variables_to_mapping
+from core.workflow.runtime.variables.variable_pool_initializer import add_node_inputs_to_pool, add_variables_to_pool
+from core.workflow.runtime.variables.variable_prefixes import (
     CONVERSATION_VARIABLE_NODE_ID,
     ENVIRONMENT_VARIABLE_NODE_ID,
     SYSTEM_VARIABLE_NODE_ID,

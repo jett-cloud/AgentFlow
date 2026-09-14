@@ -61,6 +61,7 @@
       :running="running"
       :read-only="readOnly"
       @run="$emit('run', $event)"
+      @refresh="$emit('refresh')"
     />
   </aside>
 </template>
@@ -90,6 +91,7 @@ const emit = defineEmits([
   'close',
   'selectNode',
   'run',
+  'refresh',
   'stop',
 ])
 

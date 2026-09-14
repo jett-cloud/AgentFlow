@@ -5,16 +5,21 @@ from unittest.mock import patch
 
 import pytest
 
-from core.workflow.generator.tool_catalogue import (
+from core.workflow.generator.resources.tool_catalogue import (
     ToolCatalogueEntry,
-    _InstalledPluginIndex,
     _i18n_text,
-    _installed_plugin_index,
-    _plugin_still_installed,
     _tool_description,
-    build_tool_catalogue,
+    find_tool_entry,
     format_tool_catalogue,
     installed_tool_keys,
+    tool_parameter_specs,
+    tool_schema_lookups,
+)
+from services.workflow_assist.tool_catalogue_loader import (
+    _installed_plugin_index,
+    _InstalledPluginIndex,
+    _plugin_still_installed,
+    build_tool_catalogue,
 )
 
 
@@ -57,6 +62,30 @@ class TestInstalledToolKeys:
         # type contract.
         keys = installed_tool_keys([_entry("x", "y"), _entry("x", "y")])
         assert keys == {("x", "y")}
+
+
+class TestToolSchemaLookups:
+    def test_missing_schema_fields_are_absent_from_lookups(self):
+        known = _entry("google", "search")
+        known["parameter_names"] = ("q",)
+        known["output_names"] = ("text",)
+        unknown = _entry("time", "now")
+
+        parameters, outputs = tool_schema_lookups([known, unknown])
+
+        assert parameters == {("google", "search"): frozenset({"q"})}
+        assert outputs == {("google", "search"): frozenset({"text"})}
+        assert ("time", "now") not in parameters
+        assert ("time", "now") not in outputs
+
+    def test_parameter_specs_and_exact_lookup_preserve_known_empty_schema(self):
+        known = _entry("time", "now")
+        known["parameters"] = ()
+        unknown = _entry("legacy", "opaque")
+
+        assert tool_parameter_specs([known, unknown]) == {("time", "now"): ()}
+        assert find_tool_entry([known, unknown], provider_name="time", tool_name="now") is known
+        assert find_tool_entry([known, unknown], provider_name="time", tool_name="missing") is None
 
 
 class TestFormatToolCatalogue:
@@ -131,15 +160,56 @@ class _FakeTool:
         self.entity = entity
 
 
-def _make_tool(name: str, label_en: str = "", description_llm: str = "") -> _FakeTool:
-    return _FakeTool(
-        entity=_FakeToolEntity(
-            identity=_FakeToolIdentity(
-                name=name,
-                label=_FakeI18n(en_US=label_en, zh_Hans=""),
-            ),
-            description=_FakeToolDescription(llm=description_llm),
-        )
+_MISSING = object()
+
+
+def _make_tool(
+    name: str,
+    label_en: str = "",
+    description_llm: str = "",
+    *,
+    label_zh: str = "",
+    description_human_zh: str = "",
+    parameters: object = _MISSING,
+    output_schema: object = _MISSING,
+) -> _FakeTool:
+    entity = _FakeToolEntity(
+        identity=_FakeToolIdentity(
+            name=name,
+            label=_FakeI18n(en_US=label_en, zh_Hans=label_zh),
+        ),
+        description=_FakeToolDescription(
+            llm=description_llm,
+            human=_FakeI18n(en_US="", zh_Hans=description_human_zh),
+        ),
+    )
+    if parameters is not _MISSING:
+        entity.parameters = parameters
+    if output_schema is not _MISSING:
+        entity.output_schema = output_schema
+    return _FakeTool(entity=entity)
+
+
+def _parameter(
+    name: str,
+    parameter_type: str,
+    form: str,
+    *,
+    required: bool = False,
+    default: object = None,
+    llm_description: str = "",
+    human_description: str = "",
+    options: list[object] | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        name=name,
+        type=SimpleNamespace(value=parameter_type),
+        form=SimpleNamespace(value=form),
+        required=required,
+        default=default,
+        llm_description=llm_description,
+        human_description=_FakeI18n(en_US=human_description, zh_Hans=""),
+        options=options,
     )
 
 
@@ -256,21 +326,21 @@ class TestBuildToolCatalogue:
         # the daemon tool index. Tests that assert uninstall filtering override
         # this with a concrete index.
         monkeypatch.setattr(
-            "core.workflow.generator.tool_catalogue._installed_plugin_index",
+            "services.workflow_assist.tool_catalogue_loader._installed_plugin_index",
             lambda _tenant_id: None,
         )
 
-    @patch("core.workflow.generator.tool_catalogue.isinstance", side_effect=_patched_isinstance)
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_builtin_providers")
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_mcp_provider_controllers", return_value=[])
+    @patch("services.workflow_assist.tool_catalogue_loader.isinstance", side_effect=_patched_isinstance)
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_builtin_providers")
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_mcp_provider_controllers", return_value=[])
     def test_returns_empty_list_for_tenant_with_no_tools(self, mock_mcp, mock_list, mock_isinstance):
         mock_list.return_value = iter([])
 
         assert build_tool_catalogue("tenant-1") == []
 
-    @patch("core.workflow.generator.tool_catalogue.isinstance", side_effect=_patched_isinstance)
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_builtin_providers")
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_mcp_provider_controllers", return_value=[])
+    @patch("services.workflow_assist.tool_catalogue_loader.isinstance", side_effect=_patched_isinstance)
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_builtin_providers")
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_mcp_provider_controllers", return_value=[])
     def test_collects_hardcoded_and_plugin_tools(self, mock_mcp, mock_list, mock_isinstance):
         # Mixed-tenant scenario: hardcoded provider plus a plugin provider,
         # each carrying one tool. The catalogue must include all four fields
@@ -305,9 +375,151 @@ class TestBuildToolCatalogue:
         assert time_entry["provider_type"] == "builtin"
         assert time_entry["plugin_id"] == ""
 
-    @patch("core.workflow.generator.tool_catalogue.isinstance", side_effect=_patched_isinstance)
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_builtin_providers")
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_mcp_provider_controllers", return_value=[])
+    @patch("services.workflow_assist.tool_catalogue_loader.isinstance", side_effect=_patched_isinstance)
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_builtin_providers")
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_mcp_provider_controllers", return_value=[])
+    def test_collects_typed_parameter_specs_without_exposing_secret_defaults(
+        self, mock_mcp, mock_list, mock_isinstance
+    ):
+        parameters = [
+            _parameter(
+                "prompt",
+                "string",
+                "llm",
+                required=True,
+                llm_description="Prompt for the generated image",
+                human_description="Fallback prompt description",
+            ),
+            _parameter("image", "file", "llm"),
+            _parameter(
+                "size",
+                "select",
+                "form",
+                default="2K",
+                human_description="Output size",
+                options=[
+                    SimpleNamespace(value="1K", label=_FakeI18n(en_US="Small", zh_Hans="小"), extra="hidden"),
+                    {"value": "2K", "label": _FakeI18n(en_US="Large", zh_Hans="大"), "extra": "hidden"},
+                ],
+            ),
+            _parameter("stream", "boolean", "form", default=False),
+            _parameter("watermark", "boolean", "form", default=True),
+            _parameter("credential", "secret-input", "form", default="must-not-leak"),
+        ]
+        provider = _make_builtin_provider(
+            "image",
+            [
+                _make_tool(
+                    "generate",
+                    parameters=parameters,
+                    output_schema={"properties": {"files": {"type": "array"}}},
+                )
+            ],
+        )
+        mock_list.return_value = iter([provider])
+
+        entry = build_tool_catalogue("tenant-1")[0]
+
+        assert entry["parameters"] == (
+            {
+                "name": "prompt",
+                "type": "string",
+                "form": "llm",
+                "required": True,
+                "description": "Prompt for the generated image",
+            },
+            {"name": "image", "type": "file", "form": "llm", "required": False},
+            {
+                "name": "size",
+                "type": "select",
+                "form": "form",
+                "required": False,
+                "description": "Output size",
+                "default": "2K",
+                "options": (
+                    {"value": "1K", "label": "Small"},
+                    {"value": "2K", "label": "Large"},
+                ),
+            },
+            {"name": "stream", "type": "boolean", "form": "form", "required": False, "default": False},
+            {"name": "watermark", "type": "boolean", "form": "form", "required": False, "default": True},
+            {"name": "credential", "type": "secret-input", "form": "form", "required": False},
+        )
+        assert entry["parameter_names"] == ("prompt", "image", "size", "stream", "watermark", "credential")
+        assert entry["output_names"] == ("files",)
+
+    @patch("services.workflow_assist.tool_catalogue_loader.isinstance", side_effect=_patched_isinstance)
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_builtin_providers")
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_mcp_provider_controllers", return_value=[])
+    def test_collects_normalized_output_types_from_schema(self, mock_mcp, mock_list, mock_isinstance):
+        output_schema = {
+            "properties": {
+                "files": {"type": "array", "items": {"type": "file"}},
+                "text": {"type": "string"},
+            }
+        }
+        provider = _make_builtin_provider(
+            "image",
+            [_make_tool("generate", output_schema=output_schema)],
+        )
+        mock_list.return_value = iter([provider])
+
+        entry = build_tool_catalogue("tenant-1")[0]
+
+        assert entry["output_names"] == ("files", "text")
+        assert entry["outputs"] == (
+            {"name": "files", "type": "array[file]"},
+            {"name": "text", "type": "string"},
+        )
+
+    @patch("services.workflow_assist.tool_catalogue_loader.isinstance", side_effect=_patched_isinstance)
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_builtin_providers")
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_mcp_provider_controllers", return_value=[])
+    def test_distinguishes_unknown_parameter_schema_from_known_empty_schema(self, mock_mcp, mock_list, mock_isinstance):
+        provider = _make_builtin_provider(
+            "tools",
+            [
+                _make_tool("known_empty", parameters=[]),
+                _make_tool("unknown"),
+            ],
+        )
+        mock_list.return_value = iter([provider])
+
+        entries = {entry["tool_name"]: entry for entry in build_tool_catalogue("tenant-1")}
+
+        assert entries["known_empty"]["parameters"] == ()
+        assert entries["known_empty"]["parameter_names"] == ()
+        assert "parameters" not in entries["unknown"]
+        assert "parameter_names" not in entries["unknown"]
+
+    @patch("services.workflow_assist.tool_catalogue_loader.isinstance", side_effect=_patched_isinstance)
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_builtin_providers")
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_mcp_provider_controllers", return_value=[])
+    def test_keeps_chinese_labels_as_search_aliases(self, mock_mcp, mock_list, mock_isinstance):
+        plugin = _make_plugin_provider(
+            "ghy/doubao-image/doubao-image",
+            plugin_id="ghy/doubao-image",
+            tools=[
+                _make_tool(
+                    "image_generate",
+                    label_en="Image Generation",
+                    label_zh="图片生成",
+                    description_llm="Generate images via Volcengine Ark API.",
+                    description_human_zh="使用豆包(Seedream)模型通过火山引擎Ark API生成图片。",
+                )
+            ],
+        )
+        mock_list.return_value = iter([plugin])
+
+        entries = build_tool_catalogue("tenant-1")
+
+        assert entries[0]["tool_label"] == "Image Generation"
+        assert "图片生成" in entries[0]["search_aliases"]
+        assert "使用豆包(Seedream)模型通过火山引擎Ark API生成图片。" in entries[0]["search_aliases"]
+
+    @patch("services.workflow_assist.tool_catalogue_loader.isinstance", side_effect=_patched_isinstance)
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_builtin_providers")
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_mcp_provider_controllers", return_value=[])
     def test_skips_unknown_provider_classes(self, mock_mcp, mock_list, mock_isinstance):
         # If ToolManager ever yields a provider the catalogue doesn't know how
         # to label, we must continue (not raise) and leave it out of the
@@ -320,9 +532,9 @@ class TestBuildToolCatalogue:
 
         assert [e["provider_name"] for e in entries] == ["time"]
 
-    @patch("core.workflow.generator.tool_catalogue.isinstance", side_effect=_patched_isinstance)
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_builtin_providers")
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_mcp_provider_controllers", return_value=[])
+    @patch("services.workflow_assist.tool_catalogue_loader.isinstance", side_effect=_patched_isinstance)
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_builtin_providers")
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_mcp_provider_controllers", return_value=[])
     def test_continues_when_a_provider_get_tools_raises(self, mock_mcp, mock_list, mock_isinstance):
         # A buggy plugin must not break the whole catalogue. Resilient
         # per-provider try/except is what keeps generation usable in tenants
@@ -335,9 +547,9 @@ class TestBuildToolCatalogue:
 
         assert [e["provider_name"] for e in entries] == ["time"]
 
-    @patch("core.workflow.generator.tool_catalogue.isinstance", side_effect=_patched_isinstance)
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_builtin_providers")
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_mcp_provider_controllers", return_value=[])
+    @patch("services.workflow_assist.tool_catalogue_loader.isinstance", side_effect=_patched_isinstance)
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_builtin_providers")
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_mcp_provider_controllers", return_value=[])
     def test_skips_individual_tools_when_their_metadata_is_broken(self, mock_mcp, mock_list, mock_isinstance):
         # Per-tool try/except — a single mis-declared tool inside an otherwise
         # healthy provider gets dropped, the rest still surface.
@@ -351,9 +563,9 @@ class TestBuildToolCatalogue:
 
         assert [e["tool_name"] for e in entries] == ["ok"]
 
-    @patch("core.workflow.generator.tool_catalogue.isinstance", side_effect=_patched_isinstance)
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_builtin_providers")
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_mcp_provider_controllers", return_value=[])
+    @patch("services.workflow_assist.tool_catalogue_loader.isinstance", side_effect=_patched_isinstance)
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_builtin_providers")
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_mcp_provider_controllers", return_value=[])
     def test_truncates_to_max_tools_to_keep_prompt_bounded(self, mock_mcp, mock_list, mock_isinstance):
         # A tenant with hundreds of plugin tools would blow the LLM context
         # window. The catalogue caps the output at ``_MAX_TOOLS``.
@@ -367,9 +579,9 @@ class TestBuildToolCatalogue:
 
         assert len(entries) == 80
 
-    @patch("core.workflow.generator.tool_catalogue.isinstance", side_effect=_patched_isinstance)
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_builtin_providers")
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_mcp_provider_controllers", return_value=[])
+    @patch("services.workflow_assist.tool_catalogue_loader.isinstance", side_effect=_patched_isinstance)
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_builtin_providers")
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_mcp_provider_controllers", return_value=[])
     def test_defaults_plugin_id_to_empty_string_when_missing(self, mock_mcp, mock_list, mock_isinstance):
         # Plugin provider whose plugin_id is None should serialise to "" so
         # the consumer can safely index ``e["plugin_id"]`` without a None
@@ -381,9 +593,9 @@ class TestBuildToolCatalogue:
 
         assert entries[0]["plugin_id"] == ""
 
-    @patch("core.workflow.generator.tool_catalogue.isinstance", side_effect=_patched_isinstance)
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_builtin_providers")
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_mcp_provider_controllers")
+    @patch("services.workflow_assist.tool_catalogue_loader.isinstance", side_effect=_patched_isinstance)
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_builtin_providers")
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_mcp_provider_controllers")
     def test_collects_mcp_tools_keyed_by_server_identifier(self, mock_mcp, mock_list, mock_isinstance):
         mock_list.return_value = iter([])
         mcp = _make_mcp_provider(
@@ -404,14 +616,14 @@ class TestBuildToolCatalogue:
         assert entries[0]["description"] == "Read a repo file."
         assert ("github-official", "get_file_contents") in installed_tool_keys(entries)
 
-    @patch("core.workflow.generator.tool_catalogue.isinstance", side_effect=_patched_isinstance)
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_builtin_providers")
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_mcp_provider_controllers", return_value=[])
+    @patch("services.workflow_assist.tool_catalogue_loader.isinstance", side_effect=_patched_isinstance)
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_builtin_providers")
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_mcp_provider_controllers", return_value=[])
     def test_omits_plugin_tools_after_uninstall(self, mock_mcp, mock_list, mock_isinstance, monkeypatch):
         # Daemon /management/tools can still emit an uninstalled plugin.
         # Assist search_tools reads this catalogue, so leftovers must be dropped.
         monkeypatch.setattr(
-            "core.workflow.generator.tool_catalogue._installed_plugin_index",
+            "services.workflow_assist.tool_catalogue_loader._installed_plugin_index",
             lambda _tenant_id: _InstalledPluginIndex(plugin_ids=frozenset(), unique_identifiers=frozenset()),
         )
         plugin = _make_plugin_provider(
@@ -424,13 +636,13 @@ class TestBuildToolCatalogue:
 
         assert build_tool_catalogue("tenant-1") == []
 
-    @patch("core.workflow.generator.tool_catalogue.isinstance", side_effect=_patched_isinstance)
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_builtin_providers")
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_mcp_provider_controllers", return_value=[])
+    @patch("services.workflow_assist.tool_catalogue_loader.isinstance", side_effect=_patched_isinstance)
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_builtin_providers")
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_mcp_provider_controllers", return_value=[])
     def test_omits_stale_plugin_unique_identifier(self, mock_mcp, mock_list, mock_isinstance, monkeypatch):
         # Same plugin_id after republish; only the live unique identifier stays.
         monkeypatch.setattr(
-            "core.workflow.generator.tool_catalogue._installed_plugin_index",
+            "services.workflow_assist.tool_catalogue_loader._installed_plugin_index",
             lambda _tenant_id: _InstalledPluginIndex(
                 plugin_ids=frozenset({"ghy/doubao-image"}),
                 unique_identifiers=frozenset({"ghy/doubao-image:0.0.2@new"}),
@@ -454,9 +666,9 @@ class TestBuildToolCatalogue:
 
         assert [(e["plugin_id"], e["tool_name"]) for e in entries] == [("ghy/doubao-image", "image_generate")]
 
-    @patch("core.workflow.generator.tool_catalogue.isinstance", side_effect=_patched_isinstance)
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_builtin_providers")
-    @patch("core.workflow.generator.tool_catalogue.ToolManager.list_mcp_provider_controllers", return_value=[])
+    @patch("services.workflow_assist.tool_catalogue_loader.isinstance", side_effect=_patched_isinstance)
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_builtin_providers")
+    @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_mcp_provider_controllers", return_value=[])
     def test_keeps_plugin_tools_when_install_lookup_fails(self, mock_mcp, mock_list, mock_isinstance):
         plugin = _make_plugin_provider(
             "google",

@@ -300,10 +300,16 @@ export const START_BLOCK_OPTIONS = [
 ]
 
 /** 迭代/循环容器内可添加的节点 */
+const CONTAINER_EXCLUDED_BLOCKS = new Set([
+  BlockEnum.End,
+  BlockEnum.Iteration,
+  BlockEnum.Loop,
+  BlockEnum.DataSource,
+  BlockEnum.KnowledgeBase,
+])
+
 export const CONTAINER_SELECTABLE_BLOCKS = [
-  ...SELECTABLE_BLOCKS.filter(
-    type => ![BlockEnum.End, BlockEnum.Iteration, BlockEnum.Loop, BlockEnum.HumanInput].includes(type),
-  ),
+  ...SELECTABLE_BLOCKS.filter(type => !CONTAINER_EXCLUDED_BLOCKS.has(type)),
   BlockEnum.LoopEnd,
 ]
 

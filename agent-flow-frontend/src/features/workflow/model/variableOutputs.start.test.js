@@ -128,13 +128,16 @@ test('ListFilter exposes result/first_record/last_record', () => {
   assert.equal(vars[0].type, 'arrayString')
 })
 
-test('HumanInput includes Dify action outputs', () => {
+test('HumanInput exposes only persisted Dify outputs', () => {
   const vars = getNodeOutputVars({
     id: 'hi',
     data: { type: BlockEnum.HumanInput, user_actions: [{ id: 'approve' }] },
   })
   assert.ok(vars.some(v => v.variable === '__action_id'))
-  assert.ok(vars.some(v => v.variable === 'approve_approved'))
+  assert.ok(vars.some(v => v.variable === '__action_value'))
+  assert.ok(vars.some(v => v.variable === '__rendered_content'))
+  assert.equal(vars.some(v => v.variable === 'approve_approved'), false)
+  assert.equal(vars.some(v => v.variable === 'approve_comment'), false)
 })
 
 test('LLM structured_output children appear when enabled', () => {

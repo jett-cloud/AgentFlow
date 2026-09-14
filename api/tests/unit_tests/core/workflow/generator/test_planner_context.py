@@ -3,19 +3,17 @@ from typing import Any
 
 import pytest
 
-from core.workflow.generator.planner import PlannerInput
-from core.workflow.generator.planner_actions import (
+from core.workflow.generator.pipeline.planner_actions import (
     RequestUserInputAction,
     ResolveRequirementsAction,
     SearchKnowledgeAction,
     SearchToolsAction,
 )
-from core.workflow.generator.planner_context import (
-    PlannerContextLimitError,
-    PlannerContextSession,
-    PlannerTokenCountError,
-)
-from core.workflow.generator.planning_session import UserTurn, VerifiedResourceSnapshot, reduce_planning_session
+from core.workflow.generator.pipeline.planner_context import PlannerContextSession
+from core.workflow.generator.pipeline.planner_context_values import PlannerContextLimitError, PlannerTokenCountError
+from core.workflow.generator.pipeline.planner_support import PlannerInput
+from core.workflow.generator.pipeline.planning_session import reduce_planning_session
+from core.workflow.generator.pipeline.planning_types import UserTurn, VerifiedResourceSnapshot
 from graphon.model_runtime.entities.model_entities import ModelPropertyKey
 
 
@@ -215,17 +213,20 @@ def test_checkpoint_v3_contains_search_intents_requirements_and_persistent_budge
     assert checkpoint["resource_intents"] == {}
     assert checkpoint["resource_bindings"] == {}
     assert checkpoint["search_observations"] == []
-    assert {key: checkpoint[key] for key in (
-        "revision",
-        "goal_id",
-        "active_instruction",
-        "searches",
-        "requirements",
-        "requirement_history",
-        "pending_clarification",
-        "budget",
-        "truncation_recoveries",
-    )} == {
+    assert {
+        key: checkpoint[key]
+        for key in (
+            "revision",
+            "goal_id",
+            "active_instruction",
+            "searches",
+            "requirements",
+            "requirement_history",
+            "pending_clarification",
+            "budget",
+            "truncation_recoveries",
+        )
+    } == {
         "revision": 0,
         "goal_id": "current-goal",
         "active_instruction": "Summarize web results",
@@ -276,9 +277,7 @@ def test_start_restores_v1_checkpoint_and_emits_v4() -> None:
 
     assert checkpoint["version"] == 4
     assert checkpoint["searches"] == []
-    assert checkpoint["search_observations"] == [
-        {"kind": "knowledge", "query": "Product docs", "legacy": True}
-    ]
+    assert checkpoint["search_observations"] == [{"kind": "knowledge", "query": "Product docs", "legacy": True}]
     assert checkpoint["requirements"]["format"]["answer"] == {
         "kind": "single_choice",
         "value": "markdown",
@@ -414,9 +413,7 @@ def test_v2_checkpoint_is_emitted_as_v4_and_requirements_appear_once_in_prompt()
 def test_apply_requirement_transition_and_note_truncation_recovery() -> None:
     session = PlannerContextSession.start(
         request=_request(
-            clarification_history=[
-                {"clarification_id": "turn-1", "questions": [], "user_message": "测试时上传"}
-            ]
+            clarification_history=[{"clarification_id": "turn-1", "questions": [], "user_message": "测试时上传"}]
         ),
         model_instance=_TokenCountingModel(),
         model_parameters={},

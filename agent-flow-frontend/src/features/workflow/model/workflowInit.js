@@ -12,24 +12,12 @@ import {
   NESTED_ELEMENT_Z_INDEX,
 } from './constants.js'
 import { makeIterationStartNode, makeLoopStartNode } from './dsl.js'
+import { normalizeIfElseData } from '../nodes/if-else/ifElseNode.js'
+import { normalizeHumanInputData } from '../nodes/human-input/humanInputNode.js'
 
 const WHITE = 'WHITE'
 const GRAY = 'GRAY'
 const BLACK = 'BLACK'
-
-function branchNameCorrect(branches) {
-  if (!branches?.length) return branches
-  if (branches.length === 2) {
-    return branches.map((branch) => ({
-      ...branch,
-      name: branch.id === 'false' ? 'ELSE' : 'IF',
-    }))
-  }
-  return branches.map((branch, index) => ({
-    ...branch,
-    name: branch.id === 'false' ? 'ELSE' : index === 0 ? 'IF' : `ELIF ${index}`,
-  }))
-}
 
 function isCyclicUtil(nodeId, color, adjList, stack) {
   color[nodeId] = GRAY
@@ -102,10 +90,13 @@ function ensureContainerStartNodes(nodes, edges) {
     if (dataType === BlockEnum.Iteration) {
       const configuredStartId = node.data.start_node_id
       const existing = configuredStartId ? nodesMap[configuredStartId] : null
-      const validType =
-        existing?.type === 'iteration-start' ||
-        existing?.type === CUSTOM_ITERATION_START_NODE
-      if (!validType) {
+      const existingOwner = existing?.parentNode || existing?.parentId
+      const validOwnedStart =
+        (existing?.type === 'iteration-start'
+          || existing?.type === CUSTOM_ITERATION_START_NODE
+          || existing?.data?.type === BlockEnum.IterationStart)
+        && existingOwner === node.id
+      if (!validOwnedStart) {
         const startNode = makeIterationStartNode(node.id)
         startNode.id = existing
           ? nextAvailableNodeId(`${node.id}start`, nodesMap)
@@ -146,9 +137,13 @@ function ensureContainerStartNodes(nodes, edges) {
     if (dataType === BlockEnum.Loop) {
       const configuredStartId = node.data.start_node_id
       const existing = configuredStartId ? nodesMap[configuredStartId] : null
-      const validType =
-        existing?.type === 'loop-start' || existing?.type === CUSTOM_LOOP_START_NODE
-      if (!validType) {
+      const existingOwner = existing?.parentNode || existing?.parentId
+      const validOwnedStart =
+        (existing?.type === 'loop-start'
+          || existing?.type === CUSTOM_LOOP_START_NODE
+          || existing?.data?.type === BlockEnum.LoopStart)
+        && existingOwner === node.id
+      if (!validOwnedStart) {
         const startNode = makeLoopStartNode(node.id)
         startNode.id = existing
           ? nextAvailableNodeId(`${node.id}start`, nodesMap)
@@ -245,20 +240,14 @@ export function preprocessFlowGraph(nodes = [], edges = []) {
     data._connectedTargetHandleIds = targetHandles
 
     if (data.type === BlockEnum.IfElse) {
-      if (!data.cases?.length) {
-        data.cases = [
-          {
-            case_id: 'true',
-            logical_operator: 'and',
-            conditions: [],
-          },
-        ]
-      }
-      data._targetBranches = branchNameCorrect([
-        ...data.cases.map((item) => ({ id: item.case_id, name: '' })),
-        { id: 'false', name: '' },
-      ])
+      const normalizedIfElse = normalizeIfElseData(data)
+      delete data.conditions
+      delete data.logical_operator
+      Object.assign(data, normalizedIfElse)
     }
+
+    if (data.type === BlockEnum.HumanInput)
+      Object.assign(data, normalizeHumanInputData(data))
 
     if (data.type === BlockEnum.QuestionClassifier) {
       const classes = data.classes || []
@@ -278,7 +267,6 @@ export function preprocessFlowGraph(nodes = [], edges = []) {
     if (data.type === BlockEnum.Loop) {
       data._children = childrenMap[node.id] || data._children || []
       data.loop_count = data.loop_count ?? data.max_iterations ?? 10
-      data.error_handle_mode = data.error_handle_mode ?? 'terminated'
     }
 
     if (data.type === BlockEnum.IterationStart || data.type === BlockEnum.LoopStart) {

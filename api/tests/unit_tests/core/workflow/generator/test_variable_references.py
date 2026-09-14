@@ -1,4 +1,5 @@
-from core.workflow.generator.variable_references import collect_references, declared_outputs, declares_variable
+from core.workflow.generator.variables.declarations import declared_outputs, declares_variable
+from core.workflow.generator.variables.syntax import collect_references
 
 
 def test_collect_references_finds_placeholder_and_selector():
@@ -8,13 +9,212 @@ def test_collect_references_finds_placeholder_and_selector():
     }
 
 
+def test_collect_references_normalizes_nested_selectors_to_dotted_names():
+    assert collect_references(
+        {
+            "query_variable_selector": ["node_iter", "item", "question"],
+            "text": "{{#node_iter.item.question#}}",
+        }
+    ) == {("node_iter", "item.question")}
+
+
+def test_collect_references_ignores_non_selector_string_lists():
+    assert collect_references(
+        {
+            "type": "knowledge-retrieval",
+            "dataset_ids": ["dataset-a", "dataset-b"],
+            "structured_output": {"schema": {"required": ["question", "answer"]}},
+            "variables": [{"variable": "topic", "options": ["sys", "query"]}],
+            "query_variable_selector": ["start", "query"],
+        }
+    ) == {("start", "query")}
+
+
+def test_collect_references_skips_constant_placeholders_and_keeps_mixed():
+    assert collect_references(
+        {
+            "type": "tool",
+            "tool_parameters": {
+                "q": {"type": "constant", "value": "{{#start.query#}}"},
+                "topic": {"type": "mixed", "value": "{{#llm.text#}}"},
+                "src": {"type": "variable", "value": ["code", "result"]},
+            },
+        }
+    ) == {("llm", "text"), ("code", "result")}
+
+
+def test_collect_references_covers_aggregator_list_operator_loop_and_http_file():
+    assert collect_references(
+        {
+            "type": "variable-aggregator",
+            "variables": [["branch_a", "text"], ["branch_b", "text"]],
+        }
+    ) == {("branch_a", "text"), ("branch_b", "text")}
+    assert collect_references({"type": "list-operator", "variable": ["start", "rows"]}) == {("start", "rows")}
+    assert collect_references(
+        {
+            "type": "loop",
+            "loop_variables": [
+                {"label": "acc", "var_type": "string", "value_type": "variable", "value": ["start", "seed"]},
+                {"label": "note", "var_type": "string", "value_type": "constant", "value": "{{#start.seed#}}"},
+            ],
+        }
+    ) == {("start", "seed")}
+    assert collect_references(
+        {
+            "type": "http-request",
+            "body": {"type": "form-data", "data": [{"type": "file", "file": ["start", "doc"]}]},
+        }
+    ) == {("start", "doc")}
+    assert collect_references(
+        {
+            "type": "human-input",
+            "inputs": [{"default": {"type": "variable", "selector": ["start", "draft"]}}],
+        }
+    ) == {("start", "draft")}
+
+
+def test_collect_references_does_not_flatten_multi_selector_parameter_query():
+    assert (
+        collect_references(
+            {
+                "type": "parameter-extractor",
+                "query": [["llm_a", "text"], ["llm_b", "text"]],
+            }
+        )
+        == set()
+    )
+
+
+def test_llm_structured_output_is_nested_object_not_top_level_properties():
+    llm = {
+        "data": {
+            "type": "llm",
+            "structured_output_enabled": True,
+            "structured_output": {"schema": {"properties": {"json_var": {"type": "string"}}}},
+        }
+    }
+    assert declared_outputs(llm) == ["text", "reasoning_content", "usage", "structured_output"]
+    assert declares_variable(llm, "text") is True
+    assert declares_variable(llm, "reasoning_content") is True
+    assert declares_variable(llm, "usage") is True
+    assert declares_variable(llm, "json_var") is False
+    assert declares_variable(llm, "structured_output") is True
+    assert declares_variable(llm, "structured_output.json_var") is True
+    assert declares_variable(llm, "structured_output.missing") is False
+
+
+def test_llm_declares_structured_output_when_enabled_with_empty_schema():
+    llm = {
+        "data": {
+            "type": "llm",
+            "structured_output_enabled": True,
+            "structured_output": {"schema": {"type": "object", "properties": {}}},
+        }
+    }
+    assert declared_outputs(llm) == ["text", "reasoning_content", "usage", "structured_output"]
+    assert declares_variable(llm, "structured_output") is True
+    assert declares_variable(llm, "structured_output.summary") is False
+
+
+def test_known_object_schema_rejects_wrong_fields_unknown_object_allows_path():
+    known = {
+        "data": {
+            "type": "code",
+            "outputs": {"row": {"type": "object", "children": {"question": {"type": "string"}}}},
+        }
+    }
+    unknown = {"data": {"type": "code", "outputs": {"row": {"type": "object"}}}}
+    array_obj = {"data": {"type": "code", "outputs": {"rows": {"type": "array[object]"}}}}
+    assert declares_variable(known, "row.question") is True
+    assert declares_variable(known, "row.missing") is False
+    assert declares_variable(unknown, "row.question") is True
+    assert declares_variable(array_obj, "rows.question") is False
+    assert declares_variable(array_obj, "rows.0.question") is False
+
+
+def test_loop_declares_labels_not_synthetic_item_index_output():
+    loop = {
+        "data": {
+            "type": "loop",
+            "loop_variables": [
+                {"label": "acc", "var_type": "string", "value_type": "constant", "value": ""},
+                {"label": "index", "var_type": "number", "value_type": "constant", "value": 0},
+            ],
+        }
+    }
+    assert declared_outputs(loop) == ["acc", "index"]
+    assert declares_variable(loop, "acc") is True
+    assert declares_variable(loop, "index") is True
+    assert declares_variable(loop, "output") is False
+    assert declares_variable(loop, "item", ancestor_ids={"loop1"}) is False
+
+
+def test_parameter_extractor_and_human_input_declare_runtime_builtins():
+    pe = {"data": {"type": "parameter-extractor", "parameters": [{"name": "topic"}]}}
+    assert "topic" in declared_outputs(pe)
+    assert "__is_success" in declared_outputs(pe)
+    assert declares_variable(pe, "__is_success") is True
+    hitl = {
+        "data": {
+            "type": "human-input",
+            "inputs": [
+                {"output_variable_name": "comment"},
+                {"output_variable_name": "attachment", "type": "file"},
+                {"output_variable_name": "attachments", "type": "file-list"},
+            ],
+        }
+    }
+    assert declared_outputs(hitl) == [
+        "comment",
+        "attachment",
+        "attachments",
+        "__action_id",
+        "__action_value",
+        "__rendered_content",
+    ]
+
+
+def test_declares_variable_matches_nested_path_against_output_basename():
+    code = {"data": {"type": "code", "outputs": {"result": {"type": "object"}}}}
+    assert declares_variable(code, "result") is True
+    assert declares_variable(code, "result.foo") is True
+    assert declares_variable(code, "other.foo") is False
+
+
+def test_agent_node_falls_back_to_default_declared_outputs():
+    agent = {"data": {"type": "agent"}}
+    assert declared_outputs(agent) == ["text", "files", "json"]
+    assert declares_variable(agent, "text") is True
+    assert declares_variable(agent, "files") is True
+    assert declares_variable(agent, "json") is True
+    assert declares_variable(agent, "mystery") is False
+
+
+def test_agent_node_uses_agent_declared_outputs_when_present():
+    agent = {
+        "data": {
+            "type": "agent",
+            "agent_declared_outputs": [{"name": "questions", "type": "array"}],
+        }
+    }
+    assert declared_outputs(agent) == ["questions"]
+    assert declares_variable(agent, "questions") is True
+    assert declares_variable(agent, "text") is False
+
+
 def test_declares_llm_text_output():
-    assert declares_variable({"data": {"type": "llm"}}, "text") is True
+    llm = {"data": {"type": "llm"}}
+    assert declares_variable(llm, "text") is True
+    assert declares_variable(llm, "reasoning_content") is True
+    assert declares_variable(llm, "usage") is True
+    assert declares_variable(llm, "usage.prompt_tokens") is True
+    assert declares_variable(llm, "reasoning_content.extra") is False
 
 
 def test_declared_outputs_match_declares_variable_except_dynamic_tools():
     llm = {"data": {"type": "llm"}}
-    assert declared_outputs(llm) == ["text"]
+    assert declared_outputs(llm) == ["text", "reasoning_content", "usage"]
     assert declares_variable(llm, "text") is True
     assert declares_variable(llm, "other") is False
 
@@ -25,12 +225,18 @@ def test_declared_outputs_match_declares_variable_except_dynamic_tools():
 
     tool = {"data": {"type": "tool"}}
     assert declared_outputs(tool) == []
-    # Tool outputs are dynamic: validation accepts any name even when none are listed.
+    # Missing catalogue schema still accepts any name.
     assert declares_variable(tool, "anything") is True
 
     tool_with_keys = {"data": {"type": "tool", "outputs": {"text": {}, "json": {}}}}
     assert declared_outputs(tool_with_keys) == ["text", "json"]
     assert declares_variable(tool_with_keys, "unlisted") is True
+
+    named = {"data": {"type": "tool", "provider_id": "google", "tool_name": "search"}}
+    schema = {("google", "search"): frozenset({"text"})}
+    assert declares_variable(named, "text", tool_output_names=schema) is True
+    assert declares_variable(named, "unlisted", tool_output_names=schema) is False
+    assert declares_variable(named, "unlisted", tool_output_names={}) is True
 
 
 from ._runner_test_support import (
@@ -51,14 +257,14 @@ from ._runner_test_support import (
 class TestSoleDeclaredVariable:
     """Human-input output inference feeds the variable-reference reconciler."""
 
-    def test_single_human_input_output_is_inferred(self):
+    def test_single_human_input_output_is_not_inferred_when_builtins_exist(self):
         node = {
             "data": {
                 "type": "human-input",
                 "inputs": [{"output_variable_name": "approval"}, "junk entry"],
             }
         }
-        assert VariableReferences._sole_declared_variable(node) == "approval"
+        assert VariableReferences._sole_declared_variable(node) is None
 
     def test_multiple_human_input_outputs_are_ambiguous(self):
         node = {
@@ -69,14 +275,121 @@ class TestSoleDeclaredVariable:
         }
         assert VariableReferences._sole_declared_variable(node) is None
 
-    def test_single_parameter_extractor_output_is_inferred(self):
+    def test_single_parameter_extractor_output_is_not_inferred_when_builtins_exist(self):
         node = {"data": {"type": "parameter-extractor", "parameters": [{"name": "city"}]}}
-        assert VariableReferences._sole_declared_variable(node) == "city"
+        assert VariableReferences._sole_declared_variable(node) is None
 
     def test_list_operator_declares_its_fixed_outputs(self):
         node = {"data": {"type": "list-operator"}}
         assert VariableReferences._declares_variable(node, "first_record") is True
         assert VariableReferences._declares_variable(node, "not_an_output") is False
+
+    def test_default_agent_outputs_are_ambiguous(self):
+        node = {"data": {"type": "agent"}}
+        assert VariableReferences._sole_declared_variable(node) is None
+
+    def test_single_agent_declared_output_is_inferred(self):
+        node = {"data": {"type": "agent", "agent_declared_outputs": [{"name": "questions"}]}}
+        assert VariableReferences._sole_declared_variable(node) == "questions"
+
+    def test_iteration_item_is_not_rewritten_to_output(self):
+        nodes = [
+            {"id": "start", "data": {"type": "start", "variables": []}},
+            {
+                "id": "node_iter",
+                "data": {
+                    "type": "iteration",
+                    "iterator_selector": ["start", "questions"],
+                    "output_selector": ["node_assemble", "result"],
+                },
+            },
+            {
+                "id": "node_retrieval",
+                "parentId": "node_iter",
+                "data": {
+                    "type": "knowledge-retrieval",
+                    "query_variable_selector": ["node_iter", "item"],
+                    "query_template": "{{#node_iter.item.question#}}",
+                },
+            },
+        ]
+
+        VariableReferences._reconcile_variable_references(nodes=nodes, mode="workflow")
+
+        child = nodes[2]["data"]
+        assert child["query_variable_selector"] == ["node_iter", "item"]
+        assert "{{#node_iter.item.question#}}" in child["query_template"]
+
+    def test_loop_variable_label_is_not_rewritten_to_output(self):
+        nodes = [
+            {"id": "start", "data": {"type": "start", "variables": []}},
+            {
+                "id": "loop1",
+                "data": {
+                    "type": "loop",
+                    "loop_variables": [{"label": "acc", "var_type": "string", "value_type": "constant", "value": ""}],
+                },
+            },
+            {
+                "id": "child",
+                "parentId": "loop1",
+                "data": {
+                    "type": "code",
+                    "variables": [{"variable": "x", "value_selector": ["loop1", "acc"]}],
+                    "outputs": {"result": {"type": "string"}},
+                },
+            },
+        ]
+
+        VariableReferences._reconcile_variable_references(nodes=nodes, mode="workflow")
+
+        assert nodes[2]["data"]["variables"][0]["value_selector"] == ["loop1", "acc"]
+
+    def test_parameter_extractor_builtin_is_not_rewritten_to_sole_parameter(self):
+        nodes = [
+            {"id": "start", "data": {"type": "start", "variables": [{"variable": "query"}]}},
+            {
+                "id": "pe1",
+                "data": {"type": "parameter-extractor", "parameters": [{"name": "topic"}], "query": ["start", "query"]},
+            },
+            {
+                "id": "end",
+                "data": {
+                    "type": "end",
+                    "outputs": [{"variable": "ok", "value_selector": ["pe1", "__is_success"]}],
+                },
+            },
+        ]
+
+        VariableReferences._reconcile_variable_references(nodes=nodes, mode="workflow")
+
+        assert nodes[2]["data"]["outputs"][0]["value_selector"] == ["pe1", "__is_success"]
+
+    def test_unwraps_single_wrapped_parameter_extractor_query(self):
+        nodes = [
+            {"id": "start", "data": {"type": "start", "variables": [{"variable": "query"}]}},
+            {"id": "pe1", "data": {"type": "parameter-extractor", "query": [["start", "query"]], "parameters": []}},
+        ]
+
+        VariableReferences._unwrap_single_wrapped_selectors(nodes=nodes)
+
+        assert nodes[1]["data"]["query"] == ["start", "query"]
+
+    def test_does_not_truncate_multi_selector_parameter_extractor_query(self):
+        nodes = [
+            {
+                "id": "pe1",
+                "data": {
+                    "type": "parameter-extractor",
+                    "query": [["llm_a", "text"], ["llm_b", "text"]],
+                    "parameters": [],
+                },
+            }
+        ]
+
+        VariableReferences._unwrap_single_wrapped_selectors(nodes=nodes)
+
+        assert nodes[0]["data"]["query"] == [["llm_a", "text"], ["llm_b", "text"]]
 
     def test_existing_llm_context_placeholder_is_left_untouched(self):
         llm_data = {"prompt_template": [{"role": "user", "text": "Answer using {{#context#}}"}]}
@@ -430,6 +743,8 @@ class TestWorkflowGeneratorVariableReferences:
                             "type": "code",
                             "title": "Code",
                             "variables": [{"variable": "query", "value_selector": ["sys,query"]}],
+                            "code_language": "python3",
+                            "code": "def main(query):\n    return {'result': query}",
                             "outputs": {"result": {"type": "string"}},
                         },
                     },
@@ -532,7 +847,7 @@ class TestWorkflowGeneratorVariableReferences:
                         "data": {
                             "type": "start",
                             "title": "Start",
-                            "variables": [{"variable": "query", "type": "paragraph"}],
+                            "variables": [{"variable": "query", "type": "paragraph", "label": "Query"}],
                         },
                     },
                     {
@@ -542,6 +857,8 @@ class TestWorkflowGeneratorVariableReferences:
                         "data": {
                             "type": "knowledge-retrieval",
                             "title": "Knowledge A",
+                            "retrieval_mode": "multiple",
+                            "multiple_retrieval_config": {"top_k": 3, "reranking_enable": False},
                             "dataset_ids": ["dataset-a"],
                             "query_variable_selector": ["node1", "query"],
                         },
@@ -553,6 +870,8 @@ class TestWorkflowGeneratorVariableReferences:
                         "data": {
                             "type": "knowledge-retrieval",
                             "title": "Knowledge B",
+                            "retrieval_mode": "multiple",
+                            "multiple_retrieval_config": {"top_k": 3, "reranking_enable": False},
                             "dataset_ids": ["dataset-b"],
                             "query_variable_selector": ["node1", "query"],
                         },
@@ -564,6 +883,7 @@ class TestWorkflowGeneratorVariableReferences:
                         "data": {
                             "type": "llm",
                             "title": "Synthesize",
+                            "model": {"provider": "openai", "name": "gpt-4o", "mode": "chat", "completion_params": {}},
                             "context": {"enabled": True, "variable_selector": ["node2", "result"]},
                             "prompt_template": [
                                 {
@@ -678,10 +998,20 @@ def test_declares_variable():
     # BuiltinNodeTypes is not imported directly, we need to mock or just use the generator method
 
     # LLM node
-    assert VariableReferences._declares_variable({"data": {"type": "llm"}}, "text") == True
-    llm_so = {"data": {"type": "llm", "structured_output": {"schema": {"properties": {"json_var": {}}}}}}
-    assert VariableReferences._declares_variable(llm_so, "json_var") == True
-    assert VariableReferences._declares_variable(llm_so, "other_var") == False
+    assert VariableReferences._declares_variable({"data": {"type": "llm"}}, "text") is True
+    assert VariableReferences._declares_variable({"data": {"type": "llm"}}, "reasoning_content") is True
+    assert VariableReferences._declares_variable({"data": {"type": "llm"}}, "usage") is True
+    llm_so = {
+        "data": {
+            "type": "llm",
+            "structured_output_enabled": True,
+            "structured_output": {"schema": {"properties": {"json_var": {}}}},
+        }
+    }
+    assert VariableReferences._declares_variable(llm_so, "structured_output") is True
+    assert VariableReferences._declares_variable(llm_so, "structured_output.json_var") is True
+    assert VariableReferences._declares_variable(llm_so, "json_var") is False
+    assert VariableReferences._declares_variable(llm_so, "other_var") is False
 
     # Code node
     assert (
@@ -691,6 +1021,7 @@ def test_declares_variable():
 
     # Knowledge retrieval
     assert VariableReferences._declares_variable({"data": {"type": "knowledge-retrieval"}}, "result") == True
+    assert VariableReferences._declares_variable({"data": {"type": "knowledge-retrieval"}}, "content") is False
 
     # Parameter extractor
     assert (
@@ -724,3 +1055,33 @@ def test_postprocess_graph_edges():
     # Just mocking methods to reach the sanitize part or call directly
     VariableReferences._sanitize_node_ids(nodes=graph["nodes"], edges=graph["edges"])
     assert graph["nodes"][1]["id"] != "bad id"
+
+
+def test_selector_type_reads_start_and_child_output_schema():
+    nodes = [
+        {
+            "id": "start",
+            "data": {
+                "type": "start",
+                "variables": [{"variable": "items", "type": "array[number]"}],
+            },
+        },
+        {
+            "id": "iter",
+            "data": {
+                "type": "iteration",
+                "iterator_selector": ["start", "items"],
+                "output_selector": ["child", "score"],
+            },
+        },
+        {
+            "id": "child",
+            "parentId": "iter",
+            "data": {
+                "type": "code",
+                "outputs": {"score": {"type": "number", "children": None}},
+            },
+        },
+    ]
+    assert VariableReferences.selector_type(nodes, ["start", "items"]) == "array[number]"
+    assert VariableReferences.selector_type(nodes, ["child", "score"]) == "number"

@@ -221,6 +221,14 @@
         </div>
 
         <div v-if="visionEnabled" class="vision-config-box">
+          <span class="sub-label">图像变量:</span>
+          <VarReferencePicker
+            v-model="visionVariableSelector"
+            :node-id="nodeId"
+            placeholder="选择 File / Array[File] / sys.files"
+            :read-only="readOnly"
+            :filter-var="isLLMVisionFileVariable"
+          />
           <span class="sub-label">解析清晰度:</span>
           <el-radio-group v-model="visionDetail" size="small" :disabled="readOnly">
             <el-radio-button label="low">低 (Low)</el-radio-button>
@@ -327,7 +335,6 @@
         <OutputVarList
           node-type="llm"
           :node-data="inputs"
-          :extra-vars="reasoningExtraVars"
         />
 
         <div v-if="inputs.structured_output_enabled" class="json-schema-box mt-3">
@@ -446,6 +453,8 @@ const {
   memoryWindowSize,
   visionEnabled,
   visionDetail,
+  visionVariableSelector,
+  isLLMVisionFileVariable,
   structuredOutputSchemaText,
   handleContextVarChange,
   handleMemoryChange,
@@ -478,12 +487,6 @@ const retryInterval = computed({
   get: () => inputs.retry_config?.retry_interval ?? 1000,
   set: retry_interval => updateRetryConfig({ retry_interval }),
 })
-
-const reasoningExtraVars = computed(() =>
-  inputs.reasoning_format === 'separated'
-    ? [{ variable: 'reasoning_content', type: 'string', des: '推理链文本' }]
-    : []
-)
 
 function onTitleChange(val) {
   inputs.title = val
@@ -758,6 +761,12 @@ const handleSelectNextNode = () => {
   border-radius: 6px;
   padding: 10px;
   margin-top: 6px;
+}
+
+.vision-config-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .is-rotate {

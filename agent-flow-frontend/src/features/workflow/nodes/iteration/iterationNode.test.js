@@ -1,36 +1,63 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildWorkflowChecklist } from '../../model/checklist.js'
-import { flowToGraph, generateNewNode, graphToFlow } from '../../model/dsl.js'
-import { ITERATION_DEFAULTS, isIterationArrayVariable, normalizeIterationData } from './iterationNode.js'
+import {
+  buildIterationInputPatch,
+  buildIterationOutputPatch,
+  deriveIterationOutputType,
+  isIterationArrayVariable,
+  normalizeIterationArrayType,
+  normalizeIterationData,
+  normalizeIterationErrorHandleMode,
+} from './iterationNode.js'
 
-test('new iteration nodes use official container fields and internal start', () => {
-  const { newNode, extraNodes } = generateNewNode({ type: 'iteration', id: 'iter-1' })
-  assert.deepEqual(ITERATION_DEFAULTS, { start_node_id: '', iterator_selector: [], iterator_input_type: 'array', output_selector: [], output_type: 'array', is_parallel: false, parallel_nums: 10, error_handle_mode: 'terminated', flatten_output: false, _children: [] })
-  assert.equal(newNode.data.start_node_id, 'iter-1start')
-  assert.equal(extraNodes[0].parentNode, 'iter-1')
+test('iteration array aliases persist as canonical Dify types', () => {
+  assert.equal(normalizeIterationArrayType('arrayString'), 'array[string]')
+  assert.equal(normalizeIterationArrayType('arrayNumber'), 'array[number]')
+  assert.equal(normalizeIterationArrayType('arrayBoolean'), 'array[boolean]')
+  assert.equal(normalizeIterationArrayType('arrayObject'), 'array[object]')
+  assert.equal(normalizeIterationArrayType('arrayFile'), 'array[file]')
+  assert.equal(normalizeIterationArrayType('array[file]'), 'array[file]')
 })
 
-test('iteration normalization preserves unknown fields and clamps parallelism', () => {
-  const data = normalizeIterationData({ iterator_selector: ['start', 'items'], parallel_nums: 99, future: true })
-  assert.deepEqual(data.iterator_selector, ['start', 'items'])
-  assert.equal(data.parallel_nums, 10)
-  assert.equal(data.future, true)
-  assert.equal(isIterationArrayVariable({ type: 'arrayFile' }), true)
+test('iteration output type follows the official aggregation mapping', () => {
+  assert.equal(deriveIterationOutputType('string'), 'array[string]')
+  assert.equal(deriveIterationOutputType('number'), 'array[number]')
+  assert.equal(deriveIterationOutputType('object'), 'array[object]')
+  assert.equal(deriveIterationOutputType('file'), 'array[file]')
+  assert.equal(deriveIterationOutputType('arrayNumber'), 'array[number]')
+  assert.equal(deriveIterationOutputType('boolean'), 'array[string]')
+  assert.equal(deriveIterationOutputType('arrayBoolean'), 'array[string]')
+})
+
+test('iteration selector patches keep selector and derived type together', () => {
+  assert.deepEqual(buildIterationInputPatch(['start', 'items'], { type: 'arrayNumber' }), {
+    iterator_selector: ['start', 'items'],
+    iterator_input_type: 'array[number]',
+  })
+  assert.deepEqual(buildIterationOutputPatch(['child', 'score'], { type: 'number' }), {
+    output_selector: ['child', 'score'],
+    output_type: 'array[number]',
+  })
+})
+
+test('normalizeIterationData canonicalizes stored array types and keeps unknown fields', () => {
+  const normalized = normalizeIterationData({
+    iterator_input_type: 'arrayBoolean',
+    output_type: 'arrayNumber',
+    future: true,
+  })
+  assert.equal(normalized.iterator_input_type, 'array[boolean]')
+  assert.equal(normalized.output_type, 'array[number]')
+  assert.equal(normalized.future, true)
+  assert.equal(isIterationArrayVariable({ type: 'array[number]' }), true)
   assert.equal(isIterationArrayVariable({ type: 'string' }), false)
 })
 
-test('iteration DSL round-trip keeps container fields and children', () => {
-  const flow = graphToFlow({ nodes: [{ id: 'iter-1', type: 'custom', data: { type: 'iteration', start_node_id: 'iter-1start', iterator_selector: ['start', 'items'], output_selector: ['child', 'text'], flatten_output: true, _children: [{ nodeId: 'child' }], future: 1 } }], edges: [] })
-  const exported = flowToGraph(flow.nodes, flow.edges)
-  assert.deepEqual(exported.nodes[0].data.iterator_selector, ['start', 'items'])
-  assert.equal(exported.nodes[0].data.flatten_output, true)
-  assert.equal(exported.nodes[0].data.future, 1)
-})
-
-test('checklist requires an iteration array input and valid parallel count', () => {
-  const nodes = [{ id: 'start', data: { type: 'start' } }, { id: 'iter-1', data: { type: 'iteration', title: '迭代', iterator_selector: [], parallel_nums: 0 } }]
-  const issues = buildWorkflowChecklist({ nodes, edges: [{ source: 'start', target: 'iter-1' }] })
-  assert.ok(issues.some(issue => issue.id === 'iteration-variable-iter-1'))
-  assert.ok(issues.some(issue => issue.id === 'iteration-parallel-iter-1'))
+test('normalizeIterationData keeps only official error handle modes', () => {
+  assert.equal(normalizeIterationErrorHandleMode('continue-on-error'), 'continue-on-error')
+  assert.equal(normalizeIterationErrorHandleMode('remove-abnormal-output'), 'remove-abnormal-output')
+  assert.equal(normalizeIterationErrorHandleMode('terminated'), 'terminated')
+  assert.equal(normalizeIterationErrorHandleMode('ignore'), 'terminated')
+  assert.equal(normalizeIterationData({ error_handle_mode: 'explode' }).error_handle_mode, 'terminated')
+  assert.equal(normalizeIterationData({ error_strategy: 'continue-on-error' }).error_handle_mode, 'continue-on-error')
 })

@@ -11,7 +11,7 @@ from core.workflow.generator.agent.compaction import (
     slim_segment,
 )
 from core.workflow.generator.agent.types import AgentMessage, AgentMessageEventType, AgentMessageRole, AgentSession
-from core.workflow.generator.planner_context import PlannerContextLimitError
+from core.workflow.generator.pipeline.planner_context_values import PlannerContextLimitError
 from graphon.model_runtime.entities.message_entities import AssistantPromptMessage, ToolPromptMessage
 
 
@@ -180,11 +180,11 @@ def test_assemble_appends_active_skill_after_situation(session_with_messages) ->
         system_text="system",
         limits=_limits(input_limit=10_000),
         token_counter=lambda msgs: 100,
-        skill_text="# Active playbook: create-from-scratch\nread_graph first",
+        skill_text="# Active skills\n\n## create-from-scratch\nread_graph first",
     )
     contents = [getattr(m, "content", "") for m in assembly.messages]
     assert contents[-2] == "# Current situation\ncandidate_revision: 1"
-    assert contents[-1] == "# Active playbook: create-from-scratch\nread_graph first"
+    assert contents[-1] == "# Active skills\n\n## create-from-scratch\nread_graph first"
 
 
 def test_level1_does_not_rewrite_live_prompt(session_with_read_node_payload) -> None:
@@ -297,6 +297,42 @@ def test_slim_segment_compresses_read_node_copy_only(session_with_read_node_payl
     assert original == session_with_read_node_payload.messages
 
 
+def test_slim_segment_keeps_inspected_tool_binding_but_evicts_verbose_schema() -> None:
+    session = _session(
+        [
+            _message(
+                1,
+                "tool_call",
+                "assistant",
+                {
+                    "id": "inspect-1",
+                    "name": "inspect_tool",
+                    "arguments": {"provider_name": "image", "tool_name": "generate"},
+                },
+            ),
+            _message(
+                2,
+                "tool_result",
+                "assistant",
+                {
+                    "tool_call_id": "inspect-1",
+                    "name": "inspect_tool",
+                    "content": {
+                        "binding": {"provider_name": "image", "tool_name": "generate"},
+                        "parameters": [{"name": "prompt", "description": "verbose schema detail" * 50}],
+                    },
+                },
+            ),
+        ]
+    )
+
+    rendered = str(slim_segment(session.messages))
+
+    assert "[COMPRESSED] inspected tool image/generate" in rendered
+    assert "call inspect_tool to reload" in rendered
+    assert "verbose schema detail" not in rendered
+
+
 def test_slim_segment_points_acceptance_trace_at_inspect_attempt() -> None:
     session = _session(
         [
@@ -403,6 +439,7 @@ def test_over_limit_hard_drops_unprotected_prefix_without_compactor() -> None:
             ),
         ]
     )
+
     def counter(msgs: list) -> int:
         text = "\n".join(str(getattr(message, "content", "") or "") for message in msgs)
         if "EARLY_USER" in text or "OLD_BLOB" in text:

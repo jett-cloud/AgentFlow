@@ -18,7 +18,7 @@ from core.workflow.nodes.human_input.callback import (
 )
 from core.workflow.nodes.human_input.entities import HumanInputNodeData, UserActionConfig
 from core.workflow.nodes.human_input.enums import HumanInputFormStatus
-from core.workflow.system_variables import build_system_variables
+from core.workflow.runtime.variables.system_variables import build_system_variables
 from graphon.enums import WorkflowType
 from graphon.graph import Graph
 from graphon.graph_engine import GraphEngine

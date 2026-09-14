@@ -1,6 +1,6 @@
 import pytest
 
-from core.workflow.human_input_policy import (
+from core.workflow.nodes.human_input.human_input_policy import (
     HumanInputSurface,
     get_preferred_form_token,
     is_recipient_type_allowed_for_surface,

@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import delete
 
 from core.db.session_factory import session_factory
-from core.workflow.file_reference import resolve_file_record_id
+from core.workflow.runtime.adapters.file_reference import resolve_file_record_id
 from core.workflow.nodes.agent_v2.output_file_rebacker import reback_tool_file_output
 from graphon.file import FileTransferMethod, FileType
 from models.tools import ToolFile

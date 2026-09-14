@@ -2,7 +2,7 @@ import pytest
 
 from configs import dify_config
 from core.helper.ssrf_proxy import ssrf_proxy
-from core.workflow.system_variables import default_system_variables
+from core.workflow.runtime.variables.system_variables import default_system_variables
 from graphon.file.file_manager import file_manager
 from graphon.nodes.http_request import (
     BodyData,

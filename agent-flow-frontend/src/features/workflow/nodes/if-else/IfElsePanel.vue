@@ -41,8 +41,8 @@
               :disabled="readOnly"
               @change="(val) => handleUpdateLogicalOperator(cIdx, val)"
             >
-              <el-radio-button label="and">AND (且)</el-radio-button>
-              <el-radio-button label="or">OR (或)</el-radio-button>
+              <el-radio-button value="and">AND (且)</el-radio-button>
+              <el-radio-button value="or">OR (或)</el-radio-button>
             </el-radio-group>
           </div>
 
@@ -63,7 +63,7 @@
               type="button" 
               class="icon-action-btn danger" 
               title="删除此分支"
-              @click="handleRemoveElifCase(cIdx)"
+              @click="handleRemoveElifCase(caseItem.case_id)"
             >
               <el-icon><Delete /></el-icon>
             </button>
@@ -74,7 +74,7 @@
         <div class="conditions-list">
           <div 
             v-for="(cond, condIdx) in caseItem.conditions" 
-            :key="condIdx"
+            :key="cond.id || condIdx"
             class="condition-row-card"
           >
             <!-- (1) 变量输入路径 (Variable Selector) -->
@@ -108,19 +108,16 @@
               </el-select>
 
               <!-- 如果该比较符需要填比较值，展示值输入框 -->
-              <el-input 
-                v-if="checkNeedValue(cond.comparison_operator)" 
-                :model-value="cond.value" 
-                placeholder="比较目标值" 
-                size="small"
-                class="val-input"
-                :disabled="readOnly"
-                @input="(val) => handleUpdateCondition(cIdx, condIdx, 'value', val)"
+              <IfElseConditionValue
+                v-if="isIfElseOperatorValueRequired(cond.comparison_operator) && !isArrayFileFilter(cond)"
+                :condition="cond"
+                :read-only="readOnly"
+                @update:value="(val) => handleUpdateCondition(cIdx, condIdx, 'value', val)"
               />
 
               <!-- 删除此规则按钮 -->
               <button 
-                v-if="!readOnly && caseItem.conditions.length > 1" 
+                v-if="!readOnly" 
                 type="button" 
                 class="remove-cond-btn" 
                 title="删除条件"
@@ -129,6 +126,12 @@
                 <el-icon><Delete /></el-icon>
               </button>
             </div>
+            <IfElseFileConditions
+              v-if="isArrayFileFilter(cond)"
+              :condition="cond"
+              :read-only="readOnly"
+              @update:sub-variable-condition="(val) => handleUpdateCondition(cIdx, condIdx, 'sub_variable_condition', val)"
+            />
           </div>
         </div>
       </div>
@@ -167,6 +170,9 @@ import { Close, Plus, Delete } from '@element-plus/icons-vue'
 import BlockIcon from '../base/BlockIcon.vue'
 import NextStep from '../shared/NextStep.vue'
 import VarReferencePicker from '../shared/VarReferencePicker.vue'
+import IfElseConditionValue from './IfElseConditionValue.vue'
+import IfElseFileConditions from './IfElseFileConditions.vue'
+import { isIfElseOperatorValueRequired } from './ifElseNode.js'
 import { useIfElseConfig } from './useIfElseConfig.js'
 
 const props = defineProps({
@@ -201,10 +207,8 @@ const notifyChange = () => {
   emit('update:nodeData', { ...props.nodeData })
 }
 
-// 判断比较运算符是否需要输入值
-const checkNeedValue = (opValue) => {
-  return !['empty', 'not empty', 'is null', 'is not null'].includes(opValue)
-}
+const isArrayFileFilter = condition => condition.varType === 'arrayFile'
+  && ['contains', 'not contains', 'all of'].includes(condition.comparison_operator)
 
 const handleSelectNextNode = () => {
   ElMessage.info('触发添加下一个节点操作')

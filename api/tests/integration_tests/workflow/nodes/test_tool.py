@@ -7,8 +7,8 @@ import pytest
 from core.app.entities.app_invoke_entities import InvokeFrom, UserFrom
 from core.tools.utils.configuration import ToolParameterConfigurationManager
 from core.workflow.node_factory import DifyNodeFactory
-from core.workflow.node_runtime import DifyToolNodeRuntime
-from core.workflow.system_variables import build_system_variables
+from core.workflow.runtime.adapters.tools import DifyToolNodeRuntime
+from core.workflow.runtime.variables.system_variables import build_system_variables
 from graphon.enums import WorkflowNodeExecutionStatus
 from graphon.graph import Graph
 from graphon.node_events import StreamCompletedEvent

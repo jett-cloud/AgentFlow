@@ -3,8 +3,8 @@
   "fake_acceptance_fail_first": true,
   "initial_graph": {
     "nodes": [
-      {"id": "start", "data": {"type": "start", "title": "开始", "desc": "", "variables": []}},
-      {"id": "end", "data": {"type": "end", "title": "结束", "desc": ""}}
+      {"id": "start", "data": {"type": "start", "title": "开始", "desc": "", "variables": [{"variable": "query", "label": "query", "type": "text-input"}]}},
+      {"id": "end", "data": {"type": "end", "title": "结束", "desc": "", "outputs": [{"variable": "answer", "value_selector": ["start", "query"], "value_type": "string"}]}}
     ],
     "edges": [],
     "viewport": {"x": 0, "y": 0, "zoom": 0.7}

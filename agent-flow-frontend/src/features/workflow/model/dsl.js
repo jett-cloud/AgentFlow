@@ -51,6 +51,7 @@ import { normalizeNoteData } from '../nodes/note/noteNode.js'
 import { normalizeStartPlaceholderData } from '../nodes/start-placeholder/startPlaceholderNode.js'
 import { normalizeIterationStartData } from '../nodes/iteration-start/iterationStartNode.js'
 import { normalizeLoopStartData } from '../nodes/loop-start/loopStartNode.js'
+import { normalizeStartNodeData } from '../nodes/t/startNode.js'
 
 /** 对齐 Dify START_INITIAL_POSITION */
 export const START_INITIAL_POSITION = { x: 80, y: 282 }
@@ -76,6 +77,8 @@ export function normalizeVariableNodeData(data = {}) {
 /** Normalize known legacy node data while preserving unrecognized Dify fields. */
 export function normalizeNodeData(data = {}) {
   const normalized = normalizeVariableNodeData(data)
+  if (normalized.type === BlockEnum.Start)
+    return normalizeStartNodeData(normalized)
   if (normalized.type === BlockEnum.ListFilter)
     return normalizeListOperatorData(normalized)
   if (normalized.type === BlockEnum.Code)

@@ -339,6 +339,17 @@ def _get_task_id(event: str | Mapping[str, Any] | BaseModel) -> str | None:
     return task_id if isinstance(task_id, str) and task_id else None
 
 
+def _get_error_message(event: str | Mapping[str, Any] | BaseModel) -> str | None:
+    if isinstance(event, BaseModel):
+        message = getattr(event, "message", None)
+    elif isinstance(event, Mapping):
+        message = event.get("message")
+    else:
+        return None
+
+    return message if isinstance(message, str) and message else None
+
+
 def _publish_streaming_response(
     response_stream: Generator[str | Mapping[str, Any] | BaseModel, None, None],
     workflow_run_id: str | uuid.UUID,
@@ -406,6 +417,7 @@ def _publish_streaming_response(
     started_published = False
     terminal_published = False
     last_task_id = normalized_workflow_run_id
+    last_error_message: str | None = None
 
     try:
         for event in response_stream:
@@ -429,6 +441,8 @@ def _publish_streaming_response(
                 started_published = True
             elif event_name in terminal_events:
                 terminal_published = True
+            elif event_name == "error":
+                last_error_message = _get_error_message(event)
     except Exception as exc:
         if not terminal_published:
             logger.exception(
@@ -448,7 +462,7 @@ def _publish_streaming_response(
             normalized_workflow_run_id,
         )
         _publish_failed_terminal_event(
-            error_message=unexpected_stream_end_message,
+            error_message=last_error_message or unexpected_stream_end_message,
             task_id=last_task_id,
             publish_started=not started_published,
         )

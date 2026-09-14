@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from core.workflow.system_variables import (
+from core.workflow.runtime.variables.system_variables import (
     build_system_variables,
     default_system_variables,
     get_node_creation_preload_selectors,

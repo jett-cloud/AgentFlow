@@ -15,7 +15,7 @@ from core.app.layers.pause_state_persist_layer import (
     _WorkflowGenerateEntityWrapper,
 )
 from core.workflow.nodes.human_input.pause_reason import HumanInputRequired
-from core.workflow.system_variables import SystemVariableKey
+from core.workflow.runtime.variables.system_variables import SystemVariableKey
 from graphon.entities.pause_reason import HitlRequired, SchedulingPause
 from graphon.filters import GraphEventFilterContext, ResponseStreamFilter
 from graphon.graph_engine.entities.commands import GraphEngineCommand

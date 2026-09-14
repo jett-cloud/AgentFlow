@@ -23,7 +23,7 @@ from controllers.openapi._errors import HumanInputFormNotFound, RecipientSurface
 from controllers.openapi._models import FormSubmitResponse, HumanInputFormDefinitionResponse
 from controllers.openapi.auth.composition import auth_router
 from controllers.openapi.auth.data import AuthData, CallerKind, RBACRequirement
-from core.workflow.human_input_policy import (
+from core.workflow.nodes.human_input.human_input_policy import (
     HumanInputSurface,
     is_recipient_type_allowed_for_surface,
 )

@@ -15,8 +15,8 @@ from core.tools.errors import ToolInvokeError
 from core.tools.tool_engine import ToolEngine
 from core.tools.tool_manager import ToolManager
 from core.tools.utils.message_transformer import ToolFileMessageTransformer
-from core.workflow.node_runtime import DifyToolNodeRuntime
-from core.workflow.system_variables import build_system_variables
+from core.workflow.runtime.adapters.tools import DifyToolNodeRuntime
+from core.workflow.runtime.variables.system_variables import build_system_variables
 from graphon.model_runtime.entities.llm_entities import LLMUsage
 from graphon.nodes.tool.entities import ToolNodeData, ToolProviderType
 from graphon.nodes.tool.exc import ToolRuntimeInvocationError
@@ -340,8 +340,8 @@ def test_resolve_provider_icons_prefers_builtin_tool_icons(runtime: DifyToolNode
     )
 
     with (
-        patch("core.workflow.node_runtime.PluginInstaller") as installer_cls,
-        patch("core.workflow.node_runtime.BuiltinToolManageService.list_builtin_tools", return_value=[builtin_tool]),
+        patch("core.workflow.runtime.adapters.tools.PluginInstaller") as installer_cls,
+        patch("core.workflow.runtime.adapters.tools.BuiltinToolManageService.list_builtin_tools", return_value=[builtin_tool]),
     ):
         installer_cls.return_value.list_plugins.return_value = [plugin]
 
@@ -353,8 +353,8 @@ def test_resolve_provider_icons_prefers_builtin_tool_icons(runtime: DifyToolNode
 
 def test_resolve_provider_icons_returns_default_when_provider_is_unknown(runtime: DifyToolNodeRuntime) -> None:
     with (
-        patch("core.workflow.node_runtime.PluginInstaller") as installer_cls,
-        patch("core.workflow.node_runtime.BuiltinToolManageService.list_builtin_tools", return_value=[]),
+        patch("core.workflow.runtime.adapters.tools.PluginInstaller") as installer_cls,
+        patch("core.workflow.runtime.adapters.tools.BuiltinToolManageService.list_builtin_tools", return_value=[]),
     ):
         installer_cls.return_value.list_plugins.return_value = []
 

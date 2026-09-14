@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.workflow.file_reference import build_file_reference
+from core.workflow.runtime.adapters.file_reference import build_file_reference
 from fields import conversation_fields, message_fields
 from fields.file_fields import FileResponse, FileWithSignedUrl, RemoteFileInfo, UploadConfig
 from graphon.file import File, FileTransferMethod, FileType

@@ -26,6 +26,15 @@ export function nextConversationIdAfterDelete(conversations, deletedId, currentI
 export function canApplyWorkflowAssistCandidate(candidate, appMode) {
   const run = candidate?.latest_run
   const evidence = candidate?.completion_evidence
+  const usesContract = evidence?.contract_protocol_version != null
+  const contractEvidenceIsComplete = !usesContract || Boolean(
+    Number(evidence.contract_protocol_version) === 1
+    && Number(evidence.contract_revision) > 0
+    && SHA256_PATTERN.test(String(evidence.contract_hash || ''))
+    && SHA256_PATTERN.test(String(evidence.graph_hash || ''))
+    && Number(evidence.validation_version) > 0
+    && candidate?.contract_report?.passed === true,
+  )
   return Boolean(
     candidate?.graph
     && !candidate?.active_run
@@ -36,8 +45,31 @@ export function canApplyWorkflowAssistCandidate(candidate, appMode) {
     && Number(evidence.candidate_revision) === Number(candidate.revision)
     && evidence.candidate_base_hash === candidate.base_hash
     && evidence.app_mode === appMode
-    && evidence.assertion === COMPLETION_ASSERTION,
+    && evidence.assertion === COMPLETION_ASSERTION
+    && contractEvidenceIsComplete
   )
+}
+
+export function workflowContractReportPresentation(candidate) {
+  const report = candidate?.contract_report
+  if (!report || !Array.isArray(report.checks)) {
+    return {
+      visible: false,
+      level: 'unavailable',
+      summary: { satisfied: 0, missing: 0, conflict: 0, unverified: 0 },
+      issues: [],
+    }
+  }
+  const summary = Object.fromEntries(
+    ['satisfied', 'missing', 'conflict', 'unverified']
+      .map(status => [status, Math.max(0, Number(report.summary?.[status]) || 0)]),
+  )
+  return {
+    visible: true,
+    level: report.passed ? (summary.unverified > 0 ? 'partially_verified' : 'verified') : 'blocked',
+    summary,
+    issues: report.checks.filter(check => check?.status !== 'satisfied'),
+  }
 }
 
 export function workflowAssistApplyPresentation(candidate, appMode, applying = false) {

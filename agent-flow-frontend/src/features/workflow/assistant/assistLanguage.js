@@ -1,5 +1,11 @@
 const COPY = {
   en: {
+    liveAcceptanceTitle: 'Authorize a live trial',
+    liveAcceptanceNotice: 'This trial uses real models, agents and the configured tools listed below. Provider charges and external writes may occur. Agent calls include its configured tools and MCP capabilities. Approval applies only to this candidate version and one execution.',
+    liveAcceptanceEffects: 'May change external data',
+    liveAcceptanceApprove: 'Authorize one live trial',
+    liveAcceptanceSimulate: 'Use simulated checks only',
+    liveAcceptanceBudget: request => `One execution, up to ${request.max_steps} workflow steps and a ${request.max_seconds}s engine time limit. In-flight provider requests may finish later. Nested agent calls use their configured limits; this is not a price guarantee.`,
     title: 'Workflow Agent',
     workflowSubtitle: 'Workflow assistant',
     chatflowSubtitle: 'Chatflow assistant',
@@ -13,6 +19,11 @@ const COPY = {
     restoreDraft: 'Restore draft',
     close: 'Close Workflow Agent',
     loading: 'Loading…',
+    restoringHistory: 'Restoring conversation history and run status. Sending is temporarily disabled.',
+    historyRecoveryFailed: 'History could not be restored. Retry loading or explicitly start a new conversation.',
+    retryHistory: 'Retry loading history',
+    authenticationRequired: 'The live connection needs a new login. This does not mean the task failed; sign in again to restore its status and messages.',
+    signInAgain: 'Sign in again',
     untitledConversation: 'Untitled conversation',
     noConversations: 'No conversations yet',
     emptyTitle: 'Describe how you want to change the workflow',
@@ -73,6 +84,7 @@ const COPY = {
       missingPlan: 'Planning finished without a plan result. Try again.',
     },
     errorCodes: {
+      provider_error: 'The model provider could not complete this request. Try again or switch models.',
       PLANNER_CONTEXT_LIMIT: 'The planning context exceeds this model\'s limit. Shorten the request or switch to a model with a larger context window.',
       PLANNER_ACTION_LIMIT: 'The planner reached this Run\'s action limit. Try again or split the request into smaller steps.',
       PLANNER_NO_PROGRESS: 'The planner repeated the same operation without progress. Try again or add clearer constraints.',
@@ -139,8 +151,34 @@ const COPY = {
       transport_disconnect: 'Connection interrupted; the saved candidate is preserved.',
     },
     staleApplyNotice: 'The canvas changed, so the candidate is based on an older version. Continue the conversation to update it from the current canvas.',
+    contractValidationTitle: 'Contract reconciliation',
+    contractValidationSummary: '{satisfied} passed · {missing} missing · {conflict} conflicts · {unverified} unverified',
+    contractValidationLevels: {
+      verified: 'Statically verified',
+      partially_verified: 'Static checks passed; effects unverified',
+      blocked: 'Blocked',
+      unavailable: 'Unavailable',
+    },
+    contractValidationCategories: {
+      node: 'Node',
+      input: 'Variable input',
+      output: 'Variable output',
+      final_output: 'Final output',
+      edge: 'Connection',
+      resource: 'Resource',
+      edit_scope: 'Edit scope',
+      contract: 'Contract',
+      graph: 'Graph',
+      requirement: 'Acceptance check',
+    },
   },
   'zh-Hans': {
+    liveAcceptanceTitle: '授权真实试运行',
+    liveAcceptanceNotice: '本次将调用下列真实模型、Agent 和已配置工具，可能产生费用或修改外部数据。Agent 调用包含其配置的工具和 MCP 能力。授权仅适用于当前候选图版本的一次执行。',
+    liveAcceptanceEffects: '可能修改外部数据',
+    liveAcceptanceApprove: '授权一次真实试运行',
+    liveAcceptanceSimulate: '仅做模拟检查',
+    liveAcceptanceBudget: request => `限一次执行，最多 ${request.max_steps} 个工作流步骤，引擎时限 ${request.max_seconds} 秒。已发出的请求可能稍后才结束；Agent 内部调用遵循其配置上限，此限制不保证具体费用。`,
     title: '工作流 Agent',
     workflowSubtitle: 'Workflow 助手',
     chatflowSubtitle: 'Chatflow 助手',
@@ -154,6 +192,11 @@ const COPY = {
     restoreDraft: '恢复草稿',
     close: '关闭工作流 Agent',
     loading: '加载中…',
+    restoringHistory: '正在恢复历史对话和运行状态，暂时不能发送消息。',
+    historyRecoveryFailed: '历史对话恢复失败，请重试加载，或主动新建对话。',
+    retryHistory: '重新加载历史',
+    authenticationRequired: '实时连接的登录凭证已失效，不代表任务执行失败。请重新登录，恢复原任务的状态和消息。',
+    signInAgain: '重新登录',
     untitledConversation: '未命名会话',
     noConversations: '还没有历史会话',
     emptyTitle: '描述你想如何调整工作流',
@@ -214,6 +257,7 @@ const COPY = {
       missingPlan: '规划已结束但没有收到计划结果，请重试。',
     },
     errorCodes: {
+      provider_error: '模型服务未能完成请求，请重试或切换模型。',
       PLANNER_CONTEXT_LIMIT: '规划上下文已超过当前模型上限。请缩短需求，或切换到上下文更长的模型。',
       PLANNER_ACTION_LIMIT: '规划器已达到本轮动作上限。可以重试，或把需求拆成更小的步骤。',
       PLANNER_NO_PROGRESS: '规划器连续执行了相同操作，没有取得新进展。请重试或补充更明确的约束。',
@@ -280,6 +324,26 @@ const COPY = {
       transport_disconnect: '连接中断；候选图保留。',
     },
     staleApplyNotice: '画布已变，候选基于旧版。可以继续发消息按当前画布改。',
+    contractValidationTitle: '合同对账',
+    contractValidationSummary: '已满足 {satisfied} · 缺失 {missing} · 冲突 {conflict} · 尚未验证 {unverified}',
+    contractValidationLevels: {
+      verified: '静态校验通过',
+      partially_verified: '静态校验通过，业务效果尚未验证',
+      blocked: '存在阻塞项',
+      unavailable: '暂无报告',
+    },
+    contractValidationCategories: {
+      node: '节点',
+      input: '输入变量',
+      output: '输出变量',
+      final_output: '最终输出',
+      edge: '控制连线',
+      resource: '资源',
+      edit_scope: '编辑范围',
+      contract: '合同',
+      graph: '工作流图',
+      requirement: '验收检查',
+    },
   },
 }
 
@@ -290,10 +354,24 @@ export function detectAssistLanguage(instruction) {
 }
 
 export function detectRecoveredAssistLanguage(messages, fallback = 'zh-Hans') {
-  const latestUserMessage = [...(messages || [])]
-    .reverse()
-    .find(message => message?.role === 'user' && String(message?.text || '').trim())
-  return latestUserMessage ? detectAssistLanguage(latestUserMessage.text) : fallback
+  let language
+  for (const message of messages || []) {
+    if (message?.role !== 'user')
+      continue
+    const text = String(message.text || '').trim()
+    if (!text)
+      continue
+    // Match the backend conversation resolver; model names are not locale changes.
+    const directive = text.match(/^(?:请\s*)?(?:(?:改用|切换到|使用|用)\s*(中文|英文|英语)|(?:please\s+)?(?:respond|reply|answer|continue)\s+in\s+(Chinese|English)|(?:please\s+)?(?:switch\s+to|use)\s+(Chinese|English))/i)
+    if (directive) {
+      const target = directive.slice(1).find(Boolean).toLowerCase()
+      language = ['中文', 'chinese'].includes(target) ? 'zh-Hans' : 'en'
+    }
+    else if (!language) {
+      language = detectAssistLanguage(text)
+    }
+  }
+  return language || fallback
 }
 
 export function assistCopy(language = 'zh-Hans') {

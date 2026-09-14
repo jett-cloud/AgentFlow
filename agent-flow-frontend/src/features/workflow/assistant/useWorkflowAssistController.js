@@ -12,12 +12,15 @@ import {
 } from './assistStreamMessage.js'
 import { abortStatusText } from './assistStateMachine.js'
 import { clarificationAnswerText } from './assistClarification.js'
+import { liveAcceptanceApproval } from './assistLiveAcceptance.js'
 import {
   createWorkflowAssistRunState,
+  hydrateWorkflowAssistTimeline,
   reduceWorkflowAssistRunEvent,
-  reduceWorkflowAssistTimeline,
+  settleHydratedAssistRunState,
   workflowAssistRunCursor,
 } from './workflowAssistRunReducer.js'
+import { buildAssistHistoryMessages } from './assistConversationHistory.js'
 
 function clarificationIdOf(message) {
   return message?.clarification?.clarification_id || ''
@@ -101,6 +104,23 @@ function normalizePreparationResult(result) {
   return { accepted: result !== false, conversationId: '' }
 }
 
+function latestTurnHasAssistantText(messages) {
+  if (!Array.isArray(messages) || !messages.length)
+    return false
+  let latestUserIndex = -1
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === 'user') {
+      latestUserIndex = index
+      break
+    }
+  }
+  return messages.slice(latestUserIndex + 1).some(message => (
+    message?.role === 'assistant'
+    && message?.kind === 'assistant_text'
+    && String(message.text || '').trim()
+  ))
+}
+
 const TERMINAL_EVENTS = new Set(['waiting_user', 'done', 'failed', 'aborted', 'error', 'turn_complete'])
 const TERMINAL_RUN_STATUSES = new Set(['waiting_user', 'done', 'failed', 'aborted', 'error', 'turn_complete'])
 const DISPATCHED_EVENTS = new Set(['tool_result', 'waiting_user', 'done', 'failed', 'aborted', 'error', 'turn_complete'])
@@ -166,6 +186,7 @@ export function useWorkflowAssistController({
   selectConversation: selectConversationImpl = async () => {},
   newConversation: newConversationImpl = async () => {},
   loadConversations = null,
+  loadConversation = null,
   loadTimeline = null,
   loadCandidate = null,
   loadRunSummaries = null,
@@ -174,6 +195,7 @@ export function useWorkflowAssistController({
   onCandidate = () => {},
   onRunState = () => {},
   onTimelineRecovered = () => {},
+  onRecoveryState = () => {},
   setTimeoutImpl = globalThis.setTimeout?.bind(globalThis),
   clearTimeoutImpl = globalThis.clearTimeout?.bind(globalThis),
   waitForReconnect = waitForAbortableDelay,
@@ -181,6 +203,7 @@ export function useWorkflowAssistController({
   let requestSequence = 0
   let turnAttemptSequence = 0
   let conversationSequence = 0
+  let recoveryState = 'ready'
   let activeAbortController = null
   let lastTurn = null
   let runState = createWorkflowAssistRunState(messages.value, readRef(language) || 'zh-Hans')
@@ -197,6 +220,11 @@ export function useWorkflowAssistController({
   let acceptedCandidateVersion = 0
   let candidateContext = null
   let staleCandidateBudget = null
+
+  function setRecoveryState(next) {
+    recoveryState = next
+    onRecoveryState(next)
+  }
 
   function isCurrentRequest(requestId) {
     return requestId === requestSequence
@@ -692,6 +720,15 @@ export function useWorkflowAssistController({
   }
 
   async function handleFailure(errors, isCurrent = () => true) {
+    if (!isCurrent())
+      return
+    if (errors.some(error => error.code === 'ASSIST_AUTH_REQUIRED')) {
+      // Loss of the subscription is not a durable Run failure.
+      messages.value = finalizeAssistStreamMessages(messages.value)
+      onErrors([])
+      setRecoveryState('auth_required')
+      return
+    }
     messages.value = failAssistActivity(messages.value)
     reportRunStatus('error', { source: 'client_error' })
     dispatch({
@@ -816,6 +853,8 @@ export function useWorkflowAssistController({
   }
 
   async function retryFailedStep() {
+    if (recoveryState !== 'ready')
+      return { accepted: false }
     if (!retryRun || !streamRunEvents)
       return { accepted: false }
     const failedStepId = String(state.value.failedStepId || '').trim()
@@ -844,7 +883,9 @@ export function useWorkflowAssistController({
     })
   }
 
-  async function submitMessage(message, { onAccepted = () => {}, references } = {}) {
+  async function submitMessage(message, { onAccepted = () => {}, references, liveAcceptanceRequestId } = {}) {
+    if (recoveryState !== 'ready')
+      return { accepted: false }
     const text = String(message || '').trim()
     if (!text)
       return { accepted: false }
@@ -901,6 +942,7 @@ export function useWorkflowAssistController({
 
     return runTurn({
       message: text,
+      ...(liveAcceptanceRequestId ? { live_acceptance_request_id: liveAcceptanceRequestId } : {}),
       ...(Array.isArray(references) && references.length ? { references } : {}),
     }, {
       isCurrentAttempt,
@@ -940,10 +982,43 @@ export function useWorkflowAssistController({
       return
   }
 
+  async function hydrateTimelinePages(selectedId, isCurrent, { paint = true } = {}) {
+    let nextState = createWorkflowAssistRunState([], currentLanguage())
+    let afterEpoch = 0
+    let afterSequence = 0
+    while (isCurrent()) {
+      const page = await loadTimeline(selectedId, {
+        after_epoch: afterEpoch,
+        after_sequence: afterSequence,
+        limit: 500,
+        compact: true,
+      })
+      if (!isCurrent())
+        return null
+      nextState = hydrateWorkflowAssistTimeline(nextState, page?.items || [])
+      if (paint)
+        messages.value = nextState.messages
+      if (!page?.has_more)
+        return nextState
+      const nextEpoch = Number(page?.cursor?.epoch)
+      const nextSequence = Number(page?.cursor?.sequence)
+      if (!Number.isInteger(nextEpoch) || !Number.isInteger(nextSequence)
+        || nextEpoch < afterEpoch
+        || (nextEpoch === afterEpoch && nextSequence <= afterSequence))
+        throw new Error('History recovery cursor did not advance')
+      afterEpoch = nextEpoch
+      afterSequence = nextSequence
+    }
+    return null
+  }
+
   async function recoverConversation(selectedId, selectionId = ++conversationSequence) {
-    if (!selectedId || !loadTimeline || !loadCandidate)
+    if (!selectedId || !loadCandidate)
+      return false
+    if (!loadTimeline && !loadConversation)
       return false
     tearStream()
+    setRecoveryState('loading')
     const requestId = requestSequence
     const abortController = new AbortController()
     activeAbortController = abortController
@@ -953,48 +1028,49 @@ export function useWorkflowAssistController({
       if (!isCurrent() || selectedResult === false)
         return false
 
-      runState = createWorkflowAssistRunState([], currentLanguage())
-      let afterEpoch = 0
-      let afterSequence = 0
-      while (isCurrent()) {
-        const page = await loadTimeline(selectedId, {
-          after_epoch: afterEpoch,
-          after_sequence: afterSequence,
-          limit: 500,
-        })
-        if (!isCurrent())
-          return false
-        runState = reduceWorkflowAssistTimeline(runState, page?.items || [])
-        messages.value = runState.messages
-        onRunState(runState)
-        if (!page?.has_more)
-          break
-        const nextEpoch = Number(page?.cursor?.epoch)
-        const nextSequence = Number(page?.cursor?.sequence)
-        if (!Number.isInteger(nextEpoch) || !Number.isInteger(nextSequence)
-          || (nextEpoch === afterEpoch && nextSequence === afterSequence))
-          break
-        afterEpoch = nextEpoch
-        afterSequence = nextSequence
-      }
-      onTimelineRecovered({
-        conversation_id: selectedId,
-        messages: messages.value,
-        runState,
-      })
-
-      acceptedCandidateRevision = 0
-      acceptedCandidate = null
-      requestedCandidateRevision = runState.candidateRevision
       const candidateLoadContext = {
         requestId,
         conversationId: selectedId,
         runId: '',
       }
-      for (let attempt = 0; attempt <= MAX_STALE_CANDIDATE_FOLLOW_UPS
-        && isCurrent() && acceptedCandidateRevision < runState.candidateRevision; attempt += 1) {
-        const snapshot = await loadCandidate(selectedId, runState.candidateRevision)
-        acceptCandidate(snapshot, candidateLoadContext, runState.candidateRevision)
+      const detailPromise = loadConversation
+        ? Promise.resolve(loadConversation(selectedId)).then((detail) => {
+          if (isCurrent() && Array.isArray(detail?.messages))
+            messages.value = buildAssistHistoryMessages(detail.messages, null, currentLanguage())
+          return detail
+        })
+        : Promise.resolve(null)
+      const candidatePromise = loadCandidate(selectedId, 0)
+      const [detail, candidateSnapshot] = await Promise.all([detailPromise, candidatePromise])
+      if (!isCurrent())
+        return false
+
+      const snapshotRecords = Array.isArray(detail?.messages) ? detail.messages : []
+      const snapshotMessages = snapshotRecords.length
+        ? buildAssistHistoryMessages(snapshotRecords, null, currentLanguage())
+        : null
+      const snapshotNeedsTimeline = Boolean(snapshotMessages && !latestTurnHasAssistantText(snapshotMessages))
+      const snapshotActiveRun = candidateSnapshot?.active_run
+      const live = Boolean(snapshotActiveRun && ACTIVE_RUN_STATUSES.has(snapshotActiveRun.status))
+      runState = createWorkflowAssistRunState(snapshotMessages || [], currentLanguage())
+      acceptedCandidateRevision = 0
+      acceptedCandidate = null
+      requestedCandidateRevision = 0
+      if (loadTimeline && (live || !snapshotMessages || snapshotNeedsTimeline)) {
+        const hydrated = await hydrateTimelinePages(selectedId, isCurrent, { paint: !snapshotMessages })
+        if (!hydrated)
+          return false
+        runState = hydrated
+        requestedCandidateRevision = runState.candidateRevision
+        const snapshotRevision = Number(candidateSnapshot?.revision)
+        const latestCandidate = Number.isInteger(snapshotRevision)
+          && snapshotRevision >= runState.candidateRevision
+          ? candidateSnapshot
+          : await loadCandidate(selectedId, runState.candidateRevision)
+        acceptCandidate(latestCandidate, candidateLoadContext, runState.candidateRevision)
+      }
+      else {
+        acceptCandidate(candidateSnapshot, candidateLoadContext)
       }
       if (!isCurrent())
         return false
@@ -1012,14 +1088,26 @@ export function useWorkflowAssistController({
         return false
       }
       candidate = acceptedCandidate
+      const activeRun = candidate?.active_run
+      const recoveredLive = Boolean(activeRun && ACTIVE_RUN_STATUSES.has(activeRun.status))
+      runState = settleHydratedAssistRunState(runState, { keepLiveTail: recoveredLive })
+      if (!recoveredLive && snapshotMessages && !snapshotNeedsTimeline)
+        runState = { ...runState, messages: snapshotMessages }
+      messages.value = runState.messages
+      onRunState(runState)
+      onTimelineRecovered({
+        conversation_id: selectedId,
+        messages: messages.value,
+        runState,
+      })
       reconcileRunCoordinates({
         conversation_id: selectedId,
         active_run: candidate?.active_run || null,
         latest_run: candidate?.latest_run || null,
       })
+      setRecoveryState('ready')
 
-      const activeRun = candidate?.active_run
-      if (!activeRun || !['queued', 'running'].includes(activeRun.status))
+      if (!recoveredLive)
         return true
       reportRunStatus(activeRun.status, {
         source: 'recovery',
@@ -1045,16 +1133,20 @@ export function useWorkflowAssistController({
       return false
     }
     finally {
-      if (isCurrent())
+      if (isCurrent()) {
+        if (recoveryState === 'loading')
+          setRecoveryState('error')
         activeAbortController = null
+      }
     }
   }
 
   async function mountRecoverableSession() {
-    if (!loadConversations || !loadTimeline || !loadCandidate)
+    if (!loadConversations || (!loadTimeline && !loadConversation) || !loadCandidate)
       return false
     const selectionId = ++conversationSequence
     tearStream()
+    setRecoveryState('loading')
     const requestId = requestSequence
     try {
       const conversationPage = await loadConversations()
@@ -1063,19 +1155,24 @@ export function useWorkflowAssistController({
       const conversations = Array.isArray(conversationPage)
         ? conversationPage
         : conversationPage?.items || []
-      if (!conversations.length)
+      if (!conversations.length) {
+        setRecoveryState('ready')
         return false
+      }
       const localConversationId = String(getRunCoordinates()?.conversation_id || '')
       const selected = conversations.find(item => String(item?.id || '') === localConversationId)
         || conversations[0]
       const selectedId = String(selected?.id || '')
-      if (!selectedId)
+      if (!selectedId) {
+        setRecoveryState('error')
         return false
+      }
       return recoverConversation(selectedId, selectionId)
     }
     catch (error) {
       if (!isCurrentRequest(requestId) || isAbortError(error))
         return false
+      setRecoveryState('error')
       await handleFailure(assistErrorsFromAxios(error, currentLanguage()), () => isCurrentRequest(requestId))
       return false
     }
@@ -1097,7 +1194,7 @@ export function useWorkflowAssistController({
     if (!text)
       return { accepted: false }
     messages.value = setClarificationStatus(messages.value, id, 'submitting')
-    const result = await submitMessage(text)
+    const result = await submitMessage(text, { liveAcceptanceRequestId: liveAcceptanceApproval(answers, questions) })
     if (!result?.accepted)
       messages.value = setClarificationStatus(messages.value, id, 'pending')
     return result
@@ -1111,7 +1208,7 @@ export function useWorkflowAssistController({
 
   async function selectConversation(id) {
     const selectionId = ++conversationSequence
-    if (loadTimeline && loadCandidate) {
+    if ((loadTimeline || loadConversation) && loadCandidate) {
       const result = await recoverConversation(String(id || ''), selectionId)
       if (selectionId === conversationSequence && result !== false)
         lastTurn = null
@@ -1127,10 +1224,21 @@ export function useWorkflowAssistController({
   async function newConversation() {
     cancelActiveTurn()
     const selectionId = ++conversationSequence
-    const result = await newConversationImpl(() => selectionId === conversationSequence)
-    if (selectionId === conversationSequence && result !== false)
-      lastTurn = null
-    return result
+    setRecoveryState('loading')
+    try {
+      const result = await newConversationImpl(() => selectionId === conversationSequence)
+      if (selectionId === conversationSequence) {
+        setRecoveryState(result === false ? 'error' : 'ready')
+        if (result !== false)
+          lastTurn = null
+      }
+      return result
+    }
+    catch (error) {
+      if (selectionId === conversationSequence)
+        setRecoveryState('error')
+      throw error
+    }
   }
 
   return {

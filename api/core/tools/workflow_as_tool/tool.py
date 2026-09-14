@@ -24,7 +24,7 @@ from core.tools.entities.tool_entities import (
     ToolProviderType,
 )
 from core.tools.errors import ToolInvokeError
-from core.workflow.file_reference import resolve_file_record_id
+from core.workflow.runtime.adapters.file_reference import resolve_file_record_id
 from factories.file_factory import build_from_mapping
 from graphon.file import FILE_MODEL_IDENTITY, File, FileTransferMethod
 from graphon.model_runtime.entities.llm_entities import LLMUsage, LLMUsageMetadata

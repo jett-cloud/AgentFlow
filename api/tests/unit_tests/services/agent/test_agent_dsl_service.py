@@ -270,14 +270,32 @@ def test_export_workflow_packages_deduplicates_shared_agent() -> None:
     session.scalars.return_value.all.return_value = bindings
     service = AgentDslService(session)
     service._require_agent = Mock(return_value=_agent())
-    service._require_snapshot = Mock(return_value=_snapshot())
+    soul = AgentSoulConfig.model_validate(
+        {
+            "knowledge": {
+                "sets": [
+                    {
+                        "id": "ks-docs",
+                        "name": "Docs",
+                        "datasets": [{"id": "ds-1", "name": "Docs", "description": "Product docs"}],
+                        "query": {"mode": "generated_query"},
+                        "retrieval": {"mode": "multiple", "top_k": 4, "reranking_enable": False},
+                    }
+                ]
+            }
+        }
+    )
+    service._require_snapshot = Mock(return_value=_snapshot(soul=soul))
 
     portable_graph, packages = service.export_workflow_packages(
         workflow=SimpleNamespace(tenant_id="tenant-1", id="workflow-1", version="draft"),
         graph=graph,
     )
+    serialized_packages = {key: package.model_dump(mode="json") for key, package in packages.items()}
 
     assert list(packages) == ["agent_1"]
+    assert serialized_packages["agent_1"]["soul"]["knowledge"]["sets"][0]["datasets"][0]["id"] == "ds-1"
+    assert all(node["data"]["type"] != "knowledge-retrieval" for node in portable_graph["nodes"])
     for node in portable_graph["nodes"]:
         assert node["data"]["agent_binding"] == {
             "binding_type": WorkflowAgentBindingType.ROSTER_AGENT.value,

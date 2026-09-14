@@ -1,12 +1,39 @@
 ---
 name: bind-resources
-description: Bind the exact tools and knowledge bases listed in CurrentSituation. Use when referenced_tools or referenced_datasets are set.
+description: Use when discovering or changing Tool, model, dataset, or Agent capability bindings, including exact user references.
 ---
 
 # Bind resources
 
-1. Use the ids in `referenced_tools` and `referenced_datasets` verbatim. Do not call `search_tools`, `search_datasets`, or `ask_user` to pick among them.
-2. In the same model reply as any narration, `read_graph` (and `read_node` on the target) before editing.
-3. `build_node` for tool / knowledge-retrieval nodes with `purpose` that names those exact ids. The builder writes the binding; do not invent a provider or dataset id.
-4. `connect` so retrieval or tool output reaches the next LLM / answer / end node.
-5. `validate_graph`, then `finish` when valid. If a listed resource is missing from a tool result, `fail` with that reason — do not substitute another resource.
+1. Read the planned resource role and any existing target configuration.
+   referenced_tools and referenced_datasets provide exact identities. Search
+   additional tools/datasets only when needed; inspect_tool every chosen Tool,
+   even one referenced by exact ID. Use available model catalogue identities.
+   Complete when identities and required parameter/output information are known.
+   Missing schemas remain unresolved; use recovery or a material user decision
+   instead of inventing parameters, outputs, or replacement identities.
+2. Record bindings on their consuming plan nodes before mutation.
+   A dedicated capability uses build_tool_node. Agent capabilities use
+   build_agent_node tools/mcp_tools. Agent-internal knowledge stays in knowledge;
+   do not connect a separate retrieval edge for that internal binding.
+   A standalone knowledge-retrieval node serves an explicit retrieval graph step.
+   Complete when every resource has the intended consumer and the plan accepts it.
+3. Encode Tool arguments using the public schema and inspected parameter names.
+   Supply required values; omit acceptable defaults. Use kind=constant for literals,
+   kind=template for interpolated text, and kind=variable with a full selector for
+   variable arguments. File/files parameters require variable selectors, including
+   nested paths such as ["iteration_id", "item", "source_image"].
+   Do not put `intent.tool.binding` on `build_node`.
+   Complete when every required argument is bound with the right representation.
+4. For build_agent_node, supply model, instruction, inputs, outputs, and
+   tools/mcp_tools/knowledge as top-level arguments. Include the inspected exact
+   tool keys required by the instruction. Set knowledge={"operation":"replace",
+   "sets":[...]} for the intended complete knowledge set. Omit knowledge on update
+   to preserve it; operation=clear requires explicit user removal intent.
+   Read before updating and preserve capabilities that remain required.
+   Complete when the structured Agent payload expresses every planned capability.
+5. Submit through the appropriate builder, or provide the binding to the complete
+   container payload. Inspect success and confirmed outputs; route failure through
+   repair-validation. Return to the active create/edit/container procedure.
+   Complete when the binding is committed; whole-workflow verification belongs to
+   verify-and-finish.

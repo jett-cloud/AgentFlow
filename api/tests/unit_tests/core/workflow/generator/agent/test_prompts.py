@@ -109,6 +109,32 @@ def test_current_situation_omits_node_config_and_catalogue() -> None:
     assert "# Current situation" in text
 
 
+def test_current_situation_exposes_contract_and_durable_user_turn_ids() -> None:
+    session = replace(
+        _session_with_config_node(),
+        contract_protocol_version=1,
+        contract_revision=2,
+        contract_hash="a" * 64,
+        workflow_contract={
+            "protocol_version": 1,
+            "revision": 2,
+            "contract_hash": "a" * 64,
+            "status": "draft",
+        },
+    )
+
+    text = render_current_situation(session)
+
+    assert "workflow_contract: draft @2 (aaaaaaaaaaaa)" in text
+    assert "user_turn_ids: turn:1" in text
+
+
+def test_current_situation_marks_legacy_contract_protocol() -> None:
+    text = render_current_situation(_session_with_config_node())
+
+    assert "workflow_contract: legacy" in text
+
+
 def test_current_situation_stays_at_tail_below_and_above_trigger() -> None:
     session = _session_with_config_node()
     situation = render_current_situation(session)
@@ -221,6 +247,16 @@ def test_last_validation_error_label_includes_count_revision_and_codes() -> None
     assert "last_acceptance: none" in text
 
 
+def test_last_acceptance_not_executed_label() -> None:
+    session = replace(
+        _session_with_config_node(),
+        candidate_revision=66,
+        last_acceptance={"passed": True, "revision": 66, "executed": False},
+    )
+    text = render_current_situation(session)
+    assert "last_acceptance: not_executed @66" in text
+
+
 def test_last_acceptance_failed_label_includes_nodes() -> None:
     session = replace(
         _session_with_config_node(),
@@ -264,23 +300,287 @@ def test_system_prompt_hard_binds_referenced_ids() -> None:
     assert "referenced_nodes" in SYSTEM_PROMPT
     assert "referenced_tools" in SYSTEM_PROMPT
     assert "referenced_datasets" in SYSTEM_PROMPT
-    assert "build_node must use those exact ids" in SYSTEM_PROMPT
+    assert "Use exact CurrentSituation ids" in SYSTEM_PROMPT
+    assert "referenced_nodes identify existing nodes" in SYSTEM_PROMPT
+    assert "referenced_nodes → `build_node`" not in SYSTEM_PROMPT
     assert "search_tools" in SYSTEM_PROMPT
     assert "search_datasets" in SYSTEM_PROMPT
     assert "ask_user" in SYSTEM_PROMPT
+    assert "unexecuted_node_ids" in SYSTEM_PROMPT
+    assert "business_verified" in SYSTEM_PROMPT
     assert "Plain text never finishes" not in SYSTEM_PROMPT
     assert "no tool_calls" in SYSTEM_PROMPT
     assert "<think>" in SYSTEM_PROMPT
-    assert "do not put tool-call JSON inside think" in SYSTEM_PROMPT
+    assert "JSON belongs in tool_calls" in SYSTEM_PROMPT
+    assert "activate_skills" in SYSTEM_PROMPT
+    assert "skill selection" in SYSTEM_PROMPT
+    assert "submit_workflow_plan" in SYSTEM_PROMPT
+    assert "expected_revision" in SYSTEM_PROMPT
+    assert "user_turn_ids" in SYSTEM_PROMPT
+
+
+def test_system_prompt_routes_configuration_details_to_authoritative_schemas() -> None:
+    from core.workflow.generator.agent.loop import SYSTEM_PROMPT
+
+    for required in (
+        "structured semantic intent",
+        "public builder argument schema",
+        "inspect_node_schema",
+        "search_tools",
+        "inspect_tool",
+        "build_tool_node",
+        "build_agent_node",
+        "tools/mcp_tools/knowledge",
+        "selector",
+        "omission/replacement/clearing",
+    ):
+        assert required in SYSTEM_PROMPT
+    assert '["iteration_id", "item", "source_image"]' not in SYSTEM_PROMPT
+    assert "Builder writes the binding" not in SYSTEM_PROMPT
+    assert "# build_node purpose contract" not in SYSTEM_PROMPT
+    assert "Resource bindings:" not in SYSTEM_PROMPT
+
+
+def test_agent_internal_knowledge_routes_through_specialized_builder() -> None:
+    from core.workflow.generator.agent.loop import SYSTEM_PROMPT
+    from core.workflow.generator.compiler.intents.agent_intent import AgentNodeBuildIntent
+    from core.workflow.generator.prompts.loader import read_node_snippet, skill_body
+
+    binding_skill = skill_body("bind-resources") or ""
+    agent_node_spec = read_node_snippet("agent")
+    intent = AgentNodeBuildIntent.model_validate(
+        {
+            "model": {"provider": "openai", "name": "gpt-4o"},
+            "instruction": "Answer from product docs",
+            "inputs": [],
+            "outputs": [],
+            "knowledge": {
+                "operation": "replace",
+                "sets": [{"name": "Product docs", "dataset_ids": ["ds-1"]}],
+            },
+        }
+    )
+
+    assert "tools/mcp_tools/knowledge" in SYSTEM_PROMPT
+    assert "Agent-internal knowledge belongs in build_agent_node knowledge" in SYSTEM_PROMPT
+    assert "standalone knowledge-retrieval" in SYSTEM_PROMPT
+    assert 'knowledge={"operation":"replace"' in binding_skill
+    assert "do not connect a separate retrieval edge" in binding_skill
+    assert 'requirements=["dataset_ids=' not in binding_skill
+    assert "Do not emit knowledge" in agent_node_spec
+    assert intent.knowledge is not None
+    assert intent.knowledge.sets[0].dataset_ids == ["ds-1"]
 
 
 def test_system_prompt_encourages_batched_creates() -> None:
     from core.workflow.generator.agent.loop import SYSTEM_PROMPT
-    from core.workflow.generator.agent.prompts import render_active_skill
+    from core.workflow.generator.prompts.loader import skill_body
 
-    playbook = render_active_skill("create-from-scratch")
+    playbook = skill_body("create-from-scratch") or ""
     combined = f"{SYSTEM_PROMPT}\n{playbook}"
     assert "必须" not in combined
-    assert "Prefer emitting multiple" in playbook
+    assert "Independent creates may share" in playbook
     assert "build_node(mode=create)" in playbook
     assert "native multi-tool" in playbook
+    assert "verify-and-finish" in playbook
+    assert "retry create with the same intended ID" in SYSTEM_PROMPT
+    assert "producer-first" in SYSTEM_PROMPT
+    assert "submit the consumer in the next invocation" in SYSTEM_PROMPT
+    assert "Free-text references are not scheduling facts" in SYSTEM_PROMPT
+
+
+def test_system_prompt_distinguishes_recovery_from_retryability_and_completion() -> None:
+    from core.workflow.generator.agent.loop import SYSTEM_PROMPT
+
+    for rule in (
+        "a rejection can carry these reports without an error_code",
+        "retryable controls retry/cascade behavior",
+        "it does not decide whether to ask a user",
+        "Respect runtime cancellation and exhausted budgets",
+        "question id live_run_consent",
+        "Contract and graph revisions are independent",
+        "passing graph/contract checks",
+        "Finish does not Apply",
+        "runtime_contract_passed",
+        "business_verified",
+    ):
+        assert rule in SYSTEM_PROMPT
+    assert "A retryable tool error is not a reason to call fail or ask_user" not in SYSTEM_PROMPT
+
+
+def test_workflow_assist_builder_specs_require_node_specific_semantic_fields() -> None:
+    from core.workflow.generator.compiler.intents.node_intent import NodeBuildIntent, render_node_builder_spec
+
+    intent = NodeBuildIntent(objective="Build the requested node")
+    expected_fields = {
+        "llm": ("prompt_template", "model.provider", "model.name"),
+        "http-request": ("url",),
+        "if-else": ("cases",),
+        "question-classifier": ("query_variable_selector", "classes", "model.provider", "model.name"),
+        "parameter-extractor": ("query", "parameters", "model.provider", "model.name"),
+        "human-input": ("form_content", "delivery_methods", "user_actions"),
+    }
+
+    for node_type, fields in expected_fields.items():
+        rendered = render_node_builder_spec(intent, node_type=node_type)
+        for field in fields:
+            assert field in rendered
+        assert "Runtime schema defaults do not make an empty semantic field complete" in rendered
+
+
+def test_repair_validation_skill_explains_invalid_node_config_field_repair() -> None:
+    from core.workflow.generator.prompts.loader import skill_body
+
+    repair = skill_body("repair-validation") or ""
+
+    assert "INVALID_NODE_CONFIG" in repair
+    assert "field path" in repair
+    assert "read_node" in repair
+    assert "resubmit build_node" in repair
+    assert "Do not patch raw node JSON" in repair
+    assert "Document Extractor" in repair
+    assert "file-list" in repair
+    assert "variable_selector" in repair
+    assert "activate verify-and-finish" in repair
+
+
+def _user_message(sequence: int, text: str) -> AgentMessage:
+    return AgentMessage(
+        sequence=sequence,
+        event_type="message",
+        role="user",
+        status="completed",
+        payload={"text": text},
+    )
+
+
+def _activate_pair(sequence: int, names: list[str], *, ok: bool = True) -> list[AgentMessage]:
+    call_id = f"act-{sequence}"
+    call = AgentMessage(
+        sequence=sequence,
+        event_type="tool_call",
+        role="assistant",
+        status="completed",
+        payload={"id": call_id, "name": "activate_skills", "arguments": {"names": names}},
+    )
+    result = AgentMessage(
+        sequence=sequence + 1,
+        event_type="tool_result",
+        role="assistant",
+        status="completed",
+        payload={
+            "tool_call_id": call_id,
+            "name": "activate_skills",
+            "ok": ok,
+            "changed": False,
+            "content": {"active_skills": names} if ok else None,
+            "error_code": None if ok else "UNKNOWN_SKILL",
+        },
+    )
+    return [call, result]
+
+
+def test_active_skills_default_none_in_current_situation() -> None:
+    text = render_current_situation(_session_with_config_node())
+    assert "active_skills: none" in text
+
+
+def test_active_skill_names_uses_latest_successful_activation() -> None:
+    from core.workflow.generator.agent.prompts import active_skill_names
+
+    session = replace(
+        _session_with_config_node(),
+        messages=[
+            _user_message(1, "做 RAG 测试工作流"),
+            *_activate_pair(2, ["create-from-scratch"]),
+            *_activate_pair(4, ["repair-validation", "bind-resources"]),
+        ],
+    )
+    assert active_skill_names(session) == ("repair-validation", "bind-resources")
+    text = render_current_situation(session)
+    assert "active_skills: repair-validation, bind-resources" in text
+
+
+def test_failed_activation_does_not_replace_active_skills() -> None:
+    from core.workflow.generator.agent.prompts import active_skill_names
+
+    session = replace(
+        _session_with_config_node(),
+        messages=[
+            _user_message(1, "做 RAG 测试工作流"),
+            *_activate_pair(2, ["create-from-scratch"]),
+            *_activate_pair(4, ["not-a-skill"], ok=False),
+        ],
+    )
+    assert active_skill_names(session) == ("create-from-scratch",)
+
+
+def test_new_user_message_resets_active_skills() -> None:
+    from core.workflow.generator.agent.prompts import active_skill_names
+
+    session = replace(
+        _session_with_config_node(),
+        messages=[
+            _user_message(1, "先建图"),
+            *_activate_pair(2, ["create-from-scratch"]),
+            _user_message(4, "改成检索"),
+        ],
+    )
+    assert active_skill_names(session) == ()
+
+
+def test_ask_user_answer_does_not_reset_active_skills() -> None:
+    from core.workflow.generator.agent.prompts import active_skill_names
+
+    session = replace(
+        _session_with_config_node(),
+        messages=[
+            _user_message(1, "做 RAG 测试工作流"),
+            *_activate_pair(2, ["edit-local-node"]),
+            AgentMessage(
+                sequence=4,
+                event_type="tool_call",
+                role="assistant",
+                status="completed",
+                payload={
+                    "id": "ask-1",
+                    "name": "ask_user",
+                    "arguments": {"questions": [{"id": "q1", "question": "哪个节点", "kind": "text"}]},
+                },
+            ),
+            AgentMessage(
+                sequence=5,
+                event_type="tool_result",
+                role="assistant",
+                status="completed",
+                payload={"tool_call_id": "ask-1", "name": "ask_user", "ok": True, "content": {"text": "检索节点"}},
+            ),
+        ],
+    )
+    assert active_skill_names(session) == ("edit-local-node",)
+
+
+def test_deleted_historical_skills_are_filtered() -> None:
+    from core.workflow.generator.agent.prompts import active_skill_names
+
+    session = replace(
+        _session_with_config_node(),
+        messages=[
+            _user_message(1, "做 RAG 测试工作流"),
+            *_activate_pair(2, ["create-from-scratch", "retired-skill"]),
+        ],
+    )
+    assert active_skill_names(session) == ("create-from-scratch",)
+
+
+def test_render_active_skills_keeps_activation_order() -> None:
+    from core.workflow.generator.agent.prompts import render_active_skills
+
+    text = render_active_skills(("create-from-scratch", "bind-resources"))
+    assert text.startswith("# Active skills")
+    create_at = text.index("## create-from-scratch")
+    bind_at = text.index("## bind-resources")
+    assert create_at < bind_at
+    assert "read_graph" in text
+    assert "referenced_tools" in text
+    assert render_active_skills(()) == ""

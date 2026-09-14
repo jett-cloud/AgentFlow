@@ -56,6 +56,32 @@ export function getTreeRootLabel(variable) {
   return SHOW_NAME_MAP[name] || name
 }
 
+export function isFilteredVariableSelectable(variable, filterVar) {
+  return typeof filterVar !== 'function' || Boolean(filterVar(variable))
+}
+
+export function mapGroupsToPickerRows(groups = []) {
+  return (groups || [])
+    .map(group => ({
+      nodeId: group.nodeId,
+      title: group.title,
+      rows: (group.vars || []).map((variable) => {
+        const rootPath = getRootSelectorPath(variable)
+        return {
+          variable: variable.variable,
+          type: variable.type,
+          des: variable.des,
+          children: variable.children,
+          displayName: getTreeRootLabel(variable),
+          hasChildren: hasNestedChildren(variable),
+          rootPath,
+          selector: buildNestedValueSelector(group.nodeId, rootPath, []),
+        }
+      }),
+    }))
+    .filter(group => group.rows.length)
+}
+
 export function normalizeRagPipelineVariables(list) {
   if (!Array.isArray(list))
     return []

@@ -8,50 +8,61 @@ catalogue do not belong here — those are ``read_node`` / ``read_graph`` /
 search observations. ``last_finish`` is accepted ``finish.ok`` only;
 ``validate_graph`` updates ``last_validation`` and must not light ``last_finish``.
 
-Playbook bodies are a second tail message after CurrentSituation. Selection is
-heuristic (one skill per turn); the JSON tool schemas stay the action contract.
+Active skill bodies are a second tail message after CurrentSituation. The main
+agent chooses skills with ``activate_skills``; this module only restores that
+set from the message log.
 """
 
-from core.workflow.generator.agent.types import AgentMessage, AgentSession, MinimalGraphDict
-from core.workflow.generator.prompts.loader import PLAYBOOK_SKILLS, read_prompt
+from core.workflow.generator.agent.types import AgentMessage, AgentSession
+from core.workflow.generator.graph.types import MinimalGraphDict
+from core.workflow.generator.prompts.loader import registered_skill_names, skill_body
 
 _ASK_USER = "ask_user"
-_PLAYBOOK_CREATE = "create-from-scratch"
-_PLAYBOOK_REPAIR = "repair-validation"
-_PLAYBOOK_BIND = "bind-resources"
-_PLAYBOOK_EDIT = "edit-local-node"
+_ACTIVATE_SKILLS = "activate_skills"
 
 
-def select_playbook(session: AgentSession) -> str:
-    """Pick one playbook for this turn. Later rules in the table win only if earlier ones miss.
+def active_skill_names(session: AgentSession) -> tuple[str, ...]:
+    """Resolve the latest successful activation after the latest normal user message."""
+    last_user: int | None = None
+    for index, message in enumerate(session.messages):
+        if message.event_type == "message" and message.role == "user":
+            last_user = index
+    if last_user is None:
+        return ()
+    registered = set(registered_skill_names())
+    active: tuple[str, ...] = ()
+    for message in session.messages[last_user + 1 :]:
+        if message.event_type != "tool_result":
+            continue
+        if message.payload.get("name") != _ACTIVATE_SKILLS:
+            continue
+        if message.payload.get("ok") is not True:
+            continue
+        content = message.payload.get("content")
+        if not isinstance(content, dict):
+            continue
+        names = content.get("active_skills")
+        if not isinstance(names, list):
+            continue
+        active = tuple(name for name in names if isinstance(name, str) and name in registered)
+    return active
 
-    Priority: bound resources, then failed validation or failed acceptance, then local edit, else create.
-    ``edit_mode=local`` on an empty candidate still counts as create.
-    """
-    if session.referenced_tools or session.referenced_datasets:
-        return _PLAYBOOK_BIND
-    validation = session.last_validation
-    if isinstance(validation, dict) and validation.get("valid") is False:
-        return _PLAYBOOK_REPAIR
-    acceptance = session.last_acceptance
-    if isinstance(acceptance, dict) and acceptance.get("passed") is False:
-        return _PLAYBOOK_REPAIR
-    graph = session.candidate_graph if isinstance(session.candidate_graph, dict) else None
-    nodes = graph.get("nodes") if graph is not None else None
-    has_nodes = isinstance(nodes, list) and any(isinstance(node, dict) and node.get("id") for node in nodes)
-    if session.selected_node or (session.edit_mode == "local" and has_nodes):
-        return _PLAYBOOK_EDIT
-    return _PLAYBOOK_CREATE
 
-
-def render_active_skill(name: str) -> str:
-    """Render one playbook body for the prompt tail. Unknown names yield ``""``."""
-    if name not in PLAYBOOK_SKILLS:
+def render_active_skills(names: tuple[str, ...]) -> str:
+    """Render complete bodies in activation order."""
+    if not names:
         return ""
-    body = read_prompt(f"agent/skills/{name}/SKILL.md").rstrip()
-    if not body:
-        return ""
-    return f"# Active playbook: {name}\n\n{body}\n"
+    parts = ["# Active skills", ""]
+    for name in names:
+        body = skill_body(name)
+        if not body:
+            continue
+        parts.append(f"## {name}")
+        parts.append("")
+        parts.append(body.rstrip())
+        parts.append("")
+    text = "\n".join(parts).rstrip()
+    return f"{text}\n" if text else ""
 
 
 def render_current_situation(
@@ -83,8 +94,11 @@ def render_current_situation(
         f"last_finish: {_last_finish_label(session)}",
         f"candidate_revision: {session.candidate_revision}",
         f"candidate_base_hash: {session.candidate_base_hash or 'none'}",
+        f"workflow_contract: {_workflow_contract_label(session)}",
+        f"user_turn_ids: {_user_turn_ids_label(session.messages)}",
         f"last_validation: {_last_validation_label(session)}",
         f"last_acceptance: {_last_acceptance_label(session)}",
+        f"active_skills: {_active_skills_label(session)}",
         f"apply_status: {_apply_status(session, resolved_canvas, resolved_hash)}",
         f"canvas: {_canvas_label(resolved_canvas)}",
         f"canvas_hash: {resolved_hash or 'not provided'}",
@@ -100,6 +114,30 @@ def render_current_situation(
     graph = session.candidate_graph
     lines.extend(_candidate_sketch(graph if isinstance(graph, dict) else None))
     return "\n".join(lines)
+
+
+def _workflow_contract_label(session: AgentSession) -> str:
+    if session.contract_protocol_version is None:
+        return "legacy"
+    contract = session.workflow_contract
+    if not isinstance(contract, dict):
+        return f"required @{session.contract_revision} (not submitted)"
+    status = contract.get("status")
+    label = status if status in {"draft", "complete"} else "invalid"
+    short_hash = session.contract_hash[:12] if session.contract_hash else "no hash"
+    return f"{label} @{session.contract_revision} ({short_hash})"
+
+
+def _user_turn_ids_label(messages: list[AgentMessage]) -> str:
+    turn_ids = [
+        f"turn:{message.sequence}" for message in messages if message.event_type == "message" and message.role == "user"
+    ]
+    return ", ".join(turn_ids) if turn_ids else "none"
+
+
+def _active_skills_label(session: AgentSession) -> str:
+    names = active_skill_names(session)
+    return ", ".join(names) if names else "none"
 
 
 def _pending_ask_user(messages: list[AgentMessage]) -> AgentMessage | None:
@@ -148,6 +186,8 @@ def _last_acceptance_label(session: AgentSession) -> str:
     passed = payload.get("passed")
     revision = payload.get("revision")
     if passed is True:
+        if payload.get("executed") is False:
+            return f"not_executed @{revision}" if revision is not None else "not_executed"
         return f"ok @{revision}" if revision is not None else "ok"
     if passed is False:
         nodes = payload.get("failed_nodes")
@@ -206,7 +246,7 @@ def _last_finish_label(session: AgentSession) -> str:
     return "none"
 
 
-def _canvas_label(canvas_graph: dict[str, object] | None) -> str:
+def _canvas_label(canvas_graph: MinimalGraphDict | dict[str, object] | None) -> str:
     if canvas_graph is None:
         return "not provided"
     nodes = canvas_graph.get("nodes") if isinstance(canvas_graph, dict) else None
@@ -227,12 +267,15 @@ def _format_references(items: list[dict[str, object]]) -> str:
     return ", ".join(parts)
 
 
-def _topology_key(graph: dict[str, object] | None) -> tuple[frozenset[str], frozenset[tuple[str, str, str]]]:
+def _topology_key(
+    graph: MinimalGraphDict | dict[str, object] | None,
+) -> tuple[frozenset[str], frozenset[tuple[str, str, str]]]:
     if not isinstance(graph, dict):
         return frozenset(), frozenset()
     nodes = graph.get("nodes")
+    node_items = nodes if isinstance(nodes, list) else []
     node_ids = frozenset(
-        str(node["id"]) for node in nodes or [] if isinstance(node, dict) and node.get("id") is not None
+        str(node["id"]) for node in node_items if isinstance(node, dict) and node.get("id") is not None
     )
     edges = graph.get("edges")
     edge_keys: set[tuple[str, str, str]] = set()
@@ -250,7 +293,7 @@ def _topology_key(graph: dict[str, object] | None) -> tuple[frozenset[str], froz
 
 def _apply_status(
     session: AgentSession,
-    canvas_graph: dict[str, object] | None = None,
+    canvas_graph: MinimalGraphDict | dict[str, object] | None = None,
     canvas_hash: str | None = None,
 ) -> str:
     if canvas_hash is not None and session.candidate_base_hash and canvas_hash != session.candidate_base_hash:

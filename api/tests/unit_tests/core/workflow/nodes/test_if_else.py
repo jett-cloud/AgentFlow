@@ -1,12 +1,13 @@
 import time
 import uuid
+from copy import deepcopy
 from unittest.mock import MagicMock, Mock
 
 import pytest
 
 from core.app.entities.app_invoke_entities import DIFY_RUN_CONTEXT_KEY, InvokeFrom, UserFrom
 from core.workflow.node_factory import DifyNodeFactory
-from core.workflow.system_variables import build_system_variables
+from core.workflow.runtime.variables.system_variables import build_system_variables
 from extensions.ext_database import db
 from graphon.enums import WorkflowNodeExecutionStatus
 from graphon.file import File, FileTransferMethod, FileType
@@ -133,6 +134,63 @@ def test_execute_if_else_result_true():
     assert result.status == WorkflowNodeExecutionStatus.SUCCEEDED
     assert result.outputs is not None
     assert result.outputs["result"] is True
+
+
+@pytest.mark.parametrize(
+    ("input_value", "selected_case_id"),
+    [(None, "b61c92c8-2398-44e9-871a-278428a14c75"), ("present", "false")],
+)
+def test_factory_runs_official_null_operator_without_mutating_persisted_config(
+    input_value: object,
+    selected_case_id: str,
+):
+    graph_config = {"edges": [], "nodes": [{"data": {"type": "start", "title": "Start"}, "id": "start"}]}
+    init_params = build_test_graph_init_params(
+        workflow_id="1",
+        graph_config=graph_config,
+        tenant_id="1",
+        app_id="1",
+        user_id="1",
+        user_from=UserFrom.ACCOUNT,
+        invoke_from=InvokeFrom.DEBUGGER,
+        call_depth=0,
+    )
+    pool = VariablePool.from_bootstrap(system_variables=build_system_variables(user_id="aaa", files=[]), user_inputs={})
+    pool.add(["start", "optional_value"], input_value)
+    graph_runtime_state = GraphRuntimeState(variable_pool=pool, start_at=time.perf_counter())
+    node_factory = DifyNodeFactory(graph_init_params=init_params, graph_runtime_state=graph_runtime_state)
+    node_config = {
+        "id": "branch",
+        "data": {
+            "title": "Official null condition",
+            "type": "if-else",
+            "cases": [
+                {
+                    "case_id": "b61c92c8-2398-44e9-871a-278428a14c75",
+                    "logical_operator": "and",
+                    "conditions": [
+                        {
+                            "id": "condition-1",
+                            "varType": "string",
+                            "comparison_operator": "is null",
+                            "variable_selector": ["start", "optional_value"],
+                            "value": "",
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+    before = deepcopy(node_config)
+
+    node = node_factory.create_node(node_config)
+    result = node._run()
+
+    assert isinstance(node, IfElseNode)
+    assert result.status == WorkflowNodeExecutionStatus.SUCCEEDED
+    assert result.outputs is not None
+    assert result.outputs["selected_case_id"] == selected_case_id
+    assert node_config == before
 
 
 def test_execute_if_else_result_false():

@@ -20,7 +20,7 @@ from controllers.common.schema import register_response_schema_models, register_
 from controllers.service_api import service_api_ns
 from controllers.service_api.schema import expect_with_user
 from controllers.service_api.wraps import FetchUserArg, WhereisUserArg, validate_app_token
-from core.workflow.human_input_policy import HumanInputSurface, is_recipient_type_allowed_for_surface
+from core.workflow.nodes.human_input.human_input_policy import HumanInputSurface, is_recipient_type_allowed_for_surface
 from core.workflow.nodes.human_input.entities import FormInputConfig
 from extensions.ext_database import db
 from fields.base import ResponseModel

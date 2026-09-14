@@ -5,8 +5,8 @@ from core.app.entities.app_invoke_entities import DIFY_RUN_CONTEXT_KEY, DifyRunC
 from core.datasource.datasource_manager import DatasourceManager
 from core.datasource.entities.datasource_entities import DatasourceProviderType
 from core.plugin.impl.exc import PluginDaemonClientSideError
-from core.workflow.file_reference import resolve_file_record_id
-from core.workflow.system_variables import SystemVariableKey, get_system_segment
+from core.workflow.runtime.adapters.file_reference import resolve_file_record_id
+from core.workflow.runtime.variables.system_variables import SystemVariableKey, get_system_segment
 from graphon.enums import (
     BuiltinNodeTypes,
     NodeExecutionType,

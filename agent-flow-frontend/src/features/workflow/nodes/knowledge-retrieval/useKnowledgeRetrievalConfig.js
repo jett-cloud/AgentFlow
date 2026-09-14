@@ -2,8 +2,10 @@
 import { computed } from 'vue'
 import { useResolvedNodeData } from '../../model/nodeProps.js'
 import { parseSelectorInput } from '../../model/availableVariables.js'
-import { normalizeKnowledgeRetrievalData } from './knowledgeRetrievalNode.js'
+import { normalizeKnowledgeRetrievalData, RERANKING_MODES, applyRerankingMode, applyWeightedScore } from './knowledgeRetrievalNode.js'
 import { defaultOperatorForType } from '@/features/datasets/model/metadataFields.js'
+
+export { RERANKING_MODES }
 
 /** Dify retrieval_mode: single | multiple */
 export const RETRIEVAL_MODES = [
@@ -147,6 +149,16 @@ export function useKnowledgeRetrievalConfig(props, emit) {
     },
   })
 
+  const rerankingMode = computed({
+    get: () => multipleConfig.value.reranking_mode || 'reranking_model',
+    set: value => patchMultiple(applyRerankingMode(multipleConfig.value, value)),
+  })
+
+  const weightedScore = computed({
+    get: () => multipleConfig.value.weights,
+    set: weights => patchMultiple(applyWeightedScore(multipleConfig.value, weights)),
+  })
+
   const singleModel = computed({
     get: () => {
       const model = nodeData.value?.single_retrieval_config?.model || {}
@@ -269,6 +281,8 @@ export function useKnowledgeRetrievalConfig(props, emit) {
     scoreThresholdEnabled,
     scoreThreshold,
     rerankingEnable,
+    rerankingMode,
+    weightedScore,
     rerankModel,
     singleModel,
     metadataFilteringMode,
@@ -279,6 +293,7 @@ export function useKnowledgeRetrievalConfig(props, emit) {
     removeMetadataCondition,
     metadataModel,
     RETRIEVAL_MODES,
+    RERANKING_MODES,
     METADATA_FILTER_MODES,
     METADATA_OPERATORS,
   }

@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 from sqlalchemy.orm import Session
 
-from core.workflow.generator.agent.graph_ops import empty_graph
+from core.workflow.generator.graph.graph_ops import empty_graph
 from models.workflow_assist import WorkflowAssistConversation, WorkflowAssistMessage
 from services.workflow_assist.conversations import WorkflowAssistConversationService
 
@@ -55,6 +55,7 @@ def _patch_catalogues(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(init_mod, "build_tool_catalogue", lambda *args, **kwargs: [])
     monkeypatch.setattr(init_mod, "build_knowledge_catalogue", lambda *args, **kwargs: [])
+    monkeypatch.setattr(init_mod, "build_agent_model_catalogue", lambda *args, **kwargs: ())
     monkeypatch.setattr(init_mod, "hydrate_agent_bindings", lambda **kwargs: kwargs["graph"])
 
 
@@ -74,6 +75,9 @@ def _seed_conversation(
         account_id="account-1",
         draft_hash=base_hash,
     )
+    # These pre-contract chat-loop cases model conversations created before
+    # workflow-plan protocol v1 was introduced.
+    conversation.contract_protocol_version = None
     conversation.candidate_base_hash = base_hash
     if graph is not None:
         conversation.candidate_graph = graph
@@ -509,7 +513,6 @@ def test_live_prompt_does_not_dump_catalogue_snapshot(
     conversation = _seed_conversation(sqlite_session)
     list(chat_mod.iter_chat_events(**_chat_kwargs(sqlite_session, conversation, RecordingInvoker())))
     joined = "\n".join(seen)
-    assert "catalogue" not in chat_mod.CHAT_SYSTEM_PROMPT.lower()
     assert "ds-secret-catalogue-id-xyz" not in joined
     assert "secret-provider-xyz" not in joined
     assert "must-not-appear-in-live-prompt" not in joined
@@ -524,12 +527,47 @@ def test_chat_system_prompt_follows_detected_language() -> None:
     assert "Simplified Chinese" in zh
     assert "English" in en
     assert "single_choice" in zh
-    assert "catalogue" not in zh.lower()
-    assert "catalogue" not in chat_mod.CHAT_SYSTEM_PROMPT.lower()
     assert "referenced_nodes" in chat_mod.CHAT_SYSTEM_PROMPT
-    assert "build_node must use those exact ids" in chat_mod.CHAT_SYSTEM_PROMPT
+    assert "Use exact CurrentSituation ids" in chat_mod.CHAT_SYSTEM_PROMPT
     assert "search_tools" in chat_mod.CHAT_SYSTEM_PROMPT
     assert "ask_user" in chat_mod.CHAT_SYSTEM_PROMPT
+
+
+def test_session_language_replays_user_messages_and_clarification_answers() -> None:
+    from core.workflow.generator.agent.session import restore_session
+    from core.workflow.generator.agent.types import AgentMessage
+    from services.workflow_assist.agent_initializer import session_output_language
+
+    session = restore_session([], {}, "workflow")
+    session.messages = [
+        AgentMessage(1, "message", "user", "completed", {"text": "请生成抠图工作流"}),
+        AgentMessage(
+            2,
+            "tool_result",
+            "assistant",
+            "completed",
+            {
+                "tool_call_id": "ask-model",
+                "name": "ask_user",
+                "content": "deepseek-v4-pro 深度求索\ndoubao-seedream-3-0-t2i-250415",
+            },
+        ),
+    ]
+    assert session_output_language(session, "continue") == "zh-Hans"
+    session.messages.append(
+        AgentMessage(
+            3,
+            "tool_result",
+            "assistant",
+            "completed",
+            {
+                "tool_call_id": "ask-language",
+                "name": "ask_user",
+                "content": "请改用英文回答",
+            },
+        )
+    )
+    assert session_output_language(session, "continue") == "en"
 
 
 @pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
@@ -543,7 +581,7 @@ def test_catalogue_pull_failure_marks_side_unavailable(
     captured_limits: dict[str, object] = {}
     captured_ctx: dict[str, Any] = {}
 
-    def boom_tools(tenant_id: str, *, limit: int | None = 80) -> list[object]:
+    def boom_tools(tenant_id: str, *, limit: int | None = 80, raise_on_error: bool = False) -> list[object]:
         captured_limits["tool"] = limit
         raise RuntimeError("tools down")
 
@@ -560,6 +598,7 @@ def test_catalogue_pull_failure_marks_side_unavailable(
 
     monkeypatch.setattr(init_mod, "build_tool_catalogue", boom_tools)
     monkeypatch.setattr(init_mod, "build_knowledge_catalogue", boom_knowledge)
+    monkeypatch.setattr(init_mod, "build_agent_model_catalogue", lambda *args, **kwargs: ())
     monkeypatch.setattr(init_mod, "hydrate_agent_bindings", lambda **kwargs: kwargs["graph"])
     monkeypatch.setattr(init_mod, "ToolContext", wrapping_context)
     conversation = _seed_conversation(sqlite_session)
@@ -577,7 +616,7 @@ def test_catalogue_pull_failure_marks_side_unavailable(
 
 
 @pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
-def test_builder_input_uses_run_catalogue_snapshot(
+def test_builder_input_keeps_full_tool_snapshot_out_of_frozen_prompt(
     sqlite_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -596,13 +635,24 @@ def test_builder_input_uses_run_catalogue_snapshot(
         "build_tool_catalogue",
         lambda *args, **kwargs: [
             {
-                "provider_name": "google",
+                "provider_name": f"provider-{index:03d}",
                 "provider_type": "builtin",
                 "plugin_id": "",
-                "tool_name": "search",
-                "tool_label": "Google Search",
-                "description": "Search the web.",
+                "tool_name": f"tool-{index:03d}",
+                "tool_label": f"Tool {index:03d}",
+                "description": "Long private schema description " * 8,
+                "parameters": tuple(
+                    {
+                        "name": f"parameter_{item}",
+                        "type": "string",
+                        "form": "llm",
+                        "required": False,
+                        "description": "Long parameter description " * 8,
+                    }
+                    for item in range(4)
+                ),
             }
+            for index in range(100)
         ],
     )
     monkeypatch.setattr(
@@ -618,8 +668,9 @@ def test_builder_input_uses_run_catalogue_snapshot(
     list(chat_mod.iter_chat_events(**_chat_kwargs(sqlite_session, conversation, invoker)))
 
     builder_input = captured_ctx["builder_input"]
-    assert "google/search" in builder_input.tool_catalogue_text
-    assert "Search the web." in builder_input.tool_catalogue_text
+    assert len(captured_ctx["tool_entries"]) == 100
+    assert captured_ctx["tool_entries"][-1]["tool_name"] == "tool-099"
+    assert builder_input.tool_catalogue_text == ""
     assert "id=ds-1" in builder_input.knowledge_catalogue_text
     assert "Product Docs" in builder_input.knowledge_catalogue_text
 
@@ -876,6 +927,182 @@ def test_durable_agent_binds_run_references_and_selected_node(monkeypatch: pytes
     assert [item["id"] for item in session.referenced_datasets] == ["ds-uuid"]
     assert "Bound user references (HARD)" in captured["instruction"]
     assert "time/current_time" in captured["instruction"]
+
+
+def test_durable_stream_attaches_the_completed_reply_to_its_terminal_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import services.workflow_assist.agent_initializer as init_mod
+    import services.workflow_assist.chat as chat_mod
+    from core.workflow.generator.agent.types import AgentMessage
+
+    def fake_iter(session, *_args: Any, **_kwargs: Any):
+        yield (
+            "message.delta",
+            {
+                "text": "最终回答",
+                "delta": "最终回答",
+                "message_id": "msg-final",
+                "delta_index": 0,
+            },
+        )
+        session.messages.append(
+            AgentMessage(
+                sequence=2,
+                event_type="message",
+                role="assistant",
+                status="completed",
+                payload={"text": "最终回答", "message_id": "msg-final"},
+            )
+        )
+        yield "turn_complete", {}
+
+    monkeypatch.setattr(init_mod, "iter_agent_events", fake_iter)
+    monkeypatch.setattr(init_mod, "build_tool_catalogue", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(init_mod, "build_knowledge_catalogue", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(init_mod, "_draft_namespace_names", lambda *_args, **_kwargs: (set(), set()))
+    context = SimpleNamespace(
+        app_model=SimpleNamespace(tenant_id="tenant-1", id="app-1", mode="workflow"),
+        account=SimpleNamespace(id="account-1"),
+        run=SimpleNamespace(
+            id="run-1",
+            epoch=1,
+            worker_id="w1",
+            model_config={"provider": "openai", "name": "gpt-4o", "mode": "chat"},
+            mode="workflow",
+            selected_node=None,
+            references=[],
+            input="这个工作流是干什么的？",
+        ),
+        conversation=SimpleNamespace(
+            candidate_revision=0,
+            candidate_base_hash=None,
+            compacted_until_sequence=None,
+            compacted_state=None,
+            candidate_graph={"nodes": [], "edges": []},
+            state={},
+        ),
+        messages=(
+            SimpleNamespace(
+                sequence=1,
+                event_type="message",
+                role="user",
+                status="completed",
+                payload={"text": "这个工作流是干什么的？"},
+            ),
+        ),
+        should_stop=lambda: False,
+    )
+
+    events = list(chat_mod.run_workflow_assist_agent(context, invoker=FakeInvoker(), hydrate_graph=lambda graph: graph))
+
+    terminal = events[-1]
+    assert terminal[0] == "turn_complete"
+    assert terminal[1]["_recovery_messages"] == [
+        {
+            "sequence": 2,
+            "event_type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "payload": {"text": "最终回答", "message_id": "msg-final"},
+        }
+    ]
+
+
+def test_durable_protocol_notice_owns_pending_recovery_before_retry_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import services.workflow_assist.agent_initializer as init_mod
+    import services.workflow_assist.chat as chat_mod
+    from core.workflow.generator.agent.types import AgentMessage
+
+    def fake_iter(session, *_args: Any, **_kwargs: Any):
+        session.messages.extend(
+            [
+                AgentMessage(
+                    sequence=2,
+                    event_type="message",
+                    role="assistant",
+                    status="completed",
+                    payload={"text": "需要确认模型。", "message_id": "msg-invalid-turn"},
+                ),
+                AgentMessage(
+                    sequence=3,
+                    event_type="message",
+                    role="assistant",
+                    status="completed",
+                    payload={
+                        "text": "模型返回的工具调用格式无效，本次调用未执行，正在自动重试。",
+                        "message_id": "msg-protocol-notice",
+                    },
+                ),
+            ]
+        )
+        yield (
+            "message.delta",
+            {
+                "delta": "模型返回的工具调用格式无效，本次调用未执行，正在自动重试。",
+                "message_id": "msg-protocol-notice",
+                "delta_index": 0,
+                "stream_mode": "native",
+            },
+        )
+        yield (
+            "reasoning.delta",
+            {
+                "delta": "重新检查工具参数",
+                "message_id": "msg-retry-reasoning",
+                "delta_index": 0,
+                "stream_mode": "native",
+            },
+        )
+        yield "turn_complete", {}
+
+    monkeypatch.setattr(init_mod, "iter_agent_events", fake_iter)
+    monkeypatch.setattr(init_mod, "build_tool_catalogue", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(init_mod, "build_knowledge_catalogue", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(init_mod, "_draft_namespace_names", lambda *_args, **_kwargs: (set(), set()))
+    context = SimpleNamespace(
+        app_model=SimpleNamespace(tenant_id="tenant-1", id="app-1", mode="workflow"),
+        account=SimpleNamespace(id="account-1"),
+        run=SimpleNamespace(
+            id="run-1",
+            epoch=1,
+            worker_id="w1",
+            model_config={"provider": "openai", "name": "gpt-4o", "mode": "chat"},
+            mode="workflow",
+            selected_node=None,
+            references=[],
+            input="这个工作流是干什么的？",
+        ),
+        conversation=SimpleNamespace(
+            candidate_revision=0,
+            candidate_base_hash=None,
+            compacted_until_sequence=None,
+            compacted_state=None,
+            candidate_graph={"nodes": [], "edges": []},
+            state={},
+        ),
+        messages=(
+            SimpleNamespace(
+                sequence=1,
+                event_type="message",
+                role="user",
+                status="completed",
+                payload={"text": "这个工作流是干什么的？"},
+            ),
+        ),
+        should_stop=lambda: False,
+    )
+
+    events = list(chat_mod.run_workflow_assist_agent(context, invoker=FakeInvoker(), hydrate_graph=lambda graph: graph))
+
+    notice_event = events[0]
+    retry_reasoning = events[1]
+    assert notice_event[0] == "message.delta"
+    assert [item["sequence"] for item in notice_event[1]["_recovery_messages"]] == [2, 3]
+    assert "_agent_checkpoint" in notice_event[1]
+    assert "_recovery_messages" not in retry_reasoning[1]
 
 
 def test_assist_elapsed_time_fuse_is_disabled_by_default() -> None:

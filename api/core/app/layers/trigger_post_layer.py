@@ -5,7 +5,7 @@ from typing import Any, ClassVar, override
 from pydantic import TypeAdapter
 
 from core.db.session_factory import session_factory
-from core.workflow.system_variables import SystemVariableKey, get_system_text
+from core.workflow.runtime.variables.system_variables import SystemVariableKey, get_system_text
 from graphon.graph_engine.layers import GraphEngineLayer
 from graphon.graph_events import (
     GraphEngineEvent,

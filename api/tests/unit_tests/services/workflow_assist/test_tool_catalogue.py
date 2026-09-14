@@ -1,7 +1,7 @@
 from unittest.mock import patch
 
-from core.workflow.generator.knowledge_catalogue import _MAX_DATASETS
-from core.workflow.generator.tool_catalogue import _MAX_TOOLS
+from core.workflow.generator.resources.knowledge_catalogue import _MAX_DATASETS
+from core.workflow.generator.resources.tool_catalogue import _MAX_TOOLS
 from services.workflow_assist.knowledge_catalogue import list_assist_knowledge_catalogue
 from services.workflow_assist.tool_catalogue import list_assist_tool_catalogue
 

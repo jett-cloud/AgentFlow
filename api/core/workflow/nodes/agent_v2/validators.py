@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from core.workflow.graph_topology import WorkflowGraphTopology
+from core.workflow.graph.topology import WorkflowGraphTopology
 from graphon.enums import BuiltinNodeTypes
 from models.agent import Agent, AgentConfigSnapshot, AgentStatus, WorkflowAgentBindingType, WorkflowAgentNodeBinding
 from models.agent_config_entities import (

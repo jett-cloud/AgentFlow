@@ -25,7 +25,7 @@ from core.datasource.utils.message_transformer import DatasourceFileMessageTrans
 from core.datasource.website_crawl.website_crawl_provider import WebsiteCrawlDatasourcePluginProviderController
 from core.db.session_factory import session_factory
 from core.plugin.impl.datasource import PluginDatasourceManager
-from core.workflow.file_reference import build_file_reference
+from core.workflow.runtime.adapters.file_reference import build_file_reference
 from core.workflow.nodes.datasource.entities import DatasourceParameter, OnlineDriveDownloadFileParam
 from factories import file_factory
 from graphon.enums import WorkflowNodeExecutionMetadataKey, WorkflowNodeExecutionStatus

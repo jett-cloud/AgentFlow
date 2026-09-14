@@ -11,6 +11,7 @@ from ._runner_test_support import (
     _llm_result,
     _ParallelBuilderModel,
     json,
+    node_config,
 )
 
 
@@ -24,7 +25,7 @@ class TestWorkflowGeneratorEdgeCases:
         # The planner needs deterministic output — a permissive temperature
         # would let it ramble. The runner pins it back down for the planner
         # call while leaving the builder call alone.
-        from core.workflow.generator.llm_response import clamp_for_planner as _clamp_for_planner
+        from core.workflow.generator.model_io.llm_response import clamp_for_planner as _clamp_for_planner
 
         out = _clamp_for_planner({"temperature": 0.9, "max_tokens": 1024})
         assert out["temperature"] == 0.2
@@ -167,7 +168,7 @@ class TestWorkflowGeneratorEdgeCases:
                     "tool_configurations": {},
                     "tool_parameters": {},
                 },
-                "node3": {"outputs": []},
+                "node3": node_config("end"),
             },
             barrier_parties=0,
         )
@@ -251,7 +252,7 @@ class TestWorkflowGeneratorEdgeCases:
     def test_clamp_for_planner_preserves_low_temperature(self):
         # A user who already picked a tight temperature shouldn't have their
         # setting overridden — clamping only kicks in above 0.5.
-        from core.workflow.generator.llm_response import clamp_for_planner as _clamp_for_planner
+        from core.workflow.generator.model_io.llm_response import clamp_for_planner as _clamp_for_planner
 
         out = _clamp_for_planner({"temperature": 0.3})
         assert out["temperature"] == 0.3
@@ -259,7 +260,7 @@ class TestWorkflowGeneratorEdgeCases:
     def test_clamp_for_planner_injects_default_when_missing(self):
         # No temperature → planner picks 0.2 so the output stays consistent
         # across calls.
-        from core.workflow.generator.llm_response import clamp_for_planner as _clamp_for_planner
+        from core.workflow.generator.model_io.llm_response import clamp_for_planner as _clamp_for_planner
 
         out = _clamp_for_planner({})
         assert out["temperature"] == 0.2
@@ -267,10 +268,10 @@ class TestWorkflowGeneratorEdgeCases:
     def test_clamp_for_planner_falls_back_when_model_declares_no_ceiling(self):
         # No caller budget and no declared model ceiling → the fallback keeps
         # large plans (roughly 60 tokens per pretty-printed node) intact.
-        from core.workflow.generator.llm_response import (
+        from core.workflow.generator.model_io.llm_response import (
             PLANNER_FALLBACK_MAX_TOKENS as _PLANNER_FALLBACK_MAX_TOKENS,
         )
-        from core.workflow.generator.llm_response import clamp_for_planner as _clamp_for_planner
+        from core.workflow.generator.model_io.llm_response import clamp_for_planner as _clamp_for_planner
 
         out = _clamp_for_planner({})
         assert out["max_tokens"] == _PLANNER_FALLBACK_MAX_TOKENS
@@ -278,14 +279,14 @@ class TestWorkflowGeneratorEdgeCases:
     def test_clamp_for_planner_uses_the_model_ceiling(self):
         # A model that declares a bigger output ceiling should get to use it —
         # a 70-node plan costs ~5.7k tokens once the model pretty-prints it.
-        from core.workflow.generator.llm_response import clamp_for_planner as _clamp_for_planner
+        from core.workflow.generator.model_io.llm_response import clamp_for_planner as _clamp_for_planner
 
         out = _clamp_for_planner({}, 16384)
         assert out["max_tokens"] == 16384
 
     def test_clamp_for_planner_honours_a_ceiling_below_the_fallback(self):
         # A 4096-output model is the truth, not something to override.
-        from core.workflow.generator.llm_response import clamp_for_planner as _clamp_for_planner
+        from core.workflow.generator.model_io.llm_response import clamp_for_planner as _clamp_for_planner
 
         out = _clamp_for_planner({}, 4096)
         assert out["max_tokens"] == 4096
@@ -293,7 +294,7 @@ class TestWorkflowGeneratorEdgeCases:
     def test_clamp_for_planner_preserves_caller_max_tokens(self):
         # A caller who explicitly asked for a budget keeps it — we only fill
         # the default in when it's absent, never override an intentional value.
-        from core.workflow.generator.llm_response import clamp_for_planner as _clamp_for_planner
+        from core.workflow.generator.model_io.llm_response import clamp_for_planner as _clamp_for_planner
 
         out = _clamp_for_planner({"max_tokens": 8192})
         assert out["max_tokens"] == 8192

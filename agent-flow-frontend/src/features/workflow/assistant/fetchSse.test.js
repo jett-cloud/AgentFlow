@@ -3,6 +3,55 @@ import assert from 'node:assert/strict'
 
 import { FetchSseHttpError, FetchSseParseError, fetchSse } from './fetchSse.js'
 
+test('401 refreshes cookies once and reconnects the same cursor with the new CSRF token', async () => {
+  const originalDocument = globalThis.document
+  globalThis.document = { cookie: 'csrf_token=old' }
+  const requests = []
+  let refreshes = 0
+  try {
+    const result = await fetchSse('/events?after=42', {
+      lastEventId: 42,
+      refreshAuth: async () => { refreshes += 1; globalThis.document.cookie = 'csrf_token=new' },
+      fetchImpl: async (url, options) => {
+        requests.push({ url, headers: { ...options.headers } })
+        return requests.length === 1
+          ? { ok: false, status: 401 }
+          : { ok: true, status: 204 }
+      },
+    })
+    assert.equal(refreshes, 1)
+    assert.deepEqual(requests.map(request => request.url), ['/events?after=42', '/events?after=42'])
+    assert.equal(requests[1].headers['Last-Event-ID'], '42')
+    assert.equal(requests[1].headers['X-CSRF-Token'], 'new')
+    assert.equal(result.status, 204)
+  }
+  finally { globalThis.document = originalDocument }
+})
+
+test('failed refresh or a second 401 requires login instead of endlessly reconnecting', async () => {
+  for (const refreshFails of [true, false]) {
+    let requests = 0
+    let refreshes = 0
+    await assert.rejects(fetchSse('/events', {
+      refreshAuth: async () => { refreshes += 1; if (refreshFails) throw new Error('refresh failed') },
+      fetchImpl: async () => { requests += 1; return { ok: false, status: 401 } },
+    }), error => error.status === 401 && error.data?.code === 'ASSIST_AUTH_REQUIRED')
+    assert.equal(refreshes, 1)
+    assert.equal(requests, refreshFails ? 1 : 2)
+  }
+})
+
+test('abort while refreshing never reconnects the abandoned stream', async () => {
+  const abort = new AbortController()
+  let requests = 0
+  await assert.rejects(fetchSse('/events', {
+    signal: abort.signal,
+    refreshAuth: async () => { abort.abort(); return new Promise(() => {}) },
+    fetchImpl: async () => { requests += 1; return { ok: false, status: 401 } },
+  }), error => error.name === 'AbortError')
+  assert.equal(requests, 1)
+})
+
 function responseFromReader(reader, { status = 200, contentType = 'text/event-stream' } = {}) {
   return {
     ok: status >= 200 && status < 300,

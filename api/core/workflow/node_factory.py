@@ -20,19 +20,10 @@ from core.helper.ssrf_proxy import graphon_ssrf_proxy
 from core.memory.token_buffer_memory import TokenBufferMemory
 from core.model_manager import ModelInstance
 from core.prompt.entities.advanced_prompt_entities import MemoryConfig
+from core.repositories.human_input_repository import HumanInputFormRepository
 from core.trigger.constants import TRIGGER_NODE_TYPES
-from core.workflow.human_input_adapter import adapt_node_config_for_graph
-from core.workflow.node_runtime import (
-    DifyFileReferenceFactory,
-    DifyHumanInputNodeRuntime,
-    DifyPreparedLLM,
-    DifyPreparedPollingLLM,
-    DifyPromptMessageSerializer,
-    DifyRetrieverAttachmentLoader,
-    DifyToolFileManager,
-    DifyToolNodeRuntime,
-    build_dify_llm_file_saver,
-)
+from core.workflow.graph.adapters.human_input_adapter import adapt_node_config_for_graph
+from core.workflow.graph.adapters.node_config_schema import validate_resolved_node_data
 from core.workflow.nodes.agent.message_transformer import AgentMessageTransformer
 from core.workflow.nodes.agent.plugin_strategy_adapter import (
     PluginAgentStrategyPresentationProvider,
@@ -40,13 +31,27 @@ from core.workflow.nodes.agent.plugin_strategy_adapter import (
 )
 from core.workflow.nodes.agent.runtime_support import AgentRuntimeSupport
 from core.workflow.nodes.agent_v2 import DifyAgentNode
-from core.workflow.nodes.agent_v2.binding_resolver import WorkflowAgentBindingResolver
+from core.workflow.nodes.agent_v2.binding_resolver import AgentBindingResolver, WorkflowAgentBindingResolver
 from core.workflow.nodes.agent_v2.output_adapter import WorkflowAgentOutputAdapter
 from core.workflow.nodes.agent_v2.runtime_request_builder import WorkflowAgentRuntimeRequestBuilder
+from core.workflow.nodes.agent_v2.session_store import WorkflowAgentRuntimeSessionStore
 from core.workflow.nodes.human_input.callback import DifyHITLCallback
 from core.workflow.nodes.human_input.entities import HumanInputNodeData as DifyHumanInputNodeData
-from core.workflow.system_variables import SystemVariableKey, get_system_text, system_variable_selector
-from core.workflow.template_rendering import CodeExecutorJinja2TemplateRenderer
+from core.workflow.runtime.adapters.files import (
+    DifyFileReferenceFactory,
+    DifyRetrieverAttachmentLoader,
+    DifyToolFileManager,
+    build_dify_llm_file_saver,
+)
+from core.workflow.runtime.adapters.human_input import DifyHumanInputNodeRuntime
+from core.workflow.runtime.adapters.llm import DifyPreparedLLM, DifyPreparedPollingLLM, DifyPromptMessageSerializer
+from core.workflow.runtime.adapters.template_rendering import CodeExecutorJinja2TemplateRenderer
+from core.workflow.runtime.adapters.tools import DifyToolNodeRuntime
+from core.workflow.runtime.variables.system_variables import (
+    SystemVariableKey,
+    get_system_text,
+    system_variable_selector,
+)
 from graphon.entities.base_node_data import BaseNodeData
 from graphon.entities.graph_config import NodeConfigDict, NodeConfigDictAdapter
 from graphon.enums import BuiltinNodeTypes, NodeType
@@ -281,24 +286,41 @@ class DifyNodeFactory(NodeFactory):
     Default implementation of NodeFactory that resolves node classes from the live registry.
     """
 
+    _agent_binding_resolver: AgentBindingResolver | None
+    _agent_session_store: WorkflowAgentRuntimeSessionStore | None
+    _human_input_form_repository: HumanInputFormRepository | None
+
     @classmethod
     def from_graph_init_context(
         cls,
         *,
         graph_init_context: DifyGraphInitContext,
         graph_runtime_state: "GraphRuntimeState",
+        agent_binding_resolver: AgentBindingResolver | None = None,
+        agent_session_store: WorkflowAgentRuntimeSessionStore | None = None,
+        human_input_form_repository: HumanInputFormRepository | None = None,
     ) -> "DifyNodeFactory":
         """Bridge Dify's explicit init context into the current `graphon` API."""
         return cls(
             graph_init_params=graph_init_context.to_graph_init_params(),
             graph_runtime_state=graph_runtime_state,
+            agent_binding_resolver=agent_binding_resolver,
+            agent_session_store=agent_session_store,
+            human_input_form_repository=human_input_form_repository,
         )
 
     def __init__(
         self,
         graph_init_params: "GraphInitParams",
         graph_runtime_state: "GraphRuntimeState",
+        *,
+        agent_binding_resolver: AgentBindingResolver | None = None,
+        agent_session_store: WorkflowAgentRuntimeSessionStore | None = None,
+        human_input_form_repository: HumanInputFormRepository | None = None,
     ) -> None:
+        self._agent_binding_resolver = agent_binding_resolver
+        self._agent_session_store = agent_session_store
+        self._human_input_form_repository = human_input_form_repository
         self.graph_init_params = graph_init_params
         self.graph_runtime_state = graph_runtime_state
         self._dify_context = self._resolve_dify_context(graph_init_params.run_context)
@@ -338,6 +360,7 @@ class DifyNodeFactory(NodeFactory):
                 SystemVariableKey.WORKFLOW_EXECUTION_ID,
             ),
             conversation_id_getter=self._conversation_id,
+            form_repository=human_input_form_repository,
         )
         self._tool_runtime = DifyToolNodeRuntime(self._dify_context)
         self._http_request_file_manager = file_manager
@@ -360,6 +383,16 @@ class DifyNodeFactory(NodeFactory):
         self._agent_strategy_presentation_provider = PluginAgentStrategyPresentationProvider()
         self._agent_runtime_support = AgentRuntimeSupport()
         self._agent_message_transformer = AgentMessageTransformer()
+
+    def with_runtime_state(self, graph_runtime_state: "GraphRuntimeState") -> "DifyNodeFactory":
+        """Rebuild frame-bound services while retaining explicitly injected repositories."""
+        return DifyNodeFactory(
+            graph_init_params=self.graph_init_params,
+            graph_runtime_state=graph_runtime_state,
+            agent_binding_resolver=self._agent_binding_resolver,
+            agent_session_store=self._agent_session_store,
+            human_input_form_repository=self._human_input_form_repository,
+        )
 
     @staticmethod
     def _resolve_dify_context(run_context: Mapping[str, Any]) -> DifyRunContext:
@@ -394,6 +427,7 @@ class DifyNodeFactory(NodeFactory):
         # stay explicit and constructors receive the concrete typed payload.
         resolved_node_data = self._validate_resolved_node_data(node_class, node_data)
         node_type = node_data.type
+        node: Node | None = None
         node_init_kwargs_factories: Mapping[NodeType, Callable[[], dict[str, object]]] = {
             BuiltinNodeTypes.CODE: lambda: {
                 "code_executor": self._code_executor,
@@ -412,7 +446,8 @@ class DifyNodeFactory(NodeFactory):
             },
             BuiltinNodeTypes.HUMAN_INPUT: lambda: {
                 "hitl_callback": self._build_human_input_callback(
-                    node_data=DifyHumanInputNodeData.model_validate(adapted_node_config["data"])
+                    node_data=DifyHumanInputNodeData.model_validate(adapted_node_config["data"]),
+                    execution_id_getter=lambda: node.execution_id if node is not None else None,
                 ),
             },
             BuiltinNodeTypes.LLM: lambda: self._build_llm_compatible_node_init_kwargs(
@@ -457,23 +492,21 @@ class DifyNodeFactory(NodeFactory):
         }
         node_init_kwargs = node_init_kwargs_factories.get(node_type, lambda: {})()
         constructor_node_data = resolved_node_data.model_dump(mode="python", by_alias=True)
-        return node_class(
+        node = node_class(
             node_id=node_id,
             data=constructor_node_data,
             graph_init_params=self.graph_init_params,
             graph_runtime_state=self.graph_runtime_state,
             **node_init_kwargs,
         )
+        return node
 
     @staticmethod
     def _validate_resolved_node_data(node_class: type[Node], node_data: BaseNodeData) -> BaseNodeData:
         """
         Re-validate the permissive graph payload with the concrete NodeData model declared by the resolved node class.
         """
-        validate_node_data = getattr(node_class, "validate_node_data", None)
-        if callable(validate_node_data):
-            return cast("BaseNodeData", validate_node_data(node_data))
-        return node_data
+        return validate_resolved_node_data(node_class, node_data)
 
     @staticmethod
     def _resolve_node_class(*, node_type: NodeType, node_version: str) -> type[Node]:
@@ -490,7 +523,7 @@ class DifyNodeFactory(NodeFactory):
             from core.workflow.nodes.agent_v2.session_store import WorkflowAgentRuntimeSessionStore
 
             return {
-                "binding_resolver": WorkflowAgentBindingResolver(),
+                "binding_resolver": self._agent_binding_resolver or WorkflowAgentBindingResolver(),
                 "runtime_request_builder": WorkflowAgentRuntimeRequestBuilder(
                     credentials_provider=self._llm_credentials_provider,
                     request_builder=AgentBackendRunRequestBuilder(),
@@ -508,7 +541,7 @@ class DifyNodeFactory(NodeFactory):
                 # tenant validator resolves ToolFile (canonical) + UploadFile refs.
                 "type_checker": PerOutputTypeChecker(file_validator=AgentOutputFileTenantValidator()),
                 "failure_orchestrator": OutputFailureOrchestrator(),
-                "session_store": WorkflowAgentRuntimeSessionStore(),
+                "session_store": self._agent_session_store or WorkflowAgentRuntimeSessionStore(),
             }
         return {
             "strategy_resolver": self._agent_strategy_resolver,
@@ -521,6 +554,7 @@ class DifyNodeFactory(NodeFactory):
         self,
         *,
         node_data: DifyHumanInputNodeData,
+        execution_id_getter: Callable[[], str | None],
     ) -> DifyHITLCallback:
         return DifyHITLCallback(
             form_repository=self._human_input_runtime.build_form_repository(),
@@ -529,6 +563,7 @@ class DifyNodeFactory(NodeFactory):
             delivery_methods=self._human_input_runtime._resolve_delivery_methods(node_data=node_data),
             display_in_ui=self._human_input_runtime._display_in_ui(node_data=node_data),
             file_reference_factory=self._file_reference_factory,
+            execution_id_getter=execution_id_getter,
         )
 
     def _build_llm_compatible_node_init_kwargs(

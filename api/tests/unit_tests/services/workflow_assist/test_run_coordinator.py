@@ -20,6 +20,10 @@ from sqlalchemy.dialects import sqlite
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from core.workflow.generator.acceptance.evidence import canonical_graph_hash
+from core.workflow.generator.agent.types import AgentMessage
+from core.workflow.generator.contracts.workflow_contract import canonical_workflow_contract_hash
+from core.workflow.generator.contracts.workflow_reconciliation import WORKFLOW_RECONCILIATION_VERSION
 from libs.datetime_utils import naive_utc_now
 from models.agent import Agent, AgentConfigSnapshot, AgentScope, AgentSource, AgentStatus
 from models.agent_config_entities import AgentSoulConfig
@@ -39,6 +43,7 @@ from services.workflow_assist.conversations import (
 )
 from services.workflow_assist.run_coordinator import RunCoordinator
 from services.workflow_assist.run_types import (
+    AgentCheckpoint,
     AgentResponseOutbox,
     CandidateMutation,
     CommitStepOutcome,
@@ -49,6 +54,7 @@ from services.workflow_assist.run_types import (
     RunOwner,
     UserAbortFence,
     WorkerTimeoutFence,
+    WorkflowContractCheckpoint,
 )
 
 TABLES = (
@@ -60,6 +66,113 @@ TABLES = (
     Agent,
     AgentConfigSnapshot,
 )
+
+
+@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
+def test_live_approval_is_bound_to_pending_graph_and_consumed_once(sqlite_session: Session) -> None:
+    from dataclasses import replace
+
+    from core.workflow.generator.acceptance.authorization import build_live_acceptance_request
+    from services.workflow_assist.run_values import sanitize_payload
+
+    conversation = _create_conversation(sqlite_session)
+    graph = {"nodes": [{"id": "llm", "data": {"type": "llm"}}], "edges": []}
+    conversation.candidate_graph = graph
+    conversation.candidate_revision = 2
+    request = build_live_acceptance_request(graph, revision=2)
+    payload = sanitize_payload(
+        {
+            "id": "consent-1",
+            "name": "ask_user",
+            "arguments": {
+                "questions": [
+                    {
+                        "id": "live_run_consent",
+                        "kind": "live_acceptance",
+                        "execution_request": request.model_dump(mode="json"),
+                    }
+                ]
+            },
+        }
+    )
+    sqlite_session.add(
+        WorkflowAssistMessage(
+            tenant_id=conversation.tenant_id,
+            app_id=conversation.app_id,
+            account_id=conversation.account_id,
+            conversation_id=conversation.id,
+            sequence=1,
+            event_type="tool_call",
+            role="assistant",
+            status="pending",
+            payload=payload,
+        )
+    )
+    sqlite_session.flush()
+    coordinator = RunCoordinator(sqlite_session)
+    with pytest.raises(ValueError, match="stale"):
+        coordinator.start_turn(
+            owner=_owner(), message="approve", mode="workflow", model_config={}, live_acceptance_request_id="0" * 32
+        )
+    run = coordinator.start_turn(
+        owner=_owner(),
+        message="approve",
+        mode="workflow",
+        model_config={},
+        live_acceptance_request_id=request.request_id,
+    )
+    lease = coordinator.claim(owner=_owner(), run_id=run.id, epoch=run.epoch, worker_id="worker-1")
+    assert lease is not None
+    assert not coordinator.consume_live_acceptance(lease=lease, revision=3, graph_hash=request.graph_hash)
+    assert not coordinator.consume_live_acceptance(lease=lease, revision=2, graph_hash="f" * 64)
+    assert not coordinator.consume_live_acceptance(
+        lease=replace(lease, worker_id="other"), revision=2, graph_hash=request.graph_hash
+    )
+    assert coordinator.consume_live_acceptance(lease=lease, revision=2, graph_hash=request.graph_hash)
+    assert not coordinator.consume_live_acceptance(lease=lease, revision=2, graph_hash=request.graph_hash)
+    _terminate_error(coordinator, lease)
+    retried = coordinator.retry_failed_step(
+        owner=_owner(), run_id=run.id, epoch=run.epoch, failed_step_id="error:provider"
+    )
+    assert retried.live_acceptance is None
+    with pytest.raises(ValueError, match="No pending"):
+        coordinator.start_turn(
+            owner=_owner(),
+            message="approve again",
+            mode="workflow",
+            model_config={},
+            live_acceptance_request_id=request.request_id,
+        )
+
+
+@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
+def test_ordinary_turn_never_receives_a_live_grant(sqlite_session: Session) -> None:
+    _create_conversation(sqlite_session)
+    run, _ = _start_and_claim(sqlite_session)
+    assert run.live_acceptance is None
+
+
+@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
+def test_terminal_response_persists_its_checkpoint(sqlite_session: Session) -> None:
+    conversation = _create_conversation(sqlite_session)
+    coordinator = RunCoordinator(sqlite_session)
+    _run, lease = _start_and_claim(sqlite_session)
+    response = AgentResponseOutbox(
+        sequence=2,
+        payload={"text": "Need confirmation"},
+        checkpoint=AgentCheckpoint(
+            compacted_until_sequence=1, compacted_state={"summary": "ready"}, last_validation=None
+        ),
+    )
+    assert coordinator.terminate(
+        lease=lease,
+        status=WorkflowAssistRunStatus.TURN_COMPLETE,
+        step_id="turn:complete",
+        payload={"status": "turn_complete"},
+        response_outbox=response,
+    )
+    assert conversation.compacted_until_sequence == 1
+    assert conversation.compacted_state == {"summary": "ready"}
 
 
 def _owner(*, account_id: str = "account-1") -> RunOwner:
@@ -78,6 +191,7 @@ def _create_conversation(session: Session, *, account_id: str = "account-1") -> 
         account_id=account_id,
     )
     conversation.id = "conversation-1"
+    conversation.contract_protocol_version = None
     session.flush()
     return conversation
 
@@ -99,6 +213,32 @@ def _start_and_claim(
     assert lease is not None
     assert lease.attempt == 1
     return run, lease
+
+
+@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
+def test_start_turn_freezes_contract_protocol_on_the_run(
+    sqlite_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "services.workflow_assist.run_coordinator.dify_config.WORKFLOW_ASSIST_CONTRACT_ROLLOUT",
+        "new_conversations",
+    )
+    conversation = _create_conversation(sqlite_session)
+    conversation.contract_protocol_version = 1
+    sqlite_session.flush()
+
+    run = RunCoordinator(sqlite_session).start_turn(
+        owner=_owner(),
+        message="Build it",
+        mode=WorkflowAssistMode.WORKFLOW,
+        model_config={"provider": "test"},
+    )
+    conversation.contract_protocol_version = None
+    sqlite_session.flush()
+
+    assert run.contract_protocol_version == 1
+    assert run.contract_rollout_stage == "new_conversations"
 
 
 @pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
@@ -145,6 +285,101 @@ def test_message_sequences_ignore_foreign_owner_rows_with_the_same_conversation_
         )
     )
     assert owner_sequences == [1, 2]
+
+
+@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
+def test_stage_agent_response_with_history_rejects_a_stale_worker_without_writes(
+    sqlite_session: Session,
+) -> None:
+    _create_conversation(sqlite_session)
+    run, lease = _start_and_claim(sqlite_session)
+    run.attempt = 2
+    sqlite_session.flush()
+    history = (
+        AgentMessage(
+            sequence=2,
+            role="assistant",
+            event_type="message",
+            status="completed",
+            payload={"text": "earlier", "message_id": "msg-earlier"},
+        ),
+    )
+    response = AgentResponseOutbox(
+        sequence=3,
+        payload={"text": "retry", "message_id": "msg-retry"},
+        checkpoint=None,
+    )
+
+    outcome = RunCoordinator(sqlite_session).stage_agent_response(
+        lease=lease,
+        history=history,
+        response=response,
+    )
+
+    assert outcome is CommitStepOutcome.FENCED
+    assert _assistant_messages(sqlite_session) == []
+
+
+@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
+def test_stage_agent_response_rolls_back_history_when_response_sequence_is_invalid(
+    sqlite_session: Session,
+) -> None:
+    _create_conversation(sqlite_session)
+    _run, lease = _start_and_claim(sqlite_session)
+    history = (
+        AgentMessage(
+            sequence=2,
+            role="assistant",
+            event_type="message",
+            status="completed",
+            payload={"text": "earlier", "message_id": "msg-earlier"},
+        ),
+    )
+    response = AgentResponseOutbox(
+        sequence=4,
+        payload={"text": "retry", "message_id": "msg-retry"},
+        checkpoint=None,
+    )
+
+    with pytest.raises(WorkflowAssistConversationWriteConflictError, match="sequence mismatch"):
+        RunCoordinator(sqlite_session).stage_agent_response(
+            lease=lease,
+            history=history,
+            response=response,
+        )
+
+    assert _assistant_messages(sqlite_session) == []
+
+
+@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
+def test_stage_agent_response_with_history_is_idempotent_on_replay(sqlite_session: Session) -> None:
+    _create_conversation(sqlite_session)
+    _run, lease = _start_and_claim(sqlite_session)
+    history = (
+        AgentMessage(
+            sequence=2,
+            role="assistant",
+            event_type="message",
+            status="completed",
+            payload={"text": "earlier", "message_id": "msg-earlier"},
+        ),
+    )
+    response = AgentResponseOutbox(
+        sequence=3,
+        payload={"text": "retry", "message_id": "msg-retry"},
+        checkpoint=None,
+    )
+    coordinator = RunCoordinator(sqlite_session)
+
+    first = coordinator.stage_agent_response(lease=lease, history=history, response=response)
+    replay = coordinator.stage_agent_response(lease=lease, history=history, response=response)
+
+    assert first is CommitStepOutcome.COMMITTED
+    assert replay is CommitStepOutcome.DUPLICATE
+    assert [(message.sequence, message.status) for message in _assistant_messages(sqlite_session)] == [
+        (2, "completed"),
+        (3, "pending"),
+    ]
 
 
 @pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
@@ -753,6 +988,9 @@ def test_candidate_mutation_clears_completion_evidence_in_the_step_transaction(s
     conversation.completion_candidate_base_hash = "draft-1"
     conversation.completion_app_mode = WorkflowAssistMode.WORKFLOW
     conversation.completion_assertion = "workflow_structure_reaches_terminal"
+    conversation.completion_contract_protocol_version = 1
+    conversation.completion_contract_revision = 1
+    conversation.completion_contract_hash = "a" * 64
 
     result = coordinator.commit_step(
         lease=lease,
@@ -773,6 +1011,11 @@ def test_candidate_mutation_clears_completion_evidence_in_the_step_transaction(s
             "completion_candidate_base_hash",
             "completion_app_mode",
             "completion_assertion",
+            "completion_contract_protocol_version",
+            "completion_contract_revision",
+            "completion_contract_hash",
+            "completion_graph_hash",
+            "completion_validation_version",
         )
     )
 
@@ -784,9 +1027,104 @@ def test_done_atomically_persists_typed_completion_evidence(
     mode: WorkflowAssistMode,
 ) -> None:
     conversation = _create_conversation(sqlite_session)
+    conversation.contract_protocol_version = 1
+    sqlite_session.flush()
     coordinator = RunCoordinator(sqlite_session)
     run, lease = _start_and_claim(sqlite_session, mode=mode)
-    _commit_candidate(coordinator, lease, mode=mode)
+    terminal_type = "end" if mode is WorkflowAssistMode.WORKFLOW else "answer"
+    terminal_output = "result" if terminal_type == "end" else "answer"
+    graph = {
+        "nodes": [
+            {
+                "id": "start",
+                "data": {
+                    "type": "start",
+                    "variables": [{"variable": "query", "type": "paragraph"}],
+                },
+            },
+            {
+                "id": "terminal",
+                "data": {
+                    "type": terminal_type,
+                    **(
+                        {
+                            "outputs": [
+                                {
+                                    "variable": "result",
+                                    "value_selector": ["start", "query"],
+                                    "value_type": "string",
+                                }
+                            ]
+                        }
+                        if terminal_type == "end"
+                        else {"answer": "{{#start.query#}}"}
+                    ),
+                },
+            },
+        ],
+        "edges": [{"source": "start", "target": "terminal"}],
+    }
+    _commit_candidate(coordinator, lease, mode=mode, graph=graph)
+    contract_body = {
+        "schema_version": 1,
+        "status": "complete",
+        "operation": "rebuild",
+        "requirements": [
+            {
+                "id": "req.result",
+                "source_turn_id": "turn:1",
+                "evidence": "Build a support workflow",
+                "text": "Build a support workflow",
+                "provenance": "explicit_user",
+                "supersedes": [],
+            }
+        ],
+        "assumptions": [],
+        "edit_scope": None,
+        "nodes": [
+            {
+                "id": "start",
+                "type": "start",
+                "objective": "Collect query",
+                "requirement_ids": ["req.result"],
+                "inputs": [],
+                "outputs": [{"name": "query", "type": "string"}],
+                "structure_kind": "start",
+                "unresolved": [],
+            },
+            {
+                "id": "terminal",
+                "type": terminal_type,
+                "objective": "Return result",
+                "requirement_ids": ["req.result"],
+                "inputs": [{"source": ["start", "query"], "role": "result"}],
+                "outputs": [{"name": terminal_output, "type": "string"}],
+                "structure_kind": terminal_type,
+                "unresolved": [],
+            },
+        ],
+        "edges": [{"source": "start", "target": "terminal", "source_handle": None}],
+        "final_outputs": [{"name": "result", "source": ["terminal", terminal_output], "type": "string"}],
+        "resources": [],
+        "checks": [
+            {
+                "id": "check.result",
+                "description": "Terminal returns result",
+                "level": "static",
+                "requirement_ids": ["req.result"],
+            }
+        ],
+        "unresolved": [],
+    }
+    contract_hash = canonical_workflow_contract_hash(contract_body, revision=1)
+    conversation.workflow_contract = {
+        **contract_body,
+        "protocol_version": 1,
+        "revision": 1,
+        "contract_hash": contract_hash,
+    }
+    conversation.contract_revision = 1
+    conversation.contract_hash = contract_hash
 
     assert coordinator.terminate(
         lease=lease,
@@ -813,6 +1151,11 @@ def test_done_atomically_persists_typed_completion_evidence(
     assert conversation.completion_candidate_base_hash == "draft-1"
     assert conversation.completion_app_mode is mode
     assert conversation.completion_assertion == "workflow_structure_reaches_terminal"
+    assert conversation.completion_contract_protocol_version == 1
+    assert conversation.completion_contract_revision == 1
+    assert conversation.completion_contract_hash == contract_hash
+    assert conversation.completion_graph_hash == canonical_graph_hash(graph)
+    assert conversation.completion_validation_version == WORKFLOW_RECONCILIATION_VERSION
 
 
 @pytest.mark.parametrize("mode", [WorkflowAssistMode.WORKFLOW, WorkflowAssistMode.ADVANCED_CHAT])
@@ -1542,6 +1885,109 @@ def test_failed_finish_is_a_tool_result_and_run_remains_running(sqlite_session: 
 
 
 @pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
+def test_contract_checkpoint_is_idempotent_and_does_not_advance_graph_revision(sqlite_session: Session) -> None:
+    conversation = _create_conversation(sqlite_session)
+    conversation.contract_protocol_version = 1
+    coordinator = RunCoordinator(sqlite_session)
+    run, lease = _start_and_claim(sqlite_session)
+    contract = {"protocol_version": 1, "revision": 1, "contract_hash": "a" * 64, "status": "draft"}
+    checkpoint = AgentCheckpoint(
+        compacted_until_sequence=None,
+        compacted_state=None,
+        last_validation=None,
+        workflow_contract=WorkflowContractCheckpoint(
+            protocol_version=1,
+            revision=1,
+            contract_hash="a" * 64,
+            contract=contract,
+        ),
+    )
+    conversation.completion_run_id = run.id
+    conversation.completion_contract_revision = 0
+
+    first = coordinator.commit_step(
+        lease=lease,
+        step_id="contract-1",
+        event=WorkflowAssistRunEventType.TOOL_RESULT,
+        payload={"tool_call_id": "plan-1", "ok": True},
+        checkpoint=checkpoint,
+    )
+    replay = coordinator.commit_step(
+        lease=lease,
+        step_id="contract-1",
+        event=WorkflowAssistRunEventType.TOOL_RESULT,
+        payload={"tool_call_id": "plan-1", "ok": True},
+        checkpoint=checkpoint,
+    )
+
+    assert first.outcome is CommitStepOutcome.COMMITTED
+    assert replay.outcome is CommitStepOutcome.DUPLICATE
+    assert conversation.workflow_contract == contract
+    assert conversation.contract_protocol_version == 1
+    assert conversation.contract_revision == 1
+    assert conversation.contract_hash == "a" * 64
+    assert conversation.candidate_revision == 0
+    assert run.candidate_revision == 0
+    assert conversation.completion_run_id is None
+    assert conversation.completion_contract_revision is None
+
+
+@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
+def test_contract_checkpoint_rejects_revision_regression(sqlite_session: Session) -> None:
+    conversation = _create_conversation(sqlite_session)
+    conversation.contract_protocol_version = 1
+    coordinator = RunCoordinator(sqlite_session)
+    _run, lease = _start_and_claim(sqlite_session)
+
+    def checkpoint(revision: int, marker: str) -> AgentCheckpoint:
+        contract_hash = marker * 64
+        contract = {
+            "protocol_version": 1,
+            "revision": revision,
+            "contract_hash": contract_hash,
+            "status": "draft",
+        }
+        return AgentCheckpoint(
+            compacted_until_sequence=None,
+            compacted_state=None,
+            last_validation=None,
+            workflow_contract=WorkflowContractCheckpoint(
+                protocol_version=1,
+                revision=revision,
+                contract_hash=contract_hash,
+                contract=contract,
+            ),
+        )
+
+    coordinator.commit_step(
+        lease=lease,
+        step_id="contract-1",
+        event=WorkflowAssistRunEventType.TOOL_RESULT,
+        payload={"tool_call_id": "plan-1", "ok": True},
+        checkpoint=checkpoint(1, "a"),
+    )
+    coordinator.commit_step(
+        lease=lease,
+        step_id="contract-2",
+        event=WorkflowAssistRunEventType.TOOL_RESULT,
+        payload={"tool_call_id": "plan-2", "ok": True},
+        checkpoint=checkpoint(2, "b"),
+    )
+
+    with pytest.raises(ValueError, match="contract revision cannot regress"):
+        coordinator.commit_step(
+            lease=lease,
+            step_id="contract-stale",
+            event=WorkflowAssistRunEventType.TOOL_RESULT,
+            payload={"tool_call_id": "plan-stale", "ok": True},
+            checkpoint=checkpoint(1, "a"),
+        )
+
+    assert conversation.contract_revision == 2
+    assert conversation.contract_hash == "b" * 64
+
+
+@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
 def test_sequences_remain_continuous_through_terminal_state(sqlite_session: Session) -> None:
     conversation = _create_conversation(sqlite_session)
     coordinator = RunCoordinator(sqlite_session)
@@ -2188,6 +2634,8 @@ def _terminate_error(
 @pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
 def test_retry_failed_step_queues_a_new_run_without_a_new_user_message(sqlite_session: Session) -> None:
     conversation = _create_conversation(sqlite_session)
+    conversation.contract_protocol_version = 1
+    sqlite_session.flush()
     coordinator = RunCoordinator(sqlite_session)
     failed_run, lease = _start_and_claim(sqlite_session)
     coordinator.commit_step(
@@ -2237,6 +2685,9 @@ def test_retry_failed_step_queues_a_new_run_without_a_new_user_message(sqlite_se
     assert retried.epoch == failed_run.epoch + 1
     assert retried.status is WorkflowAssistRunStatus.QUEUED
     assert retried.input == failed_run.input
+    assert failed_run.contract_protocol_version == 1
+    assert retried.contract_protocol_version == 1
+    assert retried.contract_rollout_stage == failed_run.contract_rollout_stage
     assert conversation.active_run_id == retried.id
     assert conversation.run_epoch == retried.epoch
     assert [(message.role, message.event_type, message.payload.get("id")) for message in messages] == [

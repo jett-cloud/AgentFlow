@@ -1,39 +1,111 @@
-# AgentFlow Studio API
+# Dify Backend API
 
-This directory is the curated Python API snapshot for AgentFlow Studio. It depends on services and configuration such as PostgreSQL, Redis, storage, and model/provider settings; it is not a standalone production deployment.
+## Setup and Run
 
-## Prerequisites
+> [!IMPORTANT]
+>
+> In the v1.3.0 release, `poetry` has been replaced with
+> [`uv`](https://docs.astral.sh/uv/) as the package manager
+> for Dify API backend service.
 
-- Python 3.12
-- [uv](https://docs.astral.sh/uv/)
-- The services and configuration described in the repository [README](../README.md)
+`uv` and `pnpm` are required to run the setup and development commands below.
 
-From the repository root, create a local configuration and install the API development dependencies:
+### Using scripts (recommended)
 
-```bash
-cp api/.env.example api/.env
-uv sync --project api --dev
+The scripts resolve paths relative to their location, so you can run them from anywhere.
+
+1. Run setup (copies env files and installs dependencies).
+
+   ```bash
+   ./dev/setup
+   ```
+
+1. Review `api/.env`, `web/.env.local`, and `docker/middleware.env` values (see the `SECRET_KEY` note below).
+
+1. Start middleware (PostgreSQL/Redis/Weaviate).
+
+   ```bash
+   ./dev/start-docker-compose
+   ```
+
+1. Start backend (runs migrations first).
+
+   ```bash
+   ./dev/start-api
+   ```
+
+1. Start Dify [web](../web) service.
+
+   ```bash
+   ./dev/start-web
+   ```
+
+   `./dev/setup` and `./dev/start-web` install JavaScript dependencies through the repository root workspace, so you do not need a separate `cd web && pnpm install` step.
+
+1. Set up your application by visiting `http://localhost:3000`.
+
+1. Start the worker service (async and scheduler tasks, runs from `api`).
+
+   ```bash
+   ./dev/start-worker
+   ```
+
+1. Optional: start Celery Beat (scheduled tasks).
+
+   ```bash
+   ./dev/start-beat
+   ```
+
+### Environment notes
+
+> [!IMPORTANT]
+>
+> When the frontend and backend run on different subdomains, set COOKIE_DOMAIN to the site’s top-level domain (e.g., `example.com`). The frontend and backend must be under the same top-level domain in order to share authentication cookies.
+
+- Generate a `SECRET_KEY` in the `.env` file.
+
+  bash for Linux
+
+  ```bash
+  sed -i "/^SECRET_KEY=/c\\SECRET_KEY=$(openssl rand -base64 42)" .env
+  ```
+
+  bash for Mac
+
+  ```bash
+  secret_key=$(openssl rand -base64 42)
+  sed -i '' "/^SECRET_KEY=/c\\
+  SECRET_KEY=${secret_key}" .env
+  ```
+
+## Testing
+
+1. Install dependencies for both the backend and the test environment
+
+   ```bash
+   cd api
+   uv sync --group dev
+   ```
+
+1. Run the tests locally with mocked system environment variables in `tool.pytest_env` section in `pyproject.toml`, more can check [Claude.md](../CLAUDE.md)
+
+   ```bash
+   cd api
+   uv run pytest                           # Run all tests
+   uv run pytest tests/unit_tests/         # Unit tests only
+   uv run pytest tests/integration_tests/  # Integration tests
+
+   # Code quality
+   ./dev/reformat               # Run all formatters and linters
+   uv run ruff check --fix ./   # Fix linting issues
+   uv run ruff format ./        # Format code
+   uv run pyrefly check         # Type checking
+   ```
+
+## Generate TS stub
+
+```
+uv run dev/generate_swagger_specs.py --output-dir openapi
 ```
 
-Set strong local values in `api/.env` before starting services. Do not commit that file.
-
-## Running locally
-
-The API Docker entrypoint confirms the following application and Celery entrypoints. With the required services running and `api/.env` configured, run them from the repository root:
-
-```bash
-uv run --directory api python -m app
-uv run --directory api celery -A celery_entrypoint.celery worker -P gevent -c 1 --loglevel INFO
-```
-
-For Compose-based services and the frontend workflow, follow the repository [README](../README.md). This curated snapshot does not include the upstream `web/` application or its development scripts.
-
-## Tests
-
-Run focused API tests from the repository root after dependencies and required test services are available:
-
-```bash
-uv run --directory api pytest tests/unit_tests/controllers/console/app/test_workflow_assist_api.py
-```
-
-Some integration tests require Docker-backed middleware or external services. See the root README for the snapshot's recorded verification status and limitations.
+use https://jsontotable.org/openapi-to-typescript to convert to typescript

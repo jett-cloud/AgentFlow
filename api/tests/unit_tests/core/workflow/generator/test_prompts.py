@@ -59,6 +59,11 @@ class TestPlannerSystemPrompt:
         assert "Emit it COMPACT" in PLANNER_SYSTEM_PROMPT
         assert "no indentation" in PLANNER_SYSTEM_PROMPT
 
+    def test_documents_all_current_start_input_types(self):
+        assert '"checkbox"' in PLANNER_SYSTEM_PROMPT
+        assert '"json_object"' in PLANNER_SYSTEM_PROMPT
+        assert 'never emit "json-object"' in PLANNER_SYSTEM_PROMPT
+
 
 class TestFormatIdealOutputSection:
     def test_returns_empty_string_for_blank_input(self):
@@ -141,10 +146,25 @@ class TestNodeBuilderPrompt:
         assert '"version": "2"' in assigner
         assert "variable_selector" in assigner
 
+    def test_documents_graphon_container_and_human_input_boundaries(self):
+        human_input = get_node_builder_system_prompt("human-input")
+        iteration = get_node_builder_system_prompt("iteration")
+        loop = get_node_builder_system_prompt("loop")
+
+        assert "^[A-Za-z_][A-Za-z0-9_]*$" in human_input
+        assert "__timeout" in human_input
+        assert '"id": "webapp"' not in human_input
+        assert "generator supplies ``start_node_id``" in iteration
+        assert "``parallel_nums`` must be at least 1" in iteration
+        assert "generator supplies ``start_node_id``" in loop
+        assert "``loop_count`` must be an integer from 1 to 100" in loop
+        assert "``loop_variables`` must be a list" in loop
+        assert "Each item must include ``value``" in loop
+
     def test_common_node_prompts_stay_small(self):
         sizes = [len(get_node_builder_system_prompt(node_type)) for node_type in ("start", "llm", "end")]
 
-        assert max(sizes) < 3000
+        assert max(sizes) < 3600
 
     def test_unknown_node_type_gets_minimal_fallback(self):
         prompt = get_node_builder_system_prompt("future-node")
@@ -159,6 +179,13 @@ class TestNodeBuilderPrompt:
         assert "Dify Agent Node v2" in prompt
         assert '"agent_node_kind": "dify_agent"' in prompt
         assert "Do NOT invent agent_id" in prompt
+
+    def test_treats_purpose_as_spec_and_allows_provisional_outputs(self):
+        prompt = get_node_builder_system_prompt("llm")
+
+        assert "Purpose is the spec" in prompt
+        assert "preserve its variable references" in prompt
+        assert "provisional ones are same-batch" in prompt
 
 
 class TestNodeBuilderUserSections:

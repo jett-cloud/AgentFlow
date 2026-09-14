@@ -33,6 +33,95 @@ from services.workflow_assist.run_types import RunOwner
 TABLES = (WorkflowAssistConversation, WorkflowAssistMessage, WorkflowAssistRun, WorkflowAssistRunEvent)
 
 
+@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
+def test_compact_timeline_preserves_text_boundaries_and_exact_resume_cursor(sqlite_session: Session) -> None:
+    _create_conversation(sqlite_session)
+    run = _create_run(sqlite_session, epoch=1, message="request")
+    facts = [
+        ("reasoning.delta", "a", "先"),
+        ("reasoning.delta", "a", "思考"),
+        ("message.delta", "a", "你好"),
+        ("message.delta", "a", "🌈"),
+        ("message.delta", "b", "下一条"),
+        ("tool_call", "", ""),
+        ("message.delta", "b", "工具之后"),
+    ]
+    for sequence, (event, message_id, text) in enumerate(facts, start=1):
+        _create_event(
+            sqlite_session,
+            run=run,
+            sequence=sequence,
+            event=WorkflowAssistRunEventType(event),
+            payload={"message_id": message_id, "text": text, "delta_index": sequence},
+        )
+    sqlite_session.commit()
+    service = WorkflowAssistRunEventService(sqlite_session)
+
+    page = service.timeline(owner=_owner(), after_epoch=0, after_sequence=0, limit=3, compact=True)
+
+    assert [(item.event, item.sequence, item.data.get("text")) for item in page.items] == [
+        ("user.message", 0, "request"),
+        ("reasoning.delta", 2, "先思考"),
+        ("message.delta", 4, "你好🌈"),
+    ]
+    assert page.items[1].data["sequence_start"] == 1
+    assert page.items[2].data["sequence_start"] == 3
+    assert (page.cursor_epoch, page.cursor_sequence, page.has_more) == (1, 4, True)
+    tail = service.timeline(owner=_owner(), after_epoch=1, after_sequence=4, limit=3, compact=True)
+    assert [(item.event, item.sequence) for item in tail.items] == [
+        ("message.delta", 5),
+        ("tool_call", 6),
+        ("message.delta", 7),
+    ]
+    assert not tail.has_more
+    # Compaction is read-only: SSE and durable records retain their original identity.
+    raw = service.list_events(owner=_owner(), run_id=run.id, after=0)
+    assert len(raw) == 7
+    assert raw[0].data["text"] == "先"
+    assert "sequence_start" not in raw[0].data
+
+
+@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
+def test_compact_timeline_bounds_raw_scan_without_losing_page_tail(sqlite_session: Session) -> None:
+    _create_conversation(sqlite_session)
+    run = _create_run(sqlite_session, epoch=1, message="request")
+    sqlite_session.add_all(
+        [
+            WorkflowAssistRunEvent(
+                tenant_id=run.tenant_id,
+                app_id=run.app_id,
+                created_by=run.created_by,
+                conversation_id=run.conversation_id,
+                run_id=run.id,
+                epoch=1,
+                sequence=sequence,
+                step_id=f"delta-{sequence}",
+                event=WorkflowAssistRunEventType.REASONING_DELTA,
+                payload={"message_id": "a", "text": "思", "delta_index": sequence},
+            )
+            for sequence in range(1, 10_006)
+        ]
+    )
+    sqlite_session.commit()
+    service = WorkflowAssistRunEventService(sqlite_session)
+
+    page = service.timeline(owner=_owner(), after_epoch=0, after_sequence=0, limit=500, compact=True)
+    assert page.has_more
+    assert 0 < page.cursor_sequence <= 10_000
+    tail = service.timeline(
+        owner=_owner(),
+        after_epoch=page.cursor_epoch,
+        after_sequence=page.cursor_sequence,
+        limit=500,
+        compact=True,
+    )
+    assert not tail.has_more
+    assert tail.cursor_sequence == 10_005
+    chunks = [item.data["text"] for item in (*page.items, *tail.items) if item.event == "reasoning.delta"]
+    assert "".join(chunks) == "思" * 10_005
+    assert len(chunks) < 10
+
+
 class _MaterializedEventResult:
     """Return the pre-commit event snapshot after the test injects a terminal commit."""
 
@@ -490,6 +579,13 @@ def test_candidate_snapshot_returns_server_graph_evidence_and_owned_run_summarie
     conversation.completion_candidate_base_hash = "base-hash"
     conversation.completion_app_mode = WorkflowAssistMode.WORKFLOW
     conversation.completion_assertion = WorkflowAssistCompletionAssertion.WORKFLOW_STRUCTURE_REACHES_TERMINAL
+    conversation.completion_contract_protocol_version = 1
+    conversation.completion_contract_revision = 2
+    conversation.completion_contract_hash = "a" * 64
+    conversation.completion_graph_hash = "b" * 64
+    conversation.completion_validation_version = 1
+    conversation.contract_protocol_version = 1
+    conversation.workflow_contract = {"invalid": True}
     sqlite_session.commit()
 
     snapshot = WorkflowAssistRunEventService(sqlite_session).get_candidate(owner=_owner())
@@ -508,7 +604,15 @@ def test_candidate_snapshot_returns_server_graph_evidence_and_owned_run_summarie
         "candidate_base_hash": "base-hash",
         "app_mode": "workflow",
         "assertion": "workflow_structure_reaches_terminal",
+        "contract_protocol_version": 1,
+        "contract_revision": 2,
+        "contract_hash": "a" * 64,
+        "graph_hash": "b" * 64,
+        "validation_version": 1,
     }
+    assert snapshot.contract_report is not None
+    assert snapshot.contract_report["passed"] is False
+    assert snapshot.contract_report["checks"][0]["id"] == "contract"
 
 
 @pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)

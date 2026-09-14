@@ -351,6 +351,36 @@ def test_publish_streaming_response_publishes_failed_terminal_on_exhaustion_with
     assert "ended without a terminal event" in caplog.text
 
 
+def test_publish_streaming_response_preserves_error_event_message_in_synthetic_terminal(
+    mock_topic: MagicMock,
+):
+    response_stream = iter(
+        [
+            {
+                "event": "error",
+                "workflow_run_id": None,
+                "code": "invalid_param",
+                "status": 400,
+                "message": "delivery method id must be a UUID",
+            }
+        ]
+    )
+
+    _publish_streaming_response(
+        response_stream,
+        "workflow-run-id",
+        app_mode=AppMode.WORKFLOW,
+        workflow_id="workflow-id",
+        inputs={},
+        started_reason=WorkflowStartReason.INITIAL,
+    )
+
+    payloads = _published_payloads(mock_topic)
+    assert [payload["event"] for payload in payloads] == ["error", "workflow_started", "workflow_finished"]
+    assert payloads[-1]["data"]["status"] == WorkflowExecutionStatus.FAILED
+    assert payloads[-1]["data"]["error"] == "delivery method id must be a UUID"
+
+
 def test_publish_streaming_response_does_not_publish_synthetic_failure_after_terminal_event(mock_topic: MagicMock):
     response_stream = iter(
         [
@@ -518,7 +548,7 @@ def test_app_runner_streaming_failure_keeps_existing_pre_runtime_helper_behavior
     monkeypatch.setattr(runner, "_setup_flask_context", lambda _user: nullcontext())
     monkeypatch.setattr(runner, "_run_app", lambda **_kwargs: (_ for _ in ()).throw(ValueError("Invalid upload file")))
     monkeypatch.setattr(
-        "core.workflow.workflow_entry.WorkflowEntry.handle_special_values",
+        "core.workflow.runtime.workflow_entry.WorkflowEntry.handle_special_values",
         lambda value: (_ for _ in ()).throw(AssertionError("pre-runtime helper should not normalize inputs")),
     )
 

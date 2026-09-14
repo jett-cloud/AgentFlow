@@ -154,6 +154,36 @@ def test_assert_graph_resources_allowed_rejects_unauthorized_dataset_id():
     ]
 
 
+def test_assert_graph_resources_allowed_rejects_unauthorized_agent_knowledge_dataset() -> None:
+    errors = assert_graph_resources_allowed(
+        {
+            "nodes": [
+                {
+                    "id": "agent-node",
+                    "data": {
+                        "type": "agent",
+                        "knowledge": {
+                            "sets": [
+                                {"datasets": [{"id": "dataset-1"}, {"id": "dataset-2"}]},
+                            ]
+                        },
+                    },
+                }
+            ]
+        },
+        allowed_tool_keys=set(),
+        allowed_dataset_ids={"dataset-1"},
+    )
+
+    assert errors == [
+        {
+            "code": "UNAUTHORIZED_RESOURCE",
+            "detail": "Dataset dataset-2 is not authorized for this generation.",
+            "node_id": "agent-node",
+        }
+    ]
+
+
 def test_assert_graph_resources_allowed_does_not_restrict_empty_allowlist():
     assert (
         assert_graph_resources_allowed(

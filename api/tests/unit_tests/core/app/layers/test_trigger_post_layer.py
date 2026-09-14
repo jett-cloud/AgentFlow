@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from core.app.layers.trigger_post_layer import TriggerPostLayer
-from core.workflow.system_variables import build_system_variables
+from core.workflow.runtime.variables.system_variables import build_system_variables
 from graphon.graph_events import (
     GraphRunAbortedEvent,
     GraphRunFailedEvent,

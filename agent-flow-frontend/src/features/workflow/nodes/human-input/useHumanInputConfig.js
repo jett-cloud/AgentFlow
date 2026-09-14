@@ -1,26 +1,40 @@
 // src/views/copilot/components/workflow/node/human-input/useHumanInputConfig.js
 import { computed } from 'vue'
 import { useResolvedNodeData } from '../../model/nodeProps.js'
-import { normalizeHumanInputData } from './humanInputNode.js'
+import {
+  createDeliveryMethodId,
+  createHumanInputField,
+  getHumanInputBranches,
+  mergeHumanInputPatch,
+  normalizeHumanInputData,
+  normalizeHumanInputEmailConfig,
+} from './humanInputNode.js'
 
 export const FORM_INPUT_TYPES = [
-  { value: 'text', label: '单行文本 (Text)' },
-  { value: 'paragraph', label: '多行文本 (Paragraph)' },
-  { value: 'select', label: '下拉选择 (Select)' },
-  { value: 'file', label: '单文件上传 (File)' },
-  { value: 'files', label: '多文件上传 (File List)' }
+  { value: 'paragraph', label: '多行文本' },
+  { value: 'select', label: '下拉选择' },
+  { value: 'file', label: '单文件上传' },
+  { value: 'file-list', label: '多文件上传' },
 ]
 
 export const BUTTON_STYLES = [
-  { value: 'primary', label: '主要 (Primary)' },
-  { value: 'default', label: '默认 (Default)' },
-  { value: 'danger', label: '危险/拒绝 (Danger)' }
+  { value: 'primary', label: '主要' },
+  { value: 'default', label: '默认' },
+  { value: 'accent', label: '强调' },
+  { value: 'ghost', label: '幽灵' },
 ]
 
 export function useHumanInputConfig(props, emit) {
   const nodeData = useResolvedNodeData(props)
   const readOnly = computed(() => props.readOnly || false)
-  const patch = partial => emit('update:nodeData', { ...normalizeHumanInputData(nodeData.value), ...partial })
+  let pendingPatch = null
+  const patch = (partial) => {
+    pendingPatch = mergeHumanInputPatch(nodeData.value, pendingPatch, partial)
+    emit('update:nodeData', pendingPatch)
+    queueMicrotask(() => {
+      pendingPatch = null
+    })
+  }
 
   // 1. 交互提示词 (form_content / prompt)
   const prompt = computed({
@@ -34,8 +48,25 @@ export function useHumanInputConfig(props, emit) {
     set: (types) => {
       const current = normalizeHumanInputData(nodeData.value).delivery_methods
       const allTypes = new Set([...current.map(item => item.type), ...(types || [])])
-      patch({ delivery_methods: [...allTypes].map((type, index) => ({ ...(current.find(item => item.type === type) || {}), id: current.find(item => item.type === type)?.id || `delivery-${type}-${index}`, type, enabled: types.includes(type) })) })
+      patch({ delivery_methods: [...allTypes].map(type => ({ ...(current.find(item => item.type === type) || {}), id: current.find(item => item.type === type)?.id || createDeliveryMethodId(), type, enabled: types.includes(type) })) })
     }
+  })
+
+  const emailConfig = computed({
+    get: () => {
+      const email = normalizeHumanInputData(nodeData.value).delivery_methods.find(item => item.type === 'email')
+      return normalizeHumanInputEmailConfig(email?.config)
+    },
+    set: (config) => {
+      const normalized = normalizeHumanInputData(nodeData.value)
+      patch({
+        delivery_methods: normalized.delivery_methods.map(item => (
+          item.type === 'email'
+            ? { ...item, config: normalizeHumanInputEmailConfig(config) }
+            : item
+        )),
+      })
+    },
   })
 
   // 3. 人类填报字段列表 (Dify 内部模型字段名为 inputs)
@@ -52,40 +83,26 @@ export function useHumanInputConfig(props, emit) {
 
   // 5. 超时时间 (timeout & timeout_unit)
   const timeout = computed({
-    get: () => nodeData.value?.timeout || 24,
+    get: () => Number(nodeData.value?.timeout) || 3,
     set: val => patch({ timeout: val })
   })
 
   const timeoutUnit = computed({
-    get: () => nodeData.value?.timeout_unit || 'hour',
+    get: () => nodeData.value?.timeout_unit === 'hour' ? 'hour' : 'day',
     set: val => patch({ timeout_unit: val })
   })
 
-  // 6. 右侧连线分支（动态动作按钮分支 + 固定超时分支）
-  const targetBranches = computed(() => {
-    const actions = (userActions.value || []).map(action => ({
-      id: action.id,
-      name: action.title || action.id,
-      style: action.button_style || 'primary'
-    }))
-    return [
-      ...actions,
-      { id: '__timeout', name: 'Timeout (超时)', isTimeout: true }
-    ]
-  })
+  const targetBranches = computed(() => getHumanInputBranches(normalizeHumanInputData(nodeData.value)))
 
   // 添加表单字段 (映射为 Dify 变量配置: output_variable_name)
   const addFormInput = () => {
-    const idx = inputs.value.length + 1
+    const usedNames = new Set(inputs.value.map(item => item.output_variable_name))
+    let idx = inputs.value.length + 1
+    while (usedNames.has(`field_${idx}`))
+      idx += 1
     const newList = [
       ...inputs.value,
-      {
-        output_variable_name: `field_${idx}`,
-        label: `输入项 ${idx}`,
-        type: 'text',
-        required: true,
-        default_value: ''
-      }
+      createHumanInputField('paragraph', `field_${idx}`),
     ]
     inputs.value = newList
   }
@@ -125,6 +142,7 @@ export function useHumanInputConfig(props, emit) {
     readOnly,
     prompt,
     deliveryMethods,
+    emailConfig,
     inputs,
     userActions,
     timeout,

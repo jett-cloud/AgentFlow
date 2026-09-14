@@ -8,7 +8,7 @@ from clients.agent_backend import (
     AgentBackendRunFailedInternalEvent,
     AgentBackendRunSucceededInternalEvent,
 )
-from core.workflow.file_reference import build_file_reference
+from core.workflow.runtime.adapters.file_reference import build_file_reference
 from core.workflow.nodes.agent_v2.output_adapter import WorkflowAgentOutputAdapter
 from graphon.enums import WorkflowNodeExecutionMetadataKey, WorkflowNodeExecutionStatus
 from graphon.file import File, FileTransferMethod, FileType

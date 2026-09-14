@@ -1,9 +1,9 @@
-from core.workflow.generator.agent.evidence import (
+from core.workflow.generator.acceptance.evidence import (
     AcceptanceAttempt,
     canonical_graph_hash,
     finish_acceptance_reason,
 )
-from core.workflow.generator.agent.graph_ops import connect, empty_graph, upsert_node
+from core.workflow.generator.graph.graph_ops import connect, empty_graph, upsert_node
 
 
 def _start_end(*, title: str = "开始"):
@@ -83,6 +83,22 @@ def test_finish_acceptance_reason_stale_revision() -> None:
     assert reason == "STALE_EVIDENCE"
 
 
+def test_finish_acceptance_reason_rejects_evidence_from_old_contract_revision() -> None:
+    attempt = _attempt(contract_revision=1, contract_hash="a" * 64, validation_version=1)
+
+    reason = finish_acceptance_reason(
+        attempts={"att-1": attempt},
+        revision=attempt["revision"],
+        graph_hash=attempt["graph_hash"],
+        runner_present=True,
+        contract_revision=2,
+        contract_hash="b" * 64,
+        validation_version=1,
+    )
+
+    assert reason == "STALE_EVIDENCE"
+
+
 def test_finish_acceptance_reason_assertion_failed() -> None:
     graph_hash = canonical_graph_hash(_start_end())
     attempt = _attempt(passed=False, graph_hash=graph_hash, revision=0)
@@ -116,6 +132,46 @@ def test_finish_acceptance_reason_later_pass_overrides_same_revision_fail() -> N
     assert (
         finish_acceptance_reason(
             attempts={"att-1": failed, "att-2": passed},
+            revision=0,
+            graph_hash=graph_hash,
+            runner_present=True,
+        )
+        is None
+    )
+
+
+def test_finish_acceptance_reason_rejects_live_success_that_never_ran() -> None:
+    graph_hash = canonical_graph_hash(_start_end())
+    attempt = _attempt(
+        graph_hash=graph_hash,
+        revision=0,
+        status="succeeded",
+        passed=True,
+        executed=False,
+    )
+    assert (
+        finish_acceptance_reason(
+            attempts={"att-1": attempt},
+            revision=0,
+            graph_hash=graph_hash,
+            runner_present=True,
+        )
+        == "NO_EVIDENCE"
+    )
+
+
+def test_finish_acceptance_reason_allows_simulated_skip_without_execution() -> None:
+    graph_hash = canonical_graph_hash(_start_end())
+    attempt = _attempt(
+        graph_hash=graph_hash,
+        revision=0,
+        status="simulated",
+        passed=True,
+        executed=False,
+    )
+    assert (
+        finish_acceptance_reason(
+            attempts={"att-1": attempt},
             revision=0,
             graph_hash=graph_hash,
             runner_present=True,

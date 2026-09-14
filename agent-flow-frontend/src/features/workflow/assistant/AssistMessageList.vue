@@ -1,6 +1,6 @@
 <template>
   <div ref="listRef" class="assist-message-list" @scroll="onListScroll">
-    <div v-if="!messages.length" class="empty">
+    <div v-if="!messages.length && !disabled" class="empty">
       <p class="empty-title">{{ copy.emptyTitle }}</p>
       <p class="empty-hint">{{ copy.emptyHint }}</p>
     </div>
@@ -40,7 +40,7 @@
         <AssistClarificationCard
           :questions="group.message.clarification?.questions || []"
           :language="language"
-          :disabled="group.message.status === 'resolved' || group.message.resolved"
+          :disabled="disabled || group.message.status === 'resolved' || group.message.resolved"
           @submit="answers => submitClarification(group.message, answers)"
         />
         <p v-if="group.message.statusText" class="message-status">{{ group.message.statusText }}</p>
@@ -117,6 +117,7 @@ const SCROLL_PIN_PX = 48
 const SCROLL_MERGE_MS = 50
 
 const props = defineProps({
+  disabled: { type: Boolean, default: false },
   messages: { type: Array, default: () => [] },
   errors: { type: Array, default: () => [] },
   warnings: { type: Array, default: () => [] },
@@ -231,10 +232,12 @@ onBeforeUnmount(() => {
 <style scoped>
 .assist-message-list {
   display: flex;
+  min-width: 0;
   min-height: 0;
   flex: 1;
   flex-direction: column;
   gap: 12px;
+  overflow-x: hidden;
   overflow-y: auto;
   padding: 16px 14px;
   background: #f8fafc;
@@ -254,6 +257,7 @@ onBeforeUnmount(() => {
 
 .message {
   display: flex;
+  min-width: 0;
   max-width: 92%;
 }
 
@@ -262,12 +266,16 @@ onBeforeUnmount(() => {
 }
 
 .bubble {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   padding: 10px 12px;
   border: 1px solid #e4e7ec;
   border-radius: 12px;
   background: #fff;
   color: #101828;
   line-height: 1.5;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -283,6 +291,7 @@ onBeforeUnmount(() => {
 
 .turn-text,
 .turn-completion {
+  min-width: 0;
   white-space: normal;
 }
 
@@ -325,11 +334,13 @@ onBeforeUnmount(() => {
   color: #475467;
   font-size: 13px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
 .turn-ops {
   display: grid;
+  min-width: 0;
   gap: 6px;
   margin: 0;
   padding: 8px 10px;
@@ -340,11 +351,13 @@ onBeforeUnmount(() => {
 
 .turn-ops li {
   display: flex;
+  min-width: 0;
   align-items: flex-start;
   gap: 7px;
   color: #344054;
   font-size: 13px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .is-user .bubble {
@@ -383,9 +396,12 @@ onBeforeUnmount(() => {
   background: rgb(16 24 40 / 8%);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 90%;
+  overflow-wrap: anywhere;
 }
 
 .markdown-body :deep(.markdown-code-block) {
+  box-sizing: border-box;
+  max-width: 100%;
   margin: 6px 0;
   padding: 8px;
   overflow: auto;

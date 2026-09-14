@@ -128,6 +128,12 @@
                   >
                     打开
                   </el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="canExportWorkflowDsl(app.permission_keys)"
+                    command="export"
+                  >
+                    导出 DSL
+                  </el-dropdown-item>
                   <el-dropdown-item command="delete" divided class="danger-item">
                     删除
                   </el-dropdown-item>
@@ -231,6 +237,8 @@
         :active-run-tab="debugActiveTab"
         :publishing="publishing"
         :publish-status="publishStatusLabel"
+        :can-export="canExportCurrent"
+        :exporting="exporting"
         height="100%"
         :sync-draft-if-dirty="syncDraftBeforeRun"
         @back="backToHome"
@@ -245,8 +253,29 @@
         @restore-version="handleRestoreVersion"
         @save-features="handleSaveFeatures"
         @assist-applied="handleWorkflowAssistApplied"
+        @export="handleEditorExport"
       />
     </div>
+
+    <el-dialog
+      v-model="secretExportDialogOpen"
+      title="导出包含 Secret 的 DSL"
+      width="520px"
+      append-to-body
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+      :show-close="false"
+      @closed="settleSecretExport('cancel')"
+    >
+      <p class="secret-export-copy">
+        此工作流包含 Secret 环境变量。安全导出不会包含密钥值；包含密钥导出会将敏感值写入下载文件，请仅在安全环境中保存。
+      </p>
+      <template #footer>
+        <el-button @click="settleSecretExport('cancel')">取消</el-button>
+        <el-button type="warning" plain @click="settleSecretExport('include-secrets')">包含密钥导出</el-button>
+        <el-button type="primary" autofocus @click="settleSecretExport('safe')">安全导出</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -255,9 +284,20 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, Loading, Search } from '@element-plus/icons-vue'
+import { load as loadYaml } from 'js-yaml'
 import WorkflowCanvas from '../canvas/WorkflowCanvas.vue'
 import CreateAppDialog from '../ui/CreateAppDialog.vue'
 import { graphToFlow } from '../model/dsl'
+import {
+  canExportWorkflowDsl,
+  canContinueEditorDslExport,
+  createSerialSaver,
+  downloadWorkflowYaml,
+  getWorkflowDslDownloadName,
+  hasSecretEnvironmentVariables,
+  resolveDslExportPlan,
+  resolveSecretExportChoice,
+} from '../model/dslExport.js'
 import { resolveDraftSaveAppId } from '../model/draftFlush.js'
 import { resolveAppCardIcon } from '../model/appCardIcon.js'
 import { useWorkflowDebugSession } from '../model/useWorkflowDebugSession.js'
@@ -274,6 +314,7 @@ import {
   createApp,
   deleteApp,
   ensureDraft,
+  exportAppDsl,
   importAppDsl,
   listApps,
   listPublishedWorkflows,
@@ -309,6 +350,9 @@ const workflowMode = ref(AppMode.WORKFLOW)
 const appDetail = ref(null)
 const publishing = ref(false)
 const hasPublishedVersion = ref(false)
+const exporting = ref(false)
+const secretExportDialogOpen = ref(false)
+let resolveSecretExportDialog = null
 const {
   state: debugState,
   activeTab: debugActiveTab,
@@ -362,6 +406,7 @@ const sortOptions = [
 
 const appId = computed(() => String(route.query.appId || '').trim())
 const publishStatusLabel = computed(() => (hasPublishedVersion.value ? '已发布' : '未发布'))
+const canExportCurrent = computed(() => canExportWorkflowDsl(appDetail.value?.permission_keys))
 
 function openAppById(id) {
   router.replace({ path: '/', query: { appId: id } })
@@ -396,8 +441,101 @@ function onAppCardCommand(command, app) {
     openAppCard(app)
     return
   }
+  if (command === 'export') {
+    void exportWorkflowDsl(app)
+    return
+  }
   if (command === 'delete')
     openDeleteDialog(app)
+}
+
+async function chooseSecretExport() {
+  secretExportDialogOpen.value = true
+  return new Promise((resolve) => {
+    resolveSecretExportDialog = resolve
+  })
+}
+
+function settleSecretExport(action) {
+  const resolve = resolveSecretExportDialog
+  resolveSecretExportDialog = null
+  secretExportDialogOpen.value = false
+  resolve?.(resolveSecretExportChoice(action))
+}
+
+async function exportWorkflowDsl(app, { persistEditorDraft = false } = {}) {
+  if (exporting.value)
+    return
+  if (!canExportWorkflowDsl(app?.permission_keys)) {
+    ElMessage.error('你没有导出 DSL 的权限')
+    return
+  }
+
+  exporting.value = true
+  try {
+    const targetAppId = String(app?.id || '').trim()
+    let exportName = app?.name
+    if (!targetAppId)
+      throw new Error('缺少应用 ID，无法导出 DSL')
+
+    if (persistEditorDraft) {
+      canvasRef.value?.cancelPendingAutosave?.()
+      const payload = canvasRef.value?.buildDraftPayload?.()
+      if (!payload)
+        throw new Error('当前草稿尚未准备好，无法导出 DSL')
+      exportName = getWorkflowDslDownloadName({ payloadName: payload.name, appName: exportName })
+      const draftSaved = await handleSaveDraft({ ...payload, silent: true })
+      if (!canContinueEditorDslExport({ persistEditorDraft, draftSaved }))
+        return
+    }
+
+    const safeResponse = await exportAppDsl(targetAppId, { includeSecret: false })
+    if (typeof safeResponse?.data !== 'string')
+      throw new Error('导出服务未返回有效的 DSL 内容')
+    let safeDsl
+    try {
+      safeDsl = loadYaml(safeResponse.data)
+    }
+    catch {
+      throw new Error('安全导出的 DSL 内容无效，无法检查 Secret')
+    }
+    if (!safeDsl || typeof safeDsl !== 'object' || Array.isArray(safeDsl))
+      throw new Error('安全导出的 DSL 内容无效，无法检查 Secret')
+
+    const secretChoice = hasSecretEnvironmentVariables(safeDsl)
+      ? await chooseSecretExport()
+      : false
+    const plan = resolveDslExportPlan({
+      hasSecrets: hasSecretEnvironmentVariables(safeDsl),
+      secretChoice,
+    })
+    if (plan === 'cancel')
+      return
+
+    let yaml = safeResponse.data
+    if (plan === 'request-secrets') {
+      const secretResponse = await exportAppDsl(targetAppId, { includeSecret: true })
+      if (typeof secretResponse?.data !== 'string')
+        throw new Error('导出服务未返回有效的 DSL 内容')
+      yaml = secretResponse.data
+    }
+    downloadWorkflowYaml(yaml, exportName)
+    ElMessage.success('DSL 已导出')
+  }
+  catch (error) {
+    ElMessage.error(error.response?.data?.message || error.message || 'DSL 导出失败')
+  }
+  finally {
+    exporting.value = false
+  }
+}
+
+function handleEditorExport() {
+  void exportWorkflowDsl({
+    id: appId.value,
+    name: appDetail.value?.name,
+    permission_keys: appDetail.value?.permission_keys,
+  }, { persistEditorDraft: true })
 }
 
 function openDeleteDialog(app) {
@@ -657,7 +795,13 @@ async function persistDraftGraph(payload, saveAppId = appId.value) {
   }
 }
 
-async function handleSaveDraft(payload) {
+const saveDraftSerially = createSerialSaver(saveDraftPayload)
+
+function handleSaveDraft(payload) {
+  return saveDraftSerially(payload)
+}
+
+async function saveDraftPayload(payload) {
   const silent = !!payload?.silent
   const saveAppId = resolveDraftSaveAppId({
     payloadAppId: payload?.appId,
@@ -667,7 +811,7 @@ async function handleSaveDraft(payload) {
     canvasRef.value?.markDraftSaveFailed?.()
     if (!silent)
       ElMessage.error('缺少 appId，无法保存草稿')
-    return
+    return false
   }
   try {
     const result = await persistDraftGraph(payload, saveAppId)
@@ -675,6 +819,7 @@ async function handleSaveDraft(payload) {
     if (result.features)
       workflowFeatures.value = normalizeWorkflowFeatures(result.features)
 
+    let renameFailed = false
     if (payload.name && payload.name !== appDetail.value?.name && appDetail.value) {
       try {
         appDetail.value = await updateAppDetail(saveAppId, {
@@ -687,7 +832,10 @@ async function handleSaveDraft(payload) {
           max_active_requests: appDetail.value.max_active_requests,
         })
       } catch {
-        if (!silent)
+        renameFailed = true
+        if (silent)
+          ElMessage.error('草稿已保存，但重命名失败')
+        else
           ElMessage.warning('草稿已保存，但重命名失败')
       }
     }
@@ -695,9 +843,14 @@ async function handleSaveDraft(payload) {
     environmentVariables.value = sanitizeEnvironmentVariables(payload.environmentVariables)
     conversationVariables.value = payload.conversationVariables || []
     await nextTick()
+    if (renameFailed) {
+      canvasRef.value?.markDraftSaveFailed?.()
+      return false
+    }
     canvasRef.value?.markDraftSaved?.()
     if (!silent)
       ElMessage.success('草稿已保存到 Dify')
+    return true
   } catch (error) {
     canvasRef.value?.markDraftSaveFailed?.()
     if (error.response?.status === 409)
@@ -706,6 +859,7 @@ async function handleSaveDraft(payload) {
       ElMessage.error(error.response?.data?.message || error.message || '保存失败')
     else
       ElMessage.error(error.response?.data?.message || error.message || '自动保存失败')
+    return false
   }
 }
 

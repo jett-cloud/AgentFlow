@@ -3,7 +3,7 @@
 The conversation's message rows are the source of truth and are never rewritten.
 ``assemble_prompt`` builds a *copy* for the model: system, optional
 ``[COMPACTED HISTORY]``, raw messages after the watermark, CurrentSituation,
-and an optional playbook body at the tail. ``[COMPRESSED]`` is Level 1 only —
+and an optional skill body at the tail. ``[COMPRESSED]`` is Level 1 only —
 it appears on a segment copy fed to the Compactor, never in the live prompt.
 
 Token budget matches ``PlannerContextSession.start``:
@@ -24,7 +24,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from core.workflow.generator.agent.types import AgentMessage, AgentSession
-from core.workflow.generator.planner_context import PlannerContextLimitError
+from core.workflow.generator.pipeline.planner_context_values import PlannerContextLimitError
 from graphon.model_runtime.entities.message_entities import (
     AssistantPromptMessage,
     SystemPromptMessage,
@@ -50,6 +50,7 @@ _LEVEL1_TOOLS = frozenset(
         "inspect_node_schema",
         "search_datasets",
         "search_tools",
+        "inspect_tool",
         "validate_graph",
         "run_acceptance",
         "inspect_attempt",
@@ -64,6 +65,7 @@ _NEVER_SLIM_TOOLS = frozenset(
         "delete_node",
         "finish",
         "fail",
+        "activate_skills",
     }
 )
 _PROTECTED_INVOCATIONS = 2
@@ -202,8 +204,8 @@ def assemble_prompt(
 def slim_segment(messages: Sequence[AgentMessage]) -> list[AgentMessage]:
     """Return copies with reloadable tool_result payloads replaced by Level 1 templates.
 
-    Only ``read_node`` / ``read_graph`` / ``inspect_node_schema`` / ``search_*`` /
-    ``validate_graph`` / ``run_acceptance`` / ``inspect_attempt`` results are slimmed.
+    Only ``read_node`` / ``read_graph`` / ``inspect_node_schema`` / ``inspect_tool`` /
+    ``search_*`` / ``validate_graph`` / ``run_acceptance`` / ``inspect_attempt`` results are slimmed.
     prose, and mutation / finish / fail results stay intact. Input messages are
     not mutated.
     """
@@ -253,8 +255,7 @@ def _assemble(
     skill_text: str = "",
 ) -> PromptAssembly:
     messages: list[object] = [SystemPromptMessage(content=system_text)]
-    has_checkpoint = watermark is not None and compacted_state is not None
-    if has_checkpoint:
+    if watermark is not None and compacted_state is not None:
         messages.append(UserPromptMessage(content=render_compacted_history(compacted_state)))
     for message in session.messages:
         if watermark is not None and message.sequence <= watermark:
@@ -461,6 +462,12 @@ def _level1_template(name: str, payload: dict[str, Any], call: AgentMessage | No
         if isinstance(nodes, list):
             ids = [str(node.get("id")) for node in nodes if isinstance(node, dict) and node.get("id")]
         return f"[COMPRESSED] compact graph; {len(ids)} nodes: {', '.join(ids)}; call read_graph to reload"
+    if name == "inspect_tool":
+        binding = content_dict.get("binding")
+        binding_dict = binding if isinstance(binding, dict) else {}
+        provider = binding_dict.get("provider_name") or args.get("provider_name") or "?"
+        tool = binding_dict.get("tool_name") or args.get("tool_name") or "?"
+        return f"[COMPRESSED] inspected tool {provider}/{tool}; schema evicted; call inspect_tool to reload"
     if name.startswith("search_"):
         query = args.get("query") or ""
         hits = content_dict.get("hits")

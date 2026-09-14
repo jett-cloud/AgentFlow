@@ -4,8 +4,8 @@ import time
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 
-from core.workflow.system_variables import build_system_variables
-from core.workflow.variable_prefixes import CONVERSATION_VARIABLE_NODE_ID, ENVIRONMENT_VARIABLE_NODE_ID
+from core.workflow.runtime.variables.system_variables import build_system_variables
+from core.workflow.runtime.variables.variable_prefixes import CONVERSATION_VARIABLE_NODE_ID, ENVIRONMENT_VARIABLE_NODE_ID
 from graphon.nodes.start.entities import StartNodeData
 from graphon.nodes.start.start_node import StartNode
 from graphon.runtime import GraphRuntimeState

@@ -9,7 +9,7 @@ from core.repositories.human_input_repository import (
     HumanInputFormEntity,
     HumanInputFormRepository,
 )
-from core.workflow.node_runtime import DifyHumanInputNodeRuntime
+from core.workflow.runtime.adapters.human_input import DifyHumanInputNodeRuntime
 from core.workflow.nodes.human_input.callback import (
     DifyHITLCallback,
 )
@@ -22,7 +22,7 @@ from core.workflow.nodes.human_input.entities import (
     UserActionConfig,
 )
 from core.workflow.nodes.human_input.enums import HumanInputFormStatus, ValueSourceType
-from core.workflow.system_variables import build_system_variables
+from core.workflow.runtime.variables.system_variables import build_system_variables
 from graphon.entities import WorkflowStartReason
 from graphon.file import File, FileTransferMethod, FileType
 from graphon.graph import Graph

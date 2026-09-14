@@ -1,13 +1,16 @@
-// src/views/copilot/components/workflow/node/tool/useToolConfig.js
-import { computed, watch } from 'vue'
+import { computed } from 'vue'
 import { useResolvedNodeData } from '../../model/nodeProps.js'
 import { normalizeToolProviderType } from '@/features/integrations/state/toolCatalog.js'
 import {
-  buildEmptyToolParameters,
   setToolParamValue,
   toolParamDisplayValue,
-  toToolParamInput,
 } from '../../model/toolParamInputs.js'
+import {
+  applyToolParamUpdate,
+  applyToolSelection as applyToolSelectionData,
+  setToolErrorStrategy,
+  updateToolDefaultValue,
+} from './toolNode.js'
 
 export function useToolConfig(props, emit) {
   const nodeData = useResolvedNodeData(props)
@@ -23,20 +26,12 @@ export function useToolConfig(props, emit) {
   })
 
   const providerType = computed({
-    get: () => normalizeToolProviderType(nodeData.value?.provider_type || 'builtin'),
+    get: () => nodeData.value?.provider_type || 'builtin',
     set: (val) => patch({ provider_type: val }),
   })
 
-  watch(
-    () => nodeData.value?.provider_type,
-    (type) => {
-      if (readOnly.value)
-        return
-      const normalized = normalizeToolProviderType(type || 'builtin')
-      if (type && type !== normalized)
-        patch({ provider_type: normalized })
-    },
-    { immediate: true },
+  const catalogueProviderType = computed(() =>
+    normalizeToolProviderType(providerType.value || 'builtin'),
   )
 
   const providerName = computed({
@@ -69,43 +64,50 @@ export function useToolConfig(props, emit) {
     set: (val) => patch({ tool_configurations: val }),
   })
 
+  function paramSchema(name) {
+    return (nodeData.value?.parameters || []).find(item => item?.name === name) || { name, form: 'llm' }
+  }
+
   function applyToolSelection(tool) {
-    if (!tool) return
-    const previous = toolParameters.value || {}
-    const seeded = buildEmptyToolParameters(tool.parameters || [])
-    for (const name of Object.keys(seeded)) {
-      if (previous[name] !== undefined)
-        seeded[name] = toToolParamInput(previous[name])
-    }
-    patch({
-      provider_id: tool.provider_id,
-      provider_type: tool.provider_type,
-      provider_name: tool.provider_name,
-      provider_icon: tool.icon ?? tool.icon_small ?? null,
-      tool_name: tool.tool_name,
-      tool_label: tool.tool_label,
-      tool_parameters: seeded,
-      tool_configurations: nodeData.value?.tool_configurations || {},
-      tool_node_version: nodeData.value?.tool_node_version || '2',
-      is_team_authorization: tool.is_team_authorization,
-      title: tool.tool_label || tool.tool_name || nodeData.value?.title,
-    })
+    if (!tool)
+      return
+    emit('update:nodeData', applyToolSelectionData(nodeData.value, tool))
   }
 
   function setParameter(name, value) {
-    patch({
-      tool_parameters: setToolParamValue(toolParameters.value, name, value),
-    })
+    const params = setToolParamValue(toolParameters.value, name, value)
+    emit('update:nodeData', applyToolParamUpdate(nodeData.value, paramSchema(name), params[name]))
+  }
+
+  function setParameterEnvelope(name, envelope) {
+    emit('update:nodeData', applyToolParamUpdate(nodeData.value, paramSchema(name), envelope))
   }
 
   function parameterDisplayValue(name) {
     return toolParamDisplayValue(toolParameters.value?.[name])
   }
 
+  function parameterValue(name) {
+    return toolParameters.value?.[name]?.value
+  }
+
+  function handleRetryConfigUpdate(retryConfig) {
+    patch({ retry_config: retryConfig })
+  }
+
+  function handleErrorStrategyUpdate(strategy) {
+    emit('update:nodeData', setToolErrorStrategy(nodeData.value, strategy))
+  }
+
+  function handleDefaultValueUpdate({ key, value }) {
+    emit('update:nodeData', updateToolDefaultValue(nodeData.value, key, value))
+  }
+
   return {
     readOnly,
     providerId,
     providerType,
+    catalogueProviderType,
     providerName,
     toolName,
     toolLabel,
@@ -114,6 +116,11 @@ export function useToolConfig(props, emit) {
     toolConfigurations,
     applyToolSelection,
     setParameter,
+    setParameterEnvelope,
     parameterDisplayValue,
+    parameterValue,
+    handleRetryConfigUpdate,
+    handleErrorStrategyUpdate,
+    handleDefaultValueUpdate,
   }
 }

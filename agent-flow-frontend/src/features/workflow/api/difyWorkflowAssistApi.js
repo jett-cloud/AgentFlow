@@ -49,13 +49,18 @@ export function workflowAssistTurnBody(input) {
   }
   if (input?.selected_node !== undefined)
     body.selected_node = input.selected_node
+  if (Array.isArray(input?.references) && input.references.length)
+    body.references = input.references
   return body
 }
 
 export function postWorkflowAssistTurn(appId, conversationId, input) {
+  const body = workflowAssistTurnBody(input)
+  if (typeof input.live_acceptance_request_id === 'string')
+    body.live_acceptance_request_id = input.live_acceptance_request_id
   return difyClient.post(
     conversationPath(appId, conversationId, 'turns'),
-    workflowAssistTurnBody(input),
+    body,
   )
 }
 

@@ -7,7 +7,7 @@ from werkzeug.exceptions import Forbidden
 import services
 from core.tools.signature import verify_plugin_file_signature
 from core.tools.tool_file_manager import ToolFileManager, resolve_extension
-from core.workflow.file_reference import build_file_reference
+from core.workflow.runtime.adapters.file_reference import build_file_reference
 from fields.file_fields import FileResponse
 
 from ..common.errors import (

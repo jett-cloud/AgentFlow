@@ -22,7 +22,7 @@
         :aria-label="copy.instructionLabel"
         aria-multiline="true"
         :aria-disabled="disabled"
-        :contenteditable="disabled ? 'false' : 'true'"
+        :contenteditable="disabled ? 'false' : 'plaintext-only'"
         :data-placeholder="copy.instructionPlaceholder"
         @input="onEditorInput"
         @keydown="onKeydown"
@@ -148,6 +148,7 @@ const submission = createAssistComposerSubmission({
   readText: () => instructionRef.value?.innerText,
   readReferences: () => serializeMentionReferences(
     [...(instructionRef.value?.querySelectorAll('[data-assist-mention="true"]') || [])],
+    mentionCatalog.value,
   ),
   clearText() {
     instructionRef.value?.replaceChildren()

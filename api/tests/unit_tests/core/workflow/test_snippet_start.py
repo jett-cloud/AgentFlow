@@ -1,4 +1,4 @@
-from core.workflow.snippet_start import (
+from core.workflow.runtime.snippet_start import (
     LEGACY_START_NODE_ID,
     SNIPPET_VIRTUAL_START_NODE_ID,
     get_compatible_start_aliases,

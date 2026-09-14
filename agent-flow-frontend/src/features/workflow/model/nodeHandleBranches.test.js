@@ -22,8 +22,8 @@ test('resolves ordinary, classifier, and conditional output Handles', () => {
     type: 'if-else',
     cases: [{ case_id: 'true' }, { case_id: 'elif-1' }],
   }), [
-    { id: 'true', name: 'IF', kind: 'normal' },
-    { id: 'elif-1', name: 'ELIF 1', kind: 'normal' },
+    { id: 'true', name: 'CASE 1', kind: 'normal' },
+    { id: 'elif-1', name: 'CASE 2', kind: 'normal' },
     { id: 'false', name: 'ELSE', kind: 'normal' },
   ])
 })
@@ -55,6 +55,11 @@ test('resolves human-input action, timeout, and failure Handles', () => {
     { id: 'retry', name: '不满意', kind: 'normal' },
     { id: '__timeout', name: 'Timeout (超时)', kind: 'normal' },
   ])
+  assert.deepEqual(getNodeOutputBranches({
+    type: 'human-input',
+    user_actions: [{ id: 'approve', title: '同意' }],
+    _targetBranches: [{ id: 'stale', name: '旧分支' }],
+  }).map(item => item.id), ['approve', '__timeout'])
   assert.deepEqual(getNodeOutputBranches({
     type: 'code',
     error_strategy: 'failBranch',
@@ -105,4 +110,49 @@ test('removes only edges whose source Handle disappeared', () => {
   assert.deepEqual(result.affectedTargetIds, ['two'])
   assert.deepEqual(result.edges.map(edge => edge.id), ['a-one', 'other'])
   assert.deepEqual(result.connectedSourceHandleIds, ['a'])
+})
+
+test('human-input Action rename migrates only that Handle and delete removes only that edge', () => {
+  const previousData = {
+    type: 'human-input',
+    user_actions: [
+      { id: 'approve', title: '同意' },
+      { id: 'reject', title: '拒绝' },
+    ],
+  }
+  const renamed = getEdgesAfterNodeDataUpdate({
+    nodeId: 'human-1',
+    previousData,
+    nextData: {
+      type: 'human-input',
+      user_actions: [
+        { id: 'accept', title: '同意' },
+        { id: 'reject', title: '拒绝' },
+      ],
+    },
+    edges: [
+      { id: 'approve-end', source: 'human-1', sourceHandle: 'approve', target: 'end' },
+      { id: 'reject-end', source: 'human-1', sourceHandle: 'reject', target: 'end' },
+      { id: 'timeout-end', source: 'human-1', sourceHandle: '__timeout', target: 'end' },
+    ],
+  })
+  assert.deepEqual(renamed.removedEdgeIds, [])
+  assert.deepEqual(renamed.remappedEdges, [{ id: 'approve-end', sourceHandle: 'accept' }])
+  assert.deepEqual(renamed.edges.filter(edge => edge.source === 'human-1').map(edge => edge.sourceHandle), ['accept', 'reject', '__timeout'])
+
+  const deleted = getEdgesAfterNodeDataUpdate({
+    nodeId: 'human-1',
+    previousData,
+    nextData: {
+      type: 'human-input',
+      user_actions: [{ id: 'approve', title: '同意' }],
+    },
+    edges: [
+      { id: 'approve-end', source: 'human-1', sourceHandle: 'approve', target: 'end' },
+      { id: 'reject-end', source: 'human-1', sourceHandle: 'reject', target: 'end' },
+      { id: 'other', source: 'start', sourceHandle: 'source', target: 'human-1' },
+    ],
+  })
+  assert.deepEqual(deleted.removedEdgeIds, ['reject-end'])
+  assert.deepEqual(deleted.edges.map(edge => edge.id), ['approve-end', 'other'])
 })

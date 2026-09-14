@@ -12,7 +12,7 @@ from clients.agent_backend import (
     AgentBackendRunSucceededInternalEvent,
 )
 from core.app.file_access import DatabaseFileAccessController
-from core.workflow.file_reference import is_canonical_file_reference
+from core.workflow.runtime.adapters.file_reference import is_canonical_file_reference
 from factories.file_factory.builders import build_from_mapping
 from graphon.enums import WorkflowNodeExecutionMetadataKey, WorkflowNodeExecutionStatus
 from graphon.file import File, FileTransferMethod, FileType

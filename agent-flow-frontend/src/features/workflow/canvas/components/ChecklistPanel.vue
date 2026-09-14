@@ -61,6 +61,8 @@ function onGroupClick(group) {
   top: 60px;
   right: 12px;
   z-index: 70;
+  display: flex;
+  flex-direction: column;
   width: 360px;
   max-height: calc(100% - 76px);
   overflow: hidden;
@@ -71,6 +73,7 @@ function onGroupClick(group) {
 }
 header {
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: space-between;
   padding: 12px 14px;
@@ -88,11 +91,23 @@ header button {
 }
 header button:hover { background: #f2f4f7; }
 .checklist-list {
+  flex: 1 1 auto;
+  min-height: 0;
   list-style: none;
   margin: 0;
   padding: 8px;
-  overflow: auto;
-  max-height: calc(100% - 56px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: #d0d5dd transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+.checklist-list::-webkit-scrollbar {
+  width: 8px;
+}
+.checklist-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #d0d5dd;
 }
 .checklist-list > li {
   display: flex;

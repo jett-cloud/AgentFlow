@@ -5,6 +5,7 @@ def _validate(
     graph: dict,
     *,
     mode: str = "rebuild",
+    generation_mode: str = "workflow",
     base_graph: dict | None = None,
     mutable_node_ids: set[str] | None = None,
     planned_new_ids: set[str] | None = None,
@@ -13,6 +14,7 @@ def _validate(
     return validate_graph(
         graph=graph,
         mode=mode,
+        generation_mode=generation_mode,
         base_graph=base_graph,
         mutable_node_ids=mutable_node_ids or set(),
         planned_new_ids=planned_new_ids or set(),
@@ -20,11 +22,24 @@ def _validate(
     )
 
 
+def _agent_data(**overrides: object) -> dict:
+    data: dict = {
+        "type": "agent",
+        "version": "2",
+        "agent_node_kind": "dify_agent",
+        "agent_task": "做研究",
+        "agent_binding": {"binding_type": "inline_agent"},
+        "model": {"provider": "openai", "name": "gpt-4o", "mode": "chat"},
+    }
+    data.update(overrides)
+    return data
+
+
 def test_agent_missing_version_errors():
     graph = {
         "nodes": [
             {"id": "1", "data": {"type": "start"}},
-            {"id": "2", "data": {"type": "agent", "agent_node_kind": "dify_agent", "agent_task": "t"}},
+            {"id": "2", "data": _agent_data(version="1")},
             {"id": "3", "data": {"type": "end"}},
         ],
         "edges": [
@@ -34,7 +49,7 @@ def test_agent_missing_version_errors():
     }
     result = _validate(graph)
     assert result["ok"] is False
-    assert any(error["code"] == "AGENT_V2_SHAPE" for error in result["errors"])
+    assert any(error["code"] == "INVALID_AGENT_NODE" for error in result["errors"])
 
 
 def test_missing_start():
@@ -85,29 +100,65 @@ def test_wants_agent_without_agent_node():
     assert any(error["code"] == "AGENT_SHOULD_BE_USED" for error in result["errors"])
 
 
-def test_agent_shape_without_binding_does_not_trigger_should_be_used():
+def test_inline_agent_without_ids_does_not_report_binding_missing():
+    result = _validate(
+        {
+            "nodes": [
+                {"id": "start", "data": {"type": "start"}},
+                {"id": "a1", "data": _agent_data()},
+                {"id": "end", "data": {"type": "end"}},
+            ],
+            "edges": [
+                {"source": "start", "target": "a1"},
+                {"source": "a1", "target": "end"},
+            ],
+        },
+        intent_flags={"wants_agent": True},
+    )
+    assert not any(error["code"] == "AGENT_SHOULD_BE_USED" for error in result["errors"])
+    assert not any(error["code"] == "AGENT_BINDING_MISSING" for error in result["errors"])
+
+
+def test_http_validate_reports_bare_array_code_output():
     result = _validate(
         {
             "nodes": [
                 {"id": "start", "data": {"type": "start"}},
                 {
-                    "id": "a1",
-                    "data": {
-                        "type": "agent",
-                        "version": "2",
-                        "agent_node_kind": "dify_agent",
-                        "agent_task": "做研究",
-                        "agent_binding": {"binding_type": "inline_agent"},
-                    },
+                    "id": "node_parse",
+                    "data": {"type": "code", "outputs": {"questions": {"type": "array"}}},
                 },
                 {"id": "end", "data": {"type": "end"}},
             ],
-            "edges": [],
-        },
-        intent_flags={"wants_agent": True},
+            "edges": [
+                {"source": "start", "target": "node_parse"},
+                {"source": "node_parse", "target": "end"},
+            ],
+        }
     )
-    assert not any(error["code"] == "AGENT_SHOULD_BE_USED" for error in result["errors"])
-    assert any(error["code"] == "AGENT_BINDING_MISSING" for error in result["errors"])
+    assert result["ok"] is False
+    assert any(error["code"] == "INVALID_CODE_OUTPUT" for error in result["errors"])
+    assert any("questions" in error["detail"] and "'array'" in error["detail"] for error in result["errors"])
+
+
+def test_http_validate_reports_missing_end_value_type():
+    result = _validate(
+        {
+            "nodes": [
+                {"id": "start", "data": {"type": "start"}},
+                {
+                    "id": "end",
+                    "data": {
+                        "type": "end",
+                        "outputs": [{"variable": "result", "value_selector": ["start", "query"]}],
+                    },
+                },
+            ],
+            "edges": [{"source": "start", "target": "end"}],
+        }
+    )
+    assert result["ok"] is False
+    assert any(error["code"] == "INVALID_END_OUTPUT" for error in result["errors"])
 
 
 def test_wants_vision_alone_does_not_require_agent():

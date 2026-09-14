@@ -3,8 +3,8 @@
 Focused module behavior lives beside the module it exercises.
 """
 
-from core.workflow.generator.llm_response import StageJSONError
-from core.workflow.generator.runner import _stage_error_to_envelope_code
+from core.workflow.generator.model_io.llm_response import StageJSONError
+from core.workflow.generator.pipeline.runner import _stage_error_to_envelope_code
 from graphon.model_runtime.errors.invoke import InvokeError
 
 from ._runner_test_support import (

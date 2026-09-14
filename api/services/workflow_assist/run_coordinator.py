@@ -7,6 +7,8 @@ No task dispatch, model invocation, or network work occurs in its transactions.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from typing import Any, cast
 
 from sqlalchemy import exists, func, select, update
@@ -15,6 +17,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
+from configs import dify_config
+from core.workflow.generator.acceptance.evidence import canonical_graph_hash
+from core.workflow.generator.agent.types import AgentMessage
+from core.workflow.generator.contracts.workflow_reconciliation import WORKFLOW_RECONCILIATION_VERSION
 from libs.datetime_utils import naive_utc_now
 from models.workflow_assist import (
     WORKFLOW_ASSIST_RUN_ACTIVE_STATUSES,
@@ -45,6 +51,7 @@ from services.workflow_assist.run_types import (
     RunOwner,
     UserAbortFence,
     WorkerTimeoutFence,
+    WorkflowContractCheckpoint,
 )
 from services.workflow_assist.run_values import (
     ensure_payload_size,
@@ -94,6 +101,7 @@ class RunCoordinator:
         model_config: dict[str, Any],
         selected_node: str | None = None,
         references: list[dict[str, Any]] | None = None,
+        live_acceptance_request_id: str | None = None,
     ) -> WorkflowAssistRun:
         """Atomically supersede an active run and create one queued user turn."""
         normalized_message = prepare_run_input(message)
@@ -108,6 +116,9 @@ class RunCoordinator:
         try:
             with self.session.begin_nested():
                 conversation = self._lock_conversation(owner)
+                from services.workflow_assist.live_acceptance import resolve_live_approval
+
+                live_acceptance = resolve_live_approval(self.session, conversation, live_acceptance_request_id)
                 if conversation.active_run_id is not None:
                     active_run = self._lock_run(
                         owner,
@@ -125,9 +136,7 @@ class RunCoordinator:
                             reason="superseded_by_new_turn",
                         )
 
-                self._abandon_pending_agent_responses(
-                    conversation=conversation, reason="superseded_by_new_turn"
-                )
+                self._abandon_pending_agent_responses(conversation=conversation, reason="superseded_by_new_turn")
                 conversation.run_epoch = (conversation.run_epoch or 0) + 1
                 self._append_user_turn(
                     conversation=conversation,
@@ -146,6 +155,9 @@ class RunCoordinator:
                     model_config=prepared_model_config,
                     selected_node=normalized_selected_node,
                     references=list(references) if references else None,
+                    contract_protocol_version=conversation.contract_protocol_version,
+                    contract_rollout_stage=str(dify_config.WORKFLOW_ASSIST_CONTRACT_ROLLOUT),
+                    live_acceptance=live_acceptance,
                     next_event_sequence=1,
                     candidate_revision=conversation.candidate_revision,
                 )
@@ -164,6 +176,22 @@ class RunCoordinator:
             return run
         except IntegrityError as exc:
             raise self._write_conflict() from exc
+
+    def consume_live_acceptance(self, *, lease: RunLease, revision: int, graph_hash: str) -> bool:
+        """Reserve one graph-bound execution; consumed grants are never copied into retries."""
+        with self.session.begin_nested():
+            locked = self._lock_for_worker_write(lease)
+            if locked is None:
+                return False
+            _, run = locked
+            grant = run.live_acceptance
+            if not isinstance(grant, dict) or grant.get("consumed") is not False:
+                return False
+            if grant.get("candidate_revision") != revision or grant.get("graph_hash") != graph_hash:
+                return False
+            run.live_acceptance = {**grant, "consumed": True}
+            self.session.flush()
+            return True
 
     def retry_failed_step(
         self,
@@ -218,6 +246,8 @@ class RunCoordinator:
                     model_config=failed_run.model_config,
                     selected_node=failed_run.selected_node,
                     references=list(failed_run.references) if failed_run.references else None,
+                    contract_protocol_version=failed_run.contract_protocol_version,
+                    contract_rollout_stage=failed_run.contract_rollout_stage,
                     next_event_sequence=1,
                     candidate_revision=conversation.candidate_revision,
                 )
@@ -395,20 +425,27 @@ class RunCoordinator:
                 return duplicate
             raise self._write_conflict() from exc
 
-    def stage_agent_response(self, *, lease: RunLease, response: AgentResponseOutbox) -> CommitStepOutcome:
-        """Fence and freeze one complete assistant response using its complete owner-scoped message sequence."""
+    def stage_agent_response(
+        self,
+        *,
+        lease: RunLease,
+        response: AgentResponseOutbox,
+        history: Sequence[AgentMessage] = (),
+    ) -> CommitStepOutcome:
+        """Atomically append preceding history and freeze one response under a worker fence.
+
+        History sequences must be strictly increasing and precede the response.
+        Exact replays are idempotent; conflicting rows raise a write conflict.
+        """
         prepared = self._prepare_agent_response(response)
         assert prepared is not None
+        prepared_history = self._prepare_agent_history(history, response_sequence=prepared.sequence)
         try:
             with self.session.begin_nested():
                 locked = self._lock_for_worker_write(lease)
                 if locked is None:
                     return CommitStepOutcome.FENCED
                 conversation, _run = locked
-                existing = self._find_agent_message(lease=lease, sequence=prepared.sequence)
-                if existing is not None:
-                    self._reject_mismatched_response(existing=existing, response=prepared, lease=lease)
-                    return CommitStepOutcome.DUPLICATE
                 latest_sequence = (
                     self.session.scalar(
                         select(func.coalesce(func.max(WorkflowAssistMessage.sequence), 0)).where(
@@ -420,6 +457,32 @@ class RunCoordinator:
                     )
                     or 0
                 )
+                for message in prepared_history:
+                    existing_history = self._find_agent_message(lease=lease, sequence=message.sequence)
+                    if existing_history is not None:
+                        self._reject_mismatched_history(existing=existing_history, message=message)
+                        continue
+                    if message.sequence != latest_sequence + 1:
+                        raise WorkflowAssistConversationWriteConflictError("Durable Agent history sequence mismatch")
+                    self.session.add(
+                        WorkflowAssistMessage(
+                            tenant_id=lease.owner.tenant_id,
+                            app_id=lease.owner.app_id,
+                            account_id=lease.owner.account_id,
+                            conversation_id=lease.owner.conversation_id,
+                            sequence=message.sequence,
+                            role=message.role,
+                            event_type=message.event_type,
+                            status=message.status,
+                            retryable=False,
+                            payload=message.payload,
+                        )
+                    )
+                    latest_sequence = message.sequence
+                existing = self._find_agent_message(lease=lease, sequence=prepared.sequence)
+                if existing is not None:
+                    self._reject_mismatched_response(existing=existing, response=prepared, lease=lease)
+                    return CommitStepOutcome.DUPLICATE
                 if prepared.sequence != latest_sequence + 1:
                     raise WorkflowAssistConversationWriteConflictError("Durable Agent response sequence mismatch")
                 self.session.add(
@@ -450,11 +513,14 @@ class RunCoordinator:
         step_id: str,
         payload: dict[str, Any],
         reason: str | None = None,
+        response_outbox: AgentResponseOutbox | None = None,
     ) -> bool:
         """Atomically finish one running worker lease and append its terminal event.
 
         ``done`` is authorized only after deterministic, mode-specific
         verification of the exact candidate held by the locked conversation.
+        A completed response supplied by a worker is persisted in the same
+        transaction so the terminal event cannot outrun conversation history.
         """
         normalized_status = self._normalize_status(status)
         if not normalized_status.is_terminal:
@@ -467,6 +533,9 @@ class RunCoordinator:
             reason=normalized_reason,
         )
         prepared_payload = self._prepare_terminal_payload(status=normalized_status, payload=payload)
+        prepared_response = self._prepare_agent_response(response_outbox)
+        if prepared_response is not None and not isinstance(lease, RunLease):
+            raise ValueError("terminal Agent response requires a worker lease")
 
         try:
             with self.session.begin_nested():
@@ -484,6 +553,14 @@ class RunCoordinator:
                     if not self._candidate_is_complete(owner=lease.owner, conversation=conversation, run=run):
                         return False
                     self._write_completion_evidence(conversation=conversation, run=run)
+                if prepared_response is not None:
+                    assert isinstance(lease, RunLease)
+                    self._persist_terminal_agent_response(
+                        lease=lease,
+                        conversation=conversation,
+                        run=run,
+                        response=prepared_response,
+                    )
                 self._finish_locked_run(
                     conversation=conversation,
                     run=run,
@@ -533,7 +610,11 @@ class RunCoordinator:
             run.candidate_revision = next_revision
 
         if checkpoint is not None:
-            self._apply_agent_checkpoint(conversation=conversation, checkpoint=checkpoint)
+            self._apply_agent_checkpoint(
+                conversation=conversation,
+                checkpoint=checkpoint,
+                contract_protocol_version=run.contract_protocol_version,
+            )
 
         if response_outbox is not None:
             self._complete_agent_response(lease=lease, response=response_outbox)
@@ -565,10 +646,39 @@ class RunCoordinator:
         )
         if prepared_validation is not None:
             ensure_payload_size(prepared_validation, max_bytes=_MAX_AGENT_CHECKPOINT_BYTES)
+        prepared_contract = RunCoordinator._prepare_contract_checkpoint(checkpoint.workflow_contract)
         return AgentCheckpoint(
             compacted_until_sequence=watermark,
             compacted_state=prepared_compacted,
             last_validation=prepared_validation,
+            workflow_contract=prepared_contract,
+        )
+
+    @staticmethod
+    def _prepare_contract_checkpoint(
+        checkpoint: WorkflowContractCheckpoint | None,
+    ) -> WorkflowContractCheckpoint | None:
+        if checkpoint is None:
+            return None
+        if checkpoint.protocol_version != 1:
+            raise ValueError("Workflow contract protocol version is unsupported")
+        if checkpoint.revision < 1:
+            raise ValueError("Workflow contract revision must be positive")
+        if re.fullmatch(r"[0-9a-f]{64}", checkpoint.contract_hash) is None:
+            raise ValueError("Workflow contract hash must be SHA256 hex")
+        prepared = sanitize_payload(checkpoint.contract)
+        ensure_payload_size(prepared, max_bytes=_MAX_AGENT_CHECKPOINT_BYTES)
+        if (
+            prepared.get("protocol_version") != checkpoint.protocol_version
+            or prepared.get("revision") != checkpoint.revision
+            or prepared.get("contract_hash") != checkpoint.contract_hash
+        ):
+            raise ValueError("Workflow contract checkpoint metadata does not match its body")
+        return WorkflowContractCheckpoint(
+            protocol_version=checkpoint.protocol_version,
+            revision=checkpoint.revision,
+            contract_hash=checkpoint.contract_hash,
+            contract=cast(dict[str, object], prepared),
         )
 
     @classmethod
@@ -586,6 +696,39 @@ class RunCoordinator:
         )
 
     @staticmethod
+    def _prepare_agent_history(
+        history: Sequence[AgentMessage],
+        *,
+        response_sequence: int,
+    ) -> tuple[AgentMessage, ...]:
+        prepared: list[AgentMessage] = []
+        previous_sequence = 0
+        for message in history:
+            if message.sequence < 1 or message.sequence >= response_sequence:
+                raise ValueError("Agent history sequence must be positive and precede the response")
+            if message.sequence <= previous_sequence:
+                raise ValueError("Agent history sequences must be strictly increasing")
+            if message.role not in {"user", "assistant"}:
+                raise ValueError("Agent history role is invalid")
+            if message.event_type not in {"message", "tool_call", "tool_result"}:
+                raise ValueError("Agent history event type is invalid")
+            if not message.status or len(message.status) > 32:
+                raise ValueError("Agent history status is invalid")
+            payload = sanitize_payload(message.payload)
+            ensure_payload_size(payload, max_bytes=_MAX_AGENT_RESPONSE_BYTES)
+            prepared.append(
+                AgentMessage(
+                    sequence=message.sequence,
+                    role=message.role,
+                    event_type=message.event_type,
+                    status=message.status,
+                    payload=payload,
+                )
+            )
+            previous_sequence = message.sequence
+        return tuple(prepared)
+
+    @staticmethod
     def _checkpoint_payload(checkpoint: AgentCheckpoint | None) -> dict[str, Any] | None:
         if checkpoint is None:
             return None
@@ -593,6 +736,16 @@ class RunCoordinator:
             "compacted_until_sequence": checkpoint.compacted_until_sequence,
             "compacted_state": checkpoint.compacted_state,
             "last_validation": checkpoint.last_validation,
+            "workflow_contract": (
+                {
+                    "protocol_version": checkpoint.workflow_contract.protocol_version,
+                    "revision": checkpoint.workflow_contract.revision,
+                    "contract_hash": checkpoint.workflow_contract.contract_hash,
+                    "contract": checkpoint.workflow_contract.contract,
+                }
+                if checkpoint.workflow_contract is not None
+                else None
+            ),
         }
 
     @classmethod
@@ -621,6 +774,17 @@ class RunCoordinator:
             .with_for_update()
         )
 
+    @staticmethod
+    def _reject_mismatched_history(*, existing: WorkflowAssistMessage, message: AgentMessage) -> None:
+        if (
+            existing.role != message.role
+            or existing.event_type != message.event_type
+            or existing.status != message.status
+            or existing.retryable
+            or existing.payload != message.payload
+        ):
+            raise WorkflowAssistConversationWriteConflictError("Durable Agent history replay payload mismatch")
+
     @classmethod
     def _reject_mismatched_response(
         cls,
@@ -644,8 +808,62 @@ class RunCoordinator:
         existing.payload = response.payload
         existing.status = "completed"
 
-    @staticmethod
-    def _apply_agent_checkpoint(*, conversation: WorkflowAssistConversation, checkpoint: AgentCheckpoint) -> None:
+    def _persist_terminal_agent_response(
+        self,
+        *,
+        lease: RunLease,
+        conversation: WorkflowAssistConversation,
+        run: WorkflowAssistRun,
+        response: AgentResponseOutbox,
+    ) -> None:
+        existing = self._find_agent_message(lease=lease, sequence=response.sequence)
+        if existing is not None:
+            self._reject_mismatched_response(existing=existing, response=response, lease=lease)
+            existing.payload = response.payload
+            existing.status = "completed"
+        else:
+            latest_sequence = (
+                self.session.scalar(
+                    select(func.coalesce(func.max(WorkflowAssistMessage.sequence), 0)).where(
+                        WorkflowAssistMessage.tenant_id == lease.owner.tenant_id,
+                        WorkflowAssistMessage.app_id == lease.owner.app_id,
+                        WorkflowAssistMessage.account_id == lease.owner.account_id,
+                        WorkflowAssistMessage.conversation_id == conversation.id,
+                    )
+                )
+                or 0
+            )
+            if response.sequence != latest_sequence + 1:
+                raise WorkflowAssistConversationWriteConflictError("Durable Agent response sequence mismatch")
+            self.session.add(
+                WorkflowAssistMessage(
+                    tenant_id=lease.owner.tenant_id,
+                    app_id=lease.owner.app_id,
+                    account_id=lease.owner.account_id,
+                    conversation_id=lease.owner.conversation_id,
+                    sequence=response.sequence,
+                    role="assistant",
+                    event_type="message",
+                    status="completed",
+                    retryable=False,
+                    payload=response.payload,
+                )
+            )
+        if response.checkpoint is not None:
+            self._apply_agent_checkpoint(
+                conversation=conversation,
+                checkpoint=response.checkpoint,
+                contract_protocol_version=run.contract_protocol_version,
+            )
+
+    @classmethod
+    def _apply_agent_checkpoint(
+        cls,
+        *,
+        conversation: WorkflowAssistConversation,
+        checkpoint: AgentCheckpoint,
+        contract_protocol_version: int | None,
+    ) -> None:
         watermark = checkpoint.compacted_until_sequence
         current = conversation.compacted_until_sequence
         if watermark is not None and current is not None and watermark < current:
@@ -660,6 +878,28 @@ class RunCoordinator:
             state["last_validation"] = checkpoint.last_validation
         ensure_payload_size(state, max_bytes=_MAX_AGENT_CHECKPOINT_BYTES)
         conversation.state = state
+        contract = checkpoint.workflow_contract
+        if contract is None:
+            return
+        if contract_protocol_version != contract.protocol_version:
+            raise ValueError("Workflow contract protocol does not match the frozen Run")
+        if conversation.contract_protocol_version != contract_protocol_version:
+            raise ValueError("Conversation protocol changed during an active Run")
+        current_revision = conversation.contract_revision or 0
+        if contract.revision < current_revision:
+            raise ValueError("Workflow contract revision cannot regress")
+        if contract.revision == current_revision:
+            hash_changed = conversation.contract_hash != contract.contract_hash
+            body_changed = conversation.workflow_contract != contract.contract
+            if hash_changed or body_changed:
+                raise ValueError("Workflow contract revision replay does not match persisted state")
+            return
+        if contract.revision != current_revision + 1:
+            raise ValueError("Workflow contract revision must advance by one")
+        conversation.workflow_contract = contract.contract
+        conversation.contract_revision = contract.revision
+        conversation.contract_hash = contract.contract_hash
+        cls._clear_completion_evidence(conversation)
 
     @staticmethod
     def _reject_mismatched_step_replay(
@@ -1003,6 +1243,11 @@ class RunCoordinator:
         conversation.completion_candidate_base_hash = None
         conversation.completion_app_mode = None
         conversation.completion_assertion = None
+        conversation.completion_contract_protocol_version = None
+        conversation.completion_contract_revision = None
+        conversation.completion_contract_hash = None
+        conversation.completion_graph_hash = None
+        conversation.completion_validation_version = None
 
     def _candidate_is_complete(
         self,
@@ -1020,7 +1265,14 @@ class RunCoordinator:
             mode = WorkflowAssistMode(run.mode)
         except (TypeError, ValueError):
             return False
-        return self._completion_policy.candidate_is_complete(owner=owner, graph=graph, mode=mode)
+        return self._completion_policy.candidate_is_complete(
+            owner=owner,
+            graph=graph,
+            mode=mode,
+            contract_protocol_version=run.contract_protocol_version,
+            contract=conversation.workflow_contract,
+            candidate_base_hash=conversation.candidate_base_hash,
+        )
 
     @staticmethod
     def _write_completion_evidence(*, conversation: WorkflowAssistConversation, run: WorkflowAssistRun) -> None:
@@ -1030,6 +1282,12 @@ class RunCoordinator:
         conversation.completion_candidate_base_hash = conversation.candidate_base_hash
         conversation.completion_app_mode = run.mode
         conversation.completion_assertion = WorkflowAssistCompletionAssertion.WORKFLOW_STRUCTURE_REACHES_TERMINAL
+        conversation.completion_contract_protocol_version = run.contract_protocol_version
+        conversation.completion_contract_revision = conversation.contract_revision
+        conversation.completion_contract_hash = conversation.contract_hash
+        graph = conversation.candidate_graph
+        conversation.completion_graph_hash = canonical_graph_hash(graph) if isinstance(graph, dict) else None
+        conversation.completion_validation_version = WORKFLOW_RECONCILIATION_VERSION
 
     def _prepare_step_payload(
         self,

@@ -1,58 +1,10 @@
-"""Typed payloads exchanged between the agent loop, its tools, and the transport.
-
-``AgentMessage`` is the only conversation representation: an append-only list of
-these rebuilt from ``WorkflowAssistMessage`` rows on every request. There is no
-separate checkpoint — the message list *is* the state. Restore keeps persisted
-``role`` values (``user`` / ``assistant``); ``event_type`` distinguishes a
-prose ``message`` from a ``tool_call`` or ``tool_result``.
-
-The ``Minimal*`` graph types describe the candidate graph the agent's tools build
-up, which is deliberately less populated than ``GraphDict`` — see
-``MinimalGraphNodeDict`` for why they are separate types rather than casts.
-``AgentSession.candidate_graph`` stays a ``MinimalGraphDict`` (or a matching
-dict) rather than a cast to ``GraphDict``.
-"""
+"""Agent session and tool protocol payloads."""
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import Any, Literal, TypedDict
 
-from core.workflow.generator.types import GraphViewportDict, WorkflowGenerationMode
-
-
-class MinimalGraphNodeDict(TypedDict):
-    """One node of the graph as the agent builds it.
-
-    ``MinimalGraphNodeDict``, ``MinimalGraphEdgeDict``, and ``MinimalGraphDict``
-    describe the graph *before* ``graph_postprocessor.postprocess_graph`` runs.
-    The postprocessor is the single normaliser that fills in the ReactFlow node
-    ``type`` and ``position`` and the edge ``id`` and ``type``, all of which
-    ``GraphDict`` in ``core.workflow.generator.types`` declares as required.
-    These types exist so the agent's own surface stays honestly typed instead of
-    casting an incomplete node to ``GraphNodeDict`` — a cast that would let the
-    type checker bless a ``node["position"]`` that raises ``KeyError`` at run
-    time. The one legitimate conversion to ``GraphDict`` belongs at the single
-    boundary that hands the finished graph to the postprocessor.
-    """
-
-    id: str
-    data: dict[str, Any]
-    parentId: NotRequired[str]
-
-
-class MinimalGraphEdgeDict(TypedDict):
-    """One edge of the graph as the agent builds it. See ``MinimalGraphNodeDict``."""
-
-    source: str
-    target: str
-    sourceHandle: NotRequired[str]
-
-
-class MinimalGraphDict(TypedDict):
-    """The agent's in-progress graph. See ``MinimalGraphNodeDict``."""
-
-    nodes: list[MinimalGraphNodeDict]
-    edges: list[MinimalGraphEdgeDict]
-    viewport: GraphViewportDict
+from core.workflow.generator.graph.types import MinimalGraphDict
+from core.workflow.generator.types import WorkflowGenerationMode
 
 
 class ToolCall(TypedDict):
@@ -86,6 +38,8 @@ class ToolResult(TypedDict):
 
 
 AgentMessageEventType = Literal["message", "tool_call", "tool_result"]
+
+
 AgentMessageRole = Literal["user", "assistant"]
 
 
@@ -121,6 +75,10 @@ class CandidateState(TypedDict, total=False):
     compacted_until_sequence: int | None
     compacted_state: dict[str, Any] | None
     last_validation: dict[str, Any] | None
+    contract_protocol_version: int | None
+    workflow_contract: dict[str, object] | None
+    contract_revision: int
+    contract_hash: str | None
 
 
 @dataclass
@@ -143,6 +101,10 @@ class AgentSession:
     generation_mode: WorkflowGenerationMode
     last_validation: dict[str, Any] | None
     last_acceptance: dict[str, Any] | None = None
+    contract_protocol_version: int | None = None
+    workflow_contract: dict[str, object] | None = None
+    contract_revision: int = 0
+    contract_hash: str | None = None
     edit_mode: str = "local"
     last_run: str | None = None
     canvas_graph: MinimalGraphDict | dict[str, Any] | None = None
@@ -166,4 +128,6 @@ AgentEventName = Literal[
     "error",
     "turn_complete",
 ]
+
+
 AgentEvent = tuple[AgentEventName, dict[str, Any]]

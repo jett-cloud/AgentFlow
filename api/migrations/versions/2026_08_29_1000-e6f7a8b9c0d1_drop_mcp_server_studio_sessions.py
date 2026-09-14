@@ -1,14 +1,14 @@
 """drop local MCP Server Studio session storage
 
 Revision ID: e6f7a8b9c0d1
-Revises: d4e5f6a7b8c9
+Revises: f6a7b8c9d0e1
 Create Date: 2026-08-29 10:00:00.000000
 """
 
 from alembic import op
 
 revision = "e6f7a8b9c0d1"
-down_revision = "d4e5f6a7b8c9"
+down_revision = "f6a7b8c9d0e1"
 branch_labels = None
 depends_on = None
 

@@ -17,7 +17,7 @@ from core.workflow.nodes.trigger_webhook.entities import (
     WebhookData,
 )
 from core.workflow.nodes.trigger_webhook.node import TriggerWebhookNode
-from core.workflow.system_variables import default_system_variables
+from core.workflow.runtime.variables.system_variables import default_system_variables
 from graphon.entities import GraphInitParams
 from graphon.enums import WorkflowNodeExecutionStatus
 from graphon.runtime import GraphRuntimeState, VariablePool

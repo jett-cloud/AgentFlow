@@ -10,9 +10,10 @@ from core.app.entities.app_invoke_entities import DIFY_RUN_CONTEXT_KEY, DifyRunC
 from core.plugin.impl.model import PluginModelClient
 from core.plugin.impl.model_runtime import PluginModelRuntime
 from core.plugin.plugin_service import PluginService
+from core.repositories.human_input_repository import HumanInputFormRepository
 from core.workflow import node_factory
-from core.workflow import template_rendering as workflow_template_rendering
-from core.workflow.node_runtime import DifyPreparedLLM
+from core.workflow.runtime.adapters import template_rendering as workflow_template_rendering
+from core.workflow.runtime.adapters.llm import DifyPreparedLLM
 from core.workflow.nodes.knowledge_index import KNOWLEDGE_INDEX_NODE_TYPE
 from graphon.entities.base_node_data import BaseNodeData
 from graphon.enums import BuiltinNodeTypes, NodeType
@@ -24,9 +25,11 @@ from graphon.nodes.llm.entities import LLMNodeData
 from graphon.nodes.llm.node import LLMNode
 from graphon.nodes.llm.runtime_protocols import LLMPollingCapableProtocol
 from graphon.nodes.parameter_extractor.entities import ParameterExtractorNodeData
+from graphon.runtime import GraphRuntimeState, VariablePool
 from graphon.variables.segments import ArrayObjectSegment, StringSegment
 from models.base import TypeBase
 from models.model import AppMode, Conversation, ConversationFromSource
+from tests.workflow_test_utils import build_test_graph_init_params
 
 
 @pytest.fixture
@@ -307,6 +310,41 @@ class TestCodeExecutorJinja2TemplateRenderer:
 
 
 class TestDifyNodeFactoryInit:
+    def test_container_rebinding_preserves_injected_human_input_repository(self):
+        parent_state = GraphRuntimeState(variable_pool=VariablePool(), start_at=0)
+        child_state = GraphRuntimeState(variable_pool=VariablePool(), start_at=0)
+        form_repository = MagicMock(spec=HumanInputFormRepository)
+        factory = node_factory.DifyNodeFactory(
+            graph_init_params=build_test_graph_init_params(),
+            graph_runtime_state=parent_state,
+            human_input_form_repository=form_repository,
+        )
+
+        child_factory = factory.with_runtime_state(child_state)
+
+        assert child_factory._human_input_runtime is not factory._human_input_runtime
+        assert child_factory._human_input_runtime.build_form_repository() is form_repository
+
+    def test_container_rebinding_preserves_injected_dependencies_and_parent_state(self):
+        parent_state = GraphRuntimeState(variable_pool=VariablePool(), start_at=0)
+        child_state = GraphRuntimeState(variable_pool=VariablePool(), start_at=0)
+        factory = node_factory.DifyNodeFactory(
+            graph_init_params=build_test_graph_init_params(),
+            graph_runtime_state=parent_state,
+            agent_binding_resolver=sentinel.resolver,
+            agent_session_store=sentinel.store,
+        )
+
+        child_factory = factory.with_runtime_state(child_state)
+        child_node = child_factory.create_node({"id": "start", "data": {"type": "start", "variables": []}})
+
+        assert child_node.graph_runtime_state is child_state
+        assert factory.graph_runtime_state is parent_state
+        assert child_factory.graph_init_params is factory.graph_init_params
+        assert child_factory._agent_binding_resolver is sentinel.resolver
+        assert child_factory._agent_session_store is sentinel.store
+        assert child_factory._human_input_runtime is not factory._human_input_runtime
+
     def test_from_graph_init_context_translates_before_init(self):
         graph_init_context = MagicMock()
         graph_init_context.to_graph_init_params.return_value = sentinel.graph_init_params
@@ -322,6 +360,9 @@ class TestDifyNodeFactoryInit:
         init.assert_called_once_with(
             graph_init_params=sentinel.graph_init_params,
             graph_runtime_state=sentinel.graph_runtime_state,
+            agent_binding_resolver=None,
+            agent_session_store=None,
+            human_input_form_repository=None,
         )
 
     def test_init_builds_default_dependencies(self):

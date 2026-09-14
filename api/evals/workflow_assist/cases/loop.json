@@ -2,13 +2,15 @@
   "instruction": "加一个循环容器",
   "initial_graph": {
     "nodes": [
-      {"id": "start", "data": {"type": "start", "title": "开始", "desc": "", "variables": []}},
-      {"id": "loop", "data": {"type": "iteration", "title": "循环", "desc": ""}},
-      {"id": "body", "data": {"type": "llm", "title": "循环体", "desc": ""}, "parentId": "loop"},
-      {"id": "end", "data": {"type": "end", "title": "结束", "desc": ""}}
+      {"id": "start", "data": {"type": "start", "title": "开始", "desc": "", "variables": [{"variable": "items", "label": "items", "type": "file-list"}, {"variable": "query", "label": "query", "type": "text-input"}]}},
+      {"id": "loop", "data": {"type": "iteration", "title": "循环", "desc": "", "start_node_id": "iteration_start", "iterator_selector": ["start", "items"], "output_selector": ["body", "text"]}},
+      {"id": "iteration_start", "data": {"type": "iteration-start", "title": "循环开始", "desc": ""}, "parentId": "loop"},
+      {"id": "body", "data": {"type": "llm", "title": "循环体", "desc": "", "model": {"provider": "openai", "name": "gpt-4o", "mode": "chat", "completion_params": {}}, "prompt_template": [{"role": "user", "text": "process item"}], "context": {"enabled": false, "variable_selector": []}}, "parentId": "loop"},
+      {"id": "end", "data": {"type": "end", "title": "结束", "desc": "", "outputs": [{"variable": "answer", "value_selector": ["loop", "output"], "value_type": "array[string]"}]}}
     ],
     "edges": [
       {"source": "start", "target": "loop"},
+      {"source": "iteration_start", "target": "body"},
       {"source": "loop", "target": "end"}
     ],
     "viewport": {"x": 0, "y": 0, "zoom": 0.7}

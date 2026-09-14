@@ -25,6 +25,13 @@ test('insertAtRange replaces trigger with token', () => {
   assert.equal(result.caret, 20)
 })
 
+test('insertAtRange inserts at start, middle, selection, and end', () => {
+  assert.deepEqual(insertAtRange('world', 0, 0, 'hello '), { text: 'hello world', caret: 6 })
+  assert.deepEqual(insertAtRange('ac', 1, 1, 'b'), { text: 'abc', caret: 2 })
+  assert.deepEqual(insertAtRange('aXXXc', 1, 4, 'b'), { text: 'abc', caret: 2 })
+  assert.deepEqual(insertAtRange('ab', 2, 2, 'c'), { text: 'abc', caret: 3 })
+})
+
 test('filterVarGroups filters by query', () => {
   const groups = [
     {

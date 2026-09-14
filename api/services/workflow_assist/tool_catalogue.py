@@ -4,11 +4,8 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
-from core.workflow.generator.tool_catalogue import (
-    _MAX_TOOLS,
-    ToolCatalogueEntry,
-    build_tool_catalogue,
-)
+from core.workflow.generator.resources.tool_catalogue import _MAX_TOOLS, ToolCatalogueEntry
+from services.workflow_assist.tool_catalogue_loader import build_tool_catalogue
 
 
 class AssistToolCatalogue(TypedDict):

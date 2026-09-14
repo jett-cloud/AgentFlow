@@ -1,4 +1,5 @@
 import { CSRF_HEADER_NAME, getCsrfToken } from '../../../shared/http/difyClient.js'
+import { refreshAccessTokenOrReLogin } from '../../../shared/auth/difyRefreshToken.js'
 
 export class FetchSseHttpError extends Error {
   constructor(message, { status, data }) {
@@ -23,6 +24,29 @@ function abortReason(signal) {
   if (signal?.reason instanceof Error)
     return signal.reason
   return new DOMException('The operation was aborted', 'AbortError')
+}
+
+function authenticationRequired() {
+  return new FetchSseHttpError('Sign in again to reconnect to this run.', {
+    status: 401,
+    data: { code: 'ASSIST_AUTH_REQUIRED' },
+  })
+}
+
+async function refreshForStream(refreshAuth, signal) {
+  let onAbort
+  try {
+    if (signal?.aborted)
+      throw abortReason(signal)
+    const cancelled = new Promise((_, reject) => {
+      onAbort = () => reject(abortReason(signal))
+      signal?.addEventListener('abort', onAbort, { once: true })
+    })
+    await Promise.race([cancelled, Promise.resolve().then(refreshAuth)])
+  }
+  finally {
+    signal?.removeEventListener('abort', onAbort)
+  }
 }
 
 async function readErrorData(response) {
@@ -132,6 +156,7 @@ function createParser({ initialEventId, onEvent }) {
 
 export async function fetchSse(url, {
   fetchImpl = globalThis.fetch,
+  refreshAuth = refreshAccessTokenOrReLogin,
   headers = {},
   lastEventId = null,
   onEvent = () => {},
@@ -141,18 +166,41 @@ export async function fetchSse(url, {
     Accept: 'text/event-stream',
     ...headers,
   }
-  const csrfToken = getCsrfToken()
-  if (csrfToken)
-    requestHeaders[CSRF_HEADER_NAME] = csrfToken
   if (lastEventId !== null && lastEventId !== undefined)
     requestHeaders['Last-Event-ID'] = String(lastEventId)
 
-  const response = await fetchImpl(url, {
-    method: 'GET',
-    credentials: 'include',
-    headers: requestHeaders,
-    signal,
-  })
+  const connect = () => {
+    if (signal?.aborted)
+      throw abortReason(signal)
+    const csrfToken = getCsrfToken()
+    delete requestHeaders[CSRF_HEADER_NAME]
+    if (csrfToken)
+      requestHeaders[CSRF_HEADER_NAME] = csrfToken
+    return fetchImpl(url, {
+      method: 'GET',
+      credentials: 'include',
+      headers: { ...requestHeaders },
+      signal,
+    })
+  }
+  let response = await connect()
+  if (response.status === 401) {
+    await response.body?.cancel?.().catch(() => {})
+    try {
+      await refreshForStream(refreshAuth, signal)
+    }
+    catch (error) {
+      if (signal?.aborted)
+        throw abortReason(signal)
+      throw authenticationRequired()
+    }
+    // Reopen only this GET with the same durable cursor, never resubmit a Turn.
+    response = await connect()
+    if (response.status === 401) {
+      await response.body?.cancel?.().catch(() => {})
+      throw authenticationRequired()
+    }
+  }
   if (!response.ok) {
     const data = await readErrorData(response)
     const message = data && typeof data === 'object'

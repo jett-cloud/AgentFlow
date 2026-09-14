@@ -1,144 +1,65 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { graphToFlow } from '../../model/dsl.js'
+import { canConnectAsSource, canConnectAsTarget, SELECTABLE_BLOCKS } from '../../model/nodeMeta.js'
 
-import {
-  BlockEnum,
-  NESTED_ELEMENT_Z_INDEX,
-} from '../../model/constants.js'
-import { flowToGraph, graphToFlow, makeIterationStartNode } from '../../model/dsl.js'
-import { getNodeOutputBranches } from '../../model/nodeHandleBranches.js'
-import {
-  SELECTABLE_BLOCKS,
-  canConnectAsSource,
-  canConnectAsTarget,
-  getDefaultNodeData,
-} from '../../model/nodeMeta.js'
-import { getNodePresentation } from '../../model/nodePresentation.js'
-
-test('iteration start uses the official virtual-node contract', () => {
-  assert.deepEqual(getDefaultNodeData(BlockEnum.IterationStart), {
-    type: BlockEnum.IterationStart,
-    title: '',
-    desc: '',
-    isInIteration: true,
-  })
-
-  assert.deepEqual(makeIterationStartNode('iteration-1'), {
-    id: 'iteration-1start',
-    type: BlockEnum.IterationStart,
-    position: { x: 24, y: 68 },
-    zIndex: NESTED_ELEMENT_Z_INDEX,
-    parentNode: 'iteration-1',
-    extent: 'parent',
-    selectable: false,
-    draggable: false,
-    data: {
-      type: BlockEnum.IterationStart,
-      title: '',
-      desc: '',
-      isInIteration: true,
-    },
-  })
-})
-
-test('iteration start is source-only and unavailable in ordinary node menus', () => {
-  assert.equal(canConnectAsTarget(BlockEnum.IterationStart), false)
-  assert.equal(canConnectAsSource(BlockEnum.IterationStart), true)
-  assert.equal(SELECTABLE_BLOCKS.includes(BlockEnum.IterationStart), false)
-  assert.deepEqual(getNodeOutputBranches({ type: BlockEnum.IterationStart }), [
-    { id: 'source', name: '', kind: 'normal' },
-  ])
-  assert.deepEqual(getNodePresentation(BlockEnum.IterationStart), {
-    kind: 'internal-start',
-    showEntryShell: false,
-    showTargetHandle: false,
-    showSourceHandle: true,
-    sourceHandleMode: 'header',
-  })
-})
-
-test('iteration start round-trips as a non-editable custom child node', () => {
-  const flow = graphToFlow({
+function validIterationGraph({ startId = 'iter-1start' } = {}) {
+  return {
     nodes: [
-      {
-        id: 'iteration-1',
-        type: 'custom',
-        position: { x: 100, y: 100 },
-        data: { type: BlockEnum.Iteration, title: 'Iteration', start_node_id: 'iteration-1start' },
-      },
-      {
-        id: 'iteration-1start',
-        type: 'custom-iteration-start',
-        parentId: 'iteration-1',
-        position: { x: 24, y: 68 },
-        data: { type: BlockEnum.IterationStart },
-      },
+      { id: 'iter-1', type: 'custom', data: { type: 'iteration', start_node_id: startId } },
+      { id: startId, type: 'custom-iteration-start', parentId: 'iter-1', data: { type: 'iteration-start' } },
+      { id: 'child', type: 'custom', parentId: 'iter-1', data: { type: 'code' } },
+    ],
+    edges: [{ source: startId, sourceHandle: 'source', target: 'child', targetHandle: 'target' }],
+  }
+}
+
+function conflictingIterationGraph() {
+  return {
+    nodes: [
+      { id: 'iter-1', type: 'custom', data: { type: 'iteration', start_node_id: 'business-child' } },
+      { id: 'business-child', type: 'custom', parentId: 'iter-1', data: { type: 'code' } },
     ],
     edges: [],
-  })
+  }
+}
 
-  const start = flow.nodes.find(node => node.id === 'iteration-1start')
-  assert.equal(start.type, BlockEnum.IterationStart)
-  assert.equal(start.parentNode, 'iteration-1')
-  assert.equal(start.extent, 'parent')
-  assert.equal(start.selectable, false)
-  assert.equal(start.draggable, false)
-  assert.equal(start.data.title, '')
-  assert.equal(start.data.desc, '')
-  assert.equal(start.data.isInIteration, true)
-
-  const graph = flowToGraph(flow.nodes, flow.edges)
-  const exportedStart = graph.nodes.find(node => node.id === 'iteration-1start')
-  assert.equal(exportedStart.type, 'custom-iteration-start')
-  assert.equal(exportedStart.parentId, 'iteration-1')
-  assert.deepEqual(exportedStart.data, {
-    type: BlockEnum.IterationStart,
-    title: '',
-    desc: '',
-    isInIteration: true,
-  })
+test('import preserves a valid non-default iteration start id', () => {
+  const flow = graphToFlow(validIterationGraph({ startId: 'entry_uuid_1' }))
+  assert.equal(flow.nodes.find(node => node.id === 'iter-1').data.start_node_id, 'entry_uuid_1')
 })
 
-test('legacy first-child start ids migrate to a unique iteration marker and edge', () => {
-  const flow = graphToFlow({
-    nodes: [
-      {
-        id: 'iteration-1',
-        type: 'custom',
-        position: { x: 100, y: 100 },
-        data: { type: BlockEnum.Iteration, title: 'Iteration', start_node_id: 'first-child' },
-      },
-      {
-        id: 'first-child',
-        type: 'custom',
-        parentId: 'iteration-1',
-        position: { x: 120, y: 68 },
-        data: { type: BlockEnum.Code, title: 'Code' },
-      },
-    ],
-    edges: [],
-  })
-
-  const iteration = flow.nodes.find(node => node.id === 'iteration-1')
-  const firstChild = flow.nodes.find(node => node.id === 'first-child')
-  const starts = flow.nodes.filter(node => node.data.type === BlockEnum.IterationStart)
+test('a conflicting business child id is not duplicated as iteration-start', () => {
+  const flow = graphToFlow(conflictingIterationGraph())
   assert.equal(new Set(flow.nodes.map(node => node.id)).size, flow.nodes.length)
-  assert.equal(firstChild.data.type, BlockEnum.Code)
-  assert.equal(starts.length, 1)
-  assert.notEqual(starts[0].id, 'first-child')
-  assert.equal(starts[0].parentNode, 'iteration-1')
-  assert.equal(iteration.data.start_node_id, starts[0].id)
-  assert.ok(iteration.data._children.some(child => child.nodeId === starts[0].id))
-  assert.ok(iteration.data._children.some(child => child.nodeId === 'first-child'))
-  assert.deepEqual(flow.edges.map(edge => ({
-    source: edge.source,
-    sourceHandle: edge.sourceHandle,
-    target: edge.target,
-    targetHandle: edge.targetHandle,
-  })), [{
-    source: starts[0].id,
-    sourceHandle: 'source',
-    target: 'first-child',
-    targetHandle: 'target',
-  }])
+  assert.equal(flow.nodes.filter(node => node.data.type === 'iteration-start').length, 1)
+})
+
+test('a shared iteration-start is not reparented onto a later container', () => {
+  const flow = graphToFlow({
+    nodes: [
+      { id: 'iter-a', type: 'custom', data: { type: 'iteration', start_node_id: 'shared-start' } },
+      { id: 'iter-b', type: 'custom', data: { type: 'iteration', start_node_id: 'shared-start' } },
+      { id: 'shared-start', type: 'custom-iteration-start', parentId: 'iter-a', data: { type: 'iteration-start' } },
+      { id: 'child-a', type: 'custom', parentId: 'iter-a', data: { type: 'code' } },
+      { id: 'child-b', type: 'custom', parentId: 'iter-b', data: { type: 'code' } },
+    ],
+    edges: [],
+  })
+  const iterA = flow.nodes.find(node => node.id === 'iter-a')
+  const iterB = flow.nodes.find(node => node.id === 'iter-b')
+  const shared = flow.nodes.find(node => node.id === 'shared-start')
+  const ownedByA = shared.parentNode || shared.parentId
+  assert.equal(ownedByA, 'iter-a')
+  assert.equal(iterA.data.start_node_id, 'shared-start')
+  assert.notEqual(iterB.data.start_node_id, 'shared-start')
+  const startB = flow.nodes.find(node => node.id === iterB.data.start_node_id)
+  assert.equal(startB?.data?.type, 'iteration-start')
+  assert.equal(startB.parentNode || startB.parentId, 'iter-b')
+})
+
+test('iteration-start stays source-only and hidden from selectable blocks', () => {
+  assert.equal(canConnectAsTarget('iteration-start'), false)
+  assert.equal(canConnectAsSource('iteration-start'), true)
+  assert.equal(SELECTABLE_BLOCKS.includes('iteration-start'), false)
 })

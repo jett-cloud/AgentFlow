@@ -12,14 +12,15 @@ import pytest
 from jinja2 import Template
 
 from configs import dify_config
-from core.workflow.generator.graph_postprocessor import GraphPostprocessor, postprocess_graph
-from core.workflow.generator.graph_validator import GraphValidator, validate_graph
-from core.workflow.generator.llm_response import chunk_finish_reason
-from core.workflow.generator.node_builder import assemble_graph
-from core.workflow.generator.planner import validate_planner_schema
-from core.workflow.generator.runner import WorkflowGenerator as _ProductionWorkflowGenerator
+from core.workflow.generator.compiler.node_builder import assemble_graph
+from core.workflow.generator.graph.graph_postprocessor import GraphPostprocessor, postprocess_graph
+from core.workflow.generator.model_io.llm_response import chunk_finish_reason
+from core.workflow.generator.pipeline.planner_support import validate_planner_schema
+from core.workflow.generator.pipeline.runner import WorkflowGenerator as _ProductionWorkflowGenerator
 from core.workflow.generator.types import GraphDict
-from core.workflow.generator.variable_references import VariableReferences
+from core.workflow.generator.validation.graph_validator import GraphValidator, validate_graph
+from core.workflow.generator.variables.variable_references import VariableReferences
+from tests.unit_tests.core.workflow.generator.node_fixtures import node_config
 
 __all__ = [
     "Any",
@@ -45,6 +46,7 @@ __all__ = [
     "deepcopy",
     "dify_config",
     "json",
+    "node_config",
     "postprocess_graph",
     "pytest",
     "threading",
@@ -169,6 +171,10 @@ class _GraphFixtureModel:
             prompt = "\n".join(str(message.content) for message in prompt_messages)
             node_id = next(node_id for node_id in self._graph_node_by_plan_id if f"id={node_id}, type=" in prompt)
             data = deepcopy(self._graph_node_by_plan_id[node_id].get("data") or {})
+            had_prompt = "prompt_template" in data
+            data = node_config(str(data.get("type")), data)
+            if data.get("type") == "llm" and not had_prompt and "# Output language\n\nEnglish" in prompt:
+                data["prompt_template"] = [{"role": "user", "text": "Process the input."}]
             for shared_key in ("type", "title", "desc", "selected"):
                 data.pop(shared_key, None)
             text = json.dumps({"config": data})

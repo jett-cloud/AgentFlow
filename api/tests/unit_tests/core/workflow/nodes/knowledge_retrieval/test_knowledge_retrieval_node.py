@@ -21,7 +21,7 @@ from core.workflow.nodes.knowledge_retrieval.knowledge_retrieval_node import (
     _normalize_metadata_filter_sequence_item,
 )
 from core.workflow.nodes.knowledge_retrieval.retrieval import RAGRetrievalProtocol, Source
-from core.workflow.system_variables import build_system_variables
+from core.workflow.runtime.variables.system_variables import build_system_variables
 from graphon.enums import WorkflowNodeExecutionStatus
 from graphon.model_runtime.entities.llm_entities import LLMUsage
 from graphon.runtime import GraphRuntimeState, VariablePool

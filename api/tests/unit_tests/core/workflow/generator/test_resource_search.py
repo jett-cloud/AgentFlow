@@ -1,6 +1,6 @@
-from core.workflow.generator.knowledge_catalogue import KnowledgeCatalogueEntry
-from core.workflow.generator.resource_search import search_knowledge, search_tools
-from core.workflow.generator.tool_catalogue import ToolCatalogueEntry
+from core.workflow.generator.resources.knowledge_catalogue import KnowledgeCatalogueEntry
+from core.workflow.generator.resources.resource_search import search_knowledge, search_tools
+from core.workflow.generator.resources.tool_catalogue import ToolCatalogueEntry
 
 
 def _tool(provider: str, name: str, label: str, description: str) -> ToolCatalogueEntry:
@@ -43,14 +43,32 @@ def test_tool_search_has_a_stable_twelve_result_limit():
     assert [entry["tool_name"] for entry in results] == [f"search-{index:02d}" for index in range(12)]
 
 
+def test_tool_search_matches_chinese_display_name_when_catalogue_label_is_english():
+    """@图片生成 uses the zh-Hans studio label; catalogue tool_label prefers en_US."""
+    entries = [
+        _tool(
+            "ghy/doubao-image/doubao-image",
+            "image_generate",
+            "Image Generation",
+            "Generate images via Volcengine Ark API.",
+        ),
+        _tool("time", "current_time", "Current Time", "Return the current time."),
+    ]
+    entries[0]["search_aliases"] = ("图片生成", "使用豆包(Seedream)模型通过火山引擎Ark API生成图片。")
+
+    results = search_tools(entries, "图片生成")
+
+    assert [(entry["provider_name"], entry["tool_name"]) for entry in results] == [
+        ("ghy/doubao-image/doubao-image", "image_generate")
+    ]
+
+
 def test_knowledge_search_uses_name_and_description_across_full_catalogue():
     entries: list[KnowledgeCatalogueEntry] = [
-        {"id": f"dataset-{index}", "name": f"Archive {index}", "description": "old records"}
-        for index in range(40)
+        {"id": f"dataset-{index}", "name": f"Archive {index}", "description": "old records"} for index in range(40)
     ]
     entries.append({"id": "product", "name": "Product Manual", "description": "Current operations guide"})
 
     results = search_knowledge(entries, "operations guide")
 
     assert [entry["id"] for entry in results] == ["product"]
-

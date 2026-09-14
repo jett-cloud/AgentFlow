@@ -2,6 +2,20 @@ export const NODE_PANEL_MIN_WIDTH = 400
 export const NODE_PANEL_MAX_WIDTH = 850
 export const NODE_PANEL_CANVAS_RESERVE = 400
 
+/** Use the displayed workflow trace, unless the user explicitly starts a standalone run. */
+export function selectNodePanelResult({ nodeId, tracing = [], singleResult = null, preferSingle = false }) {
+  if (preferSingle)
+    return singleResult
+  const record = tracing.findLast(item => item.nodeId === nodeId)
+  if (!record)
+    return null
+  return {
+    ...record,
+    process_data: record.processData,
+    execution_metadata: record.executionMetadata,
+  }
+}
+
 export function clampNodePanelWidth(requestedWidth, viewportWidth = 0) {
   const availableMaximum = viewportWidth > 0
     ? Math.max(NODE_PANEL_MIN_WIDTH, viewportWidth - NODE_PANEL_CANVAS_RESERVE)

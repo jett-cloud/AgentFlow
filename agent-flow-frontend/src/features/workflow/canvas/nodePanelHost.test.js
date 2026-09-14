@@ -4,6 +4,36 @@ import test from 'node:test'
 
 const hostLogicUrl = new URL('./nodePanelHost.js', import.meta.url)
 
+test('node panel uses the current trace instead of a stale single-run failure', async () => {
+  const { selectNodePanelResult } = await import(hostLogicUrl)
+  const tracing = [{ nodeId: 'tool', status: 'succeeded', outputs: { image: 'result' }, processData: {}, executionMetadata: { total_tokens: 3 } }]
+  const singleResult = { status: 'failed', error: 'stale' }
+  const result = selectNodePanelResult({ nodeId: 'tool', tracing, singleResult })
+  assert.equal(result.status, 'succeeded')
+  assert.deepEqual(result.outputs, { image: 'result' })
+  assert.equal(result.error, undefined)
+  assert.equal(result.execution_metadata.total_tokens, 3)
+  assert.equal(selectNodePanelResult({ nodeId: 'tool', tracing, singleResult, preferSingle: true }), singleResult)
+  assert.equal(selectNodePanelResult({ nodeId: 'other', tracing }), null)
+})
+
+test('repeated node executions select the latest occurrence in the current trace', async () => {
+  const { selectNodePanelResult } = await import(hostLogicUrl)
+  const tracing = [{ nodeId: 'tool', status: 'failed' }, { nodeId: 'tool', status: 'running' }]
+  assert.equal(selectNodePanelResult({ nodeId: 'tool', tracing }).status, 'running')
+})
+
+test('panel wiring refreshes stale overrides and clears them for a new workflow run', () => {
+  const canvas = readFileSync(new URL('./WorkflowCanvas.vue', import.meta.url), 'utf8')
+  const host = readFileSync(new URL('./components/NodePanelHost.vue', import.meta.url), 'utf8')
+  const panel = readFileSync(new URL('../nodes/shared/LastRunPanel.vue', import.meta.url), 'utf8')
+  assert.match(canvas, /:live-result="activePanelRunResult"/)
+  assert.match(canvas, /@refresh="refreshNodePanelResult"/)
+  assert.match(canvas, /type === 'workflow_started'[\s\S]*?singleRunResults.value = \{\}[\s\S]*?singleResultNodeId.value = ''/)
+  assert.match(host, /@refresh="\$emit\('refresh'\)"/)
+  assert.match(panel, /emit\('refresh'\)/)
+})
+
 test('panel width preserves at least 400px of usable desktop canvas', async () => {
   assert.equal(existsSync(hostLogicUrl), true)
   const { clampNodePanelWidth } = await import(hostLogicUrl)

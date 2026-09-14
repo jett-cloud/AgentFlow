@@ -3,7 +3,15 @@ import { computed } from 'vue'
 import { useResolvedNodeData } from '../../model/nodeProps.js'
 import { parseSelectorInput } from '../../model/availableVariables.js'
 import { useAvailableVariables } from '../../model/useAvailableVariables.js'
-import { getIfElseOperators, normalizeIfElseData } from './ifElseNode.js'
+import {
+  addIfElseCase,
+  createIfElseCondition,
+  getIfElseOperators,
+  isIfElseOperatorValueRequired,
+  normalizeIfElseData,
+  removeIfElseCase,
+  resolveIfElseVariable,
+} from './ifElseNode.js'
 
 /**
  * 比较运算符全量选项配置表
@@ -26,35 +34,21 @@ export function useIfElseConfig(props, emit) {
 
   // 计算并提供默认分支 Handle 列表 (如 IF / ELSE / ELIF 1)
   const targetBranches = computed(() => {
-    return nodeData.value?._targetBranches || [
-      { id: 'true', name: 'IF' },
-      { id: 'false', name: 'ELSE' }
-    ]
+    return normalizeIfElseData(nodeData.value)._targetBranches
   })
 
   // 条件组集合 (cases)
   const cases = computed(() => {
-    if (nodeData.value?.cases && nodeData.value.cases.length) {
-      return normalizeIfElseData(nodeData.value).cases
-    }
-    // 默认提供一个 IF 基础条件组
-    return [
-      {
-        case_id: 'true',
-        logical_operator: 'and',
-        conditions: []
-      }
-    ]
+    return normalizeIfElseData(nodeData.value).cases
   })
 
   /**
    * 状态变更后统一触发父层 update:nodeData 通知
    */
-  const emitUpdate = (newCases, newBranches) => {
+  const emitUpdate = (newCases) => {
     const next = normalizeIfElseData({
       ...nodeData.value,
       cases: newCases || cases.value,
-      _targetBranches: newBranches || targetBranches.value
     })
     emit('update:nodeData', next)
   }
@@ -80,11 +74,7 @@ export function useIfElseConfig(props, emit) {
     const nextCases = JSON.parse(JSON.stringify(cases.value))
     if (nextCases[caseIndex]) {
       nextCases[caseIndex].conditions.push({
-        id: `condition_${Date.now()}`,
-        variable_selector: [],
-        varType: 'string',
-        comparison_operator: '',
-        value: '',
+        ...createIfElseCondition(),
       })
       emitUpdate(nextCases)
     }
@@ -97,7 +87,7 @@ export function useIfElseConfig(props, emit) {
    */
   const handleRemoveCondition = (caseIndex, condIndex) => {
     const nextCases = JSON.parse(JSON.stringify(cases.value))
-    if (nextCases[caseIndex] && nextCases[caseIndex].conditions.length > 1) {
+    if (nextCases[caseIndex]) {
       nextCases[caseIndex].conditions.splice(condIndex, 1)
       emitUpdate(nextCases)
     }
@@ -113,6 +103,8 @@ export function useIfElseConfig(props, emit) {
         nextCases[caseIndex].conditions[condIndex].variable_selector = parseSelectorInput(val)
       } else {
         nextCases[caseIndex].conditions[condIndex][key] = val
+        if (key === 'comparison_operator' && !isIfElseOperatorValueRequired(val))
+          nextCases[caseIndex].conditions[condIndex].value = ''
       }
       emitUpdate(nextCases)
     }
@@ -122,79 +114,42 @@ export function useIfElseConfig(props, emit) {
    * 添加一个 ELIF (否则如果) 分支条件
    */
   const handleAddElifCase = () => {
-    const nextCases = JSON.parse(JSON.stringify(cases.value))
-    const nextBranches = JSON.parse(JSON.stringify(targetBranches.value))
-
-    const newCaseId = `case_${Date.now()}`
-    const elifCount = nextCases.length
-
-    // 1. 追加到 cases 列表
-    nextCases.push({
-      case_id: newCaseId,
-      logical_operator: 'and',
-      conditions: [
-        {
-          id: `condition_${Date.now()}`,
-          variable_selector: [],
-          varType: 'string',
-          comparison_operator: '',
-          value: ''
-        }
-      ]
-    })
-
-    // 2. 将新 ELIF 分支插入到 ELSE 分支之前
-    const elseIndex = nextBranches.findIndex((b) => b.id === 'false')
-    const newBranch = { id: newCaseId, name: `ELIF ${elifCount}` }
-
-    if (elseIndex !== -1) {
-      nextBranches.splice(elseIndex, 0, newBranch)
-    } else {
-      nextBranches.push(newBranch)
-    }
-
-    emitUpdate(nextCases, nextBranches)
+    emit('update:nodeData', addIfElseCase({ ...nodeData.value, cases: cases.value }))
   }
 
   /**
    * 删除指定的 ELIF 分支
    * @param {Number} caseIndex - 要删除的 case 下标 (第一项 IF 不可删除)
    */
-  const handleRemoveElifCase = (caseIndex) => {
-    if (caseIndex <= 0) return // 主 IF 分支不可删除
-
-    const nextCases = JSON.parse(JSON.stringify(cases.value))
-    const nextBranches = JSON.parse(JSON.stringify(targetBranches.value))
-
-    const targetCase = nextCases[caseIndex]
-    if (!targetCase) return
-
-    // 1. 从 cases 移除
-    nextCases.splice(caseIndex, 1)
-
-    // 2. 从 targetBranches 移除对应 Handle 记录
-    const branchIndex = nextBranches.findIndex((b) => b.id === targetCase.case_id)
-    if (branchIndex !== -1) {
-      nextBranches.splice(branchIndex, 1)
-    }
-
-    emitUpdate(nextCases, nextBranches)
+  const handleRemoveElifCase = (caseId) => {
+    const next = removeIfElseCase({ ...nodeData.value, cases: cases.value }, caseId)
+    if (next.cases.length === cases.value.length) return
+    emit('update:nodeData', next)
   }
 
-  const operatorsForCondition = condition => getIfElseOperators(condition?.varType || 'string')
+  const operatorsForCondition = condition => getIfElseOperators(
+    condition?.varType,
+    condition?.key ? { key: condition.key } : undefined,
+  )
 
   const handleSelectVariable = (caseIndex, condIndex, selector) => {
     const parsed = parseSelectorInput(selector)
-    const group = availableVarGroups.value.find(item => item.nodeId === parsed[0])
-    const variable = group?.vars?.find(item => item.variable === parsed[1])
-    const varType = variable?.type || 'string'
+    const variable = resolveIfElseVariable(availableVarGroups.value, parsed)
     const nextCases = JSON.parse(JSON.stringify(cases.value))
     const condition = nextCases[caseIndex]?.conditions?.[condIndex]
     if (!condition) return
-    condition.variable_selector = parsed
-    condition.varType = varType
-    condition.comparison_operator = getIfElseOperators(varType)[0]?.value || ''
-    condition.value = ''
+    const replacement = variable
+      ? createIfElseCondition({ variableSelector: parsed, varType: variable.type, file: variable.file })
+      : createIfElseCondition({ variableSelector: parsed, varType: '' })
+    replacement.id = condition.id || replacement.id
+    Object.assign(condition, replacement)
+    if (!variable) {
+      condition.comparison_operator = ''
+      condition.value = ''
+    }
+    if (!replacement.key)
+      delete condition.key
+    delete condition.sub_variable_condition
     emitUpdate(nextCases)
   }
 

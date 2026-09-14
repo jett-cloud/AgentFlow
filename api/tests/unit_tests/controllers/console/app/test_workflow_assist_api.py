@@ -112,8 +112,9 @@ def test_run_list_controller_serializes_metadata_without_event_payloads(
     assert "events" not in response["items"][0]
 
 
+@pytest.mark.parametrize("compact", [False, True])
 def test_timeline_controller_serializes_v2_envelopes_and_tuple_cursor(
-    app: Flask, monkeypatch: pytest.MonkeyPatch
+    app: Flask, monkeypatch: pytest.MonkeyPatch, compact: bool
 ) -> None:
     api = workflow_assist_module.WorkflowAssistTimelineApi()
     method = unwrap(api.get)
@@ -130,7 +131,7 @@ def test_timeline_controller_serializes_v2_envelopes_and_tuple_cursor(
     service.timeline.return_value = TimelinePage(items=(event,), has_more=False, cursor_epoch=1, cursor_sequence=0)
     monkeypatch.setattr(workflow_assist_module, "WorkflowAssistRunEventService", lambda _session: service)
 
-    with app.test_request_context("/?after_epoch=0&after_sequence=0&limit=200"):
+    with app.test_request_context(f"/?after_epoch=0&after_sequence=0&limit=200&compact={str(compact).lower()}"):
         response = method(
             api,
             MagicMock(),
@@ -144,6 +145,7 @@ def test_timeline_controller_serializes_v2_envelopes_and_tuple_cursor(
         "has_more": False,
         "cursor": {"epoch": 1, "sequence": 0},
     }
+    assert service.timeline.call_args.kwargs["compact"] is compact
 
 
 def test_candidate_controller_returns_server_owned_reconciliation_snapshot(
@@ -157,6 +159,7 @@ def test_candidate_controller_returns_server_owned_reconciliation_snapshot(
         revision=2,
         base_hash="base",
         completion_evidence=None,
+        contract_report=None,
         active_run=_run_summary(),
         latest_run=_run_summary(),
     )
@@ -263,6 +266,7 @@ def test_turn_payload_accepts_only_the_exact_v2_shape() -> None:
         "model_config": {"provider": "openai"},
         "selected_node": "node-1",
         "references": None,
+        "live_acceptance_request_id": None,
     }
 
 
@@ -353,6 +357,7 @@ def test_turn_controller_returns_exact_202_contract(app: Flask, monkeypatch: pyt
         model_config={"provider": "openai"},
         selected_node="node-1",
         references=None,
+        live_acceptance_request_id=None,
     )
 
 
@@ -445,7 +450,9 @@ def test_start_turn_rejects_unknown_node_tool_and_dataset_references(monkeypatch
                 }
             ]
         )
-    with pytest.raises(workflow_assist_service_module.WorkflowAssistInvalidTurnError, match="unknown referenced dataset"):
+    with pytest.raises(
+        workflow_assist_service_module.WorkflowAssistInvalidTurnError, match="unknown referenced dataset"
+    ):
         start([{"kind": "dataset", "id": "ds-missing", "label": "产品文档"}])
     coordinator.start_turn.assert_not_called()
 
@@ -831,7 +838,9 @@ def test_retry_controller_translates_non_retryable_step_to_http_400(
     monkeypatch.setattr(
         workflow_assist_module.WorkflowAssistService,
         "retry_run",
-        MagicMock(side_effect=workflow_assist_service_module.WorkflowAssistInvalidRetryError("failed step is not retryable")),
+        MagicMock(
+            side_effect=workflow_assist_service_module.WorkflowAssistInvalidRetryError("failed step is not retryable")
+        ),
     )
     api = workflow_assist_module.WorkflowAssistRunRetryApi()
     method = unwrap(api.post)
@@ -906,3 +915,39 @@ def test_retry_run_commits_before_enqueue_and_passes_full_owner_scope(monkeypatc
         "account-1",
         "conversation-1",
     )
+
+
+def _validate_payload() -> dict[str, object]:
+    return {
+        "graph": {"nodes": [], "edges": []},
+        "mode": "rebuild",
+        "mutable_node_ids": [],
+        "planned_new_ids": [],
+        "intent_flags": {},
+    }
+
+
+def test_validate_controller_passes_workflow_generation_mode(app: Flask, monkeypatch: pytest.MonkeyPatch) -> None:
+    validate = MagicMock(return_value={"ok": True, "errors": [], "warnings": []})
+    monkeypatch.setattr(workflow_assist_module.WorkflowAssistService, "validate", validate)
+    api = workflow_assist_module.WorkflowAssistValidateApi()
+    method = unwrap(api.post)
+
+    with app.test_request_context("/", method="POST", json=_validate_payload()):
+        method(api, _app_model())
+
+    assert validate.call_args.kwargs["generation_mode"] == "workflow"
+
+
+def test_validate_controller_passes_advanced_chat_generation_mode(app: Flask, monkeypatch: pytest.MonkeyPatch) -> None:
+    validate = MagicMock(return_value={"ok": True, "errors": [], "warnings": []})
+    monkeypatch.setattr(workflow_assist_module.WorkflowAssistService, "validate", validate)
+    api = workflow_assist_module.WorkflowAssistValidateApi()
+    method = unwrap(api.post)
+    app_model = _app_model()
+    app_model.mode = AppMode.ADVANCED_CHAT
+
+    with app.test_request_context("/", method="POST", json=_validate_payload()):
+        method(api, app_model)
+
+    assert validate.call_args.kwargs["generation_mode"] == "advanced-chat"

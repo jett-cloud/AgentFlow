@@ -4,11 +4,8 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
-from core.workflow.generator.knowledge_catalogue import (
-    _MAX_DATASETS,
-    KnowledgeCatalogueEntry,
-    build_knowledge_catalogue,
-)
+from core.workflow.generator.resources.knowledge_catalogue import _MAX_DATASETS, KnowledgeCatalogueEntry
+from services.workflow_assist.knowledge_catalogue_loader import build_knowledge_catalogue
 
 
 class AssistKnowledgeCatalogue(TypedDict):

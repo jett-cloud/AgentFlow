@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping
 from functools import lru_cache
 from typing import Any
 
-from core.workflow.file_reference import parse_file_reference
+from core.workflow.runtime.adapters.file_reference import parse_file_reference
 from graphon.file import File, FileTransferMethod, FileType
 from graphon.file.constants import FILE_MODEL_IDENTITY, maybe_file_object
 

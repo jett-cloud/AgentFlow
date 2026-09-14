@@ -81,6 +81,12 @@ export function importAppDsl({
   })
 }
 
+export function exportAppDsl(appId, { includeSecret = false } = {}) {
+  return difyClient.get(appPath(appId, '/export'), {
+    params: { include_secret: includeSecret },
+  })
+}
+
 /** Contrasts Dify importDSLConfirm → POST /apps/imports/{id}/confirm */
 export function confirmAppDslImport(importId) {
   return difyClient.post(`/apps/imports/${encodeURIComponent(importId)}/confirm`, {})

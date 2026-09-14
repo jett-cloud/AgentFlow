@@ -29,7 +29,7 @@ from core.app.entities.app_invoke_entities import DIFY_RUN_CONTEXT_KEY, DifyRunC
 from core.repositories.human_input_repository import HumanInputFormRepository, HumanInputFormRepositoryImpl
 from core.workflow.nodes.human_input.pause_reason import HumanInputRequired
 from core.workflow.nodes.human_input.session_binding import default_session_binding
-from core.workflow.system_variables import SystemVariableKey, get_system_text
+from core.workflow.runtime.variables.system_variables import SystemVariableKey, get_system_text
 from graphon.entities.pause_reason import HitlRequired, SchedulingPause
 from graphon.enums import BuiltinNodeTypes, WorkflowNodeExecutionMetadataKey, WorkflowNodeExecutionStatus
 from graphon.node_events import NodeEventBase, NodeRunResult, PauseRequestedEvent, StreamCompletedEvent
@@ -40,7 +40,7 @@ from tasks.agent_backend_session_cleanup_task import cleanup_workflow_agent_runt
 
 from .ask_human_hitl import AskHumanFormBuildError, build_ask_human_pause_reason
 from .ask_human_resume import build_deferred_tool_results, resolve_ask_human_form
-from .binding_resolver import WorkflowAgentBindingError, WorkflowAgentBindingResolver
+from .binding_resolver import AgentBindingResolver, WorkflowAgentBindingError
 from .entities import DifyAgentNodeData
 from .output_adapter import WorkflowAgentOutputAdapter
 from .output_failure_orchestrator import (
@@ -85,7 +85,7 @@ class DifyAgentNode(Node[DifyAgentNodeData]):
         *,
         graph_init_params: GraphInitParams,
         graph_runtime_state: GraphRuntimeState,
-        binding_resolver: WorkflowAgentBindingResolver,
+        binding_resolver: AgentBindingResolver,
         runtime_request_builder: WorkflowAgentRuntimeRequestBuilder,
         agent_backend_client: AgentBackendRunClient,
         event_adapter: AgentBackendRunEventAdapter,
@@ -552,7 +552,7 @@ class DifyAgentNode(Node[DifyAgentNodeData]):
     ) -> HumanInputFormRepository:
         """Construct the existing HITL form repository for ask_human form creation.
 
-        Mirrors the Human Input node's repository wiring (``node_runtime``) so the
+        Mirrors the Human Input node's repository wiring (``runtime.adapters.human_input``) so the
         ask_human form shares the same delivery/debug/console behavior: a
         submission actor is only attributed for debugger/explore surfaces.
         """

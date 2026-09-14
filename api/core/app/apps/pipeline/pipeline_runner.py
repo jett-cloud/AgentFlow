@@ -18,9 +18,9 @@ from core.app.workflow.layers.persistence import PersistenceWorkflowInfo, Workfl
 from core.db.session_factory import create_session
 from core.repositories.factory import WorkflowExecutionRepository, WorkflowNodeExecutionRepository
 from core.workflow.node_factory import DifyGraphInitContext, DifyNodeFactory, get_default_root_node_id
-from core.workflow.system_variables import build_bootstrap_variables, build_system_variables
-from core.workflow.variable_pool_initializer import add_node_inputs_to_pool, add_variables_to_pool
-from core.workflow.workflow_entry import WorkflowEntry
+from core.workflow.runtime.variables.system_variables import build_bootstrap_variables, build_system_variables
+from core.workflow.runtime.variables.variable_pool_initializer import add_node_inputs_to_pool, add_variables_to_pool
+from core.workflow.runtime.workflow_entry import WorkflowEntry
 from graphon.enums import WorkflowType
 from graphon.graph import Graph
 from graphon.graph_events import GraphEngineEvent, GraphRunFailedEvent

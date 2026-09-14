@@ -18,8 +18,8 @@ from core.workflow.generator.agent.types import (
     AgentMessageRole,
     AgentSession,
     CandidateState,
-    MinimalGraphDict,
 )
+from core.workflow.generator.graph.types import MinimalGraphDict
 from core.workflow.generator.types import WorkflowGenerationMode
 
 _EVENT_TYPES = frozenset({"message", "tool_call", "tool_result"})
@@ -57,12 +57,16 @@ def restore_session(
     return AgentSession(
         messages=messages,
         candidate_graph=_restore_graph(candidate_state),
-        candidate_revision=_optional_int(candidate_state.get("revision"), default=0),
+        candidate_revision=_optional_int(candidate_state.get("revision"), default=0) or 0,
         candidate_base_hash=_optional_str(candidate_state.get("base_hash")),
         compacted_until_sequence=_optional_int(candidate_state.get("compacted_until_sequence"), default=None),
         compacted_state=_optional_dict(candidate_state.get("compacted_state")),
         generation_mode=generation_mode,
         last_validation=_optional_dict(candidate_state.get("last_validation")),
+        contract_protocol_version=_optional_int(candidate_state.get("contract_protocol_version"), default=None),
+        workflow_contract=_optional_object_dict(candidate_state.get("workflow_contract")),
+        contract_revision=_optional_int(candidate_state.get("contract_revision"), default=0) or 0,
+        contract_hash=_optional_str(candidate_state.get("contract_hash")),
     )
 
 
@@ -187,6 +191,8 @@ def _restore_graph(candidate_state: CandidateState) -> MinimalGraphDict | dict[s
 def _optional_int(value: object, *, default: int | None) -> int | None:
     if value is None:
         return default
+    if isinstance(value, bool) or not isinstance(value, (str, bytes, bytearray, int, float)):
+        raise InvalidAgentMessageError("candidate_state integer fields must be numeric when present")
     return int(value)
 
 
@@ -201,4 +207,12 @@ def _optional_dict(value: object) -> dict[str, Any] | None:
         return None
     if not isinstance(value, dict):
         raise InvalidAgentMessageError("candidate_state JSON fields must be dicts when present")
+    return deepcopy(value)
+
+
+def _optional_object_dict(value: object) -> dict[str, object] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise InvalidAgentMessageError("candidate_state.workflow_contract must be a dict when present")
     return deepcopy(value)

@@ -13,7 +13,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -21,6 +21,10 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from core.db.session_factory import session_factory
+from core.workflow.generator.contracts.workflow_reconciliation import (
+    ReconciliationReport,
+    reconcile_workflow_contract,
+)
 from models.workflow_assist import (
     WorkflowAssistConversation,
     WorkflowAssistRun,
@@ -34,6 +38,8 @@ _EVENT_BATCH_SIZE = 200
 _STREAM_POLL_INTERVAL_SECONDS = 1.0
 _STREAM_MAX_POLLS = 30
 _STREAM_MAX_EMPTY_POLLS = 3
+_COMPACT_TIMELINE_SCAN_LIMIT = 10_000
+_COMPACT_TEXT_MAX_CHARACTERS = 16_384
 
 
 @dataclass(frozen=True)
@@ -64,7 +70,11 @@ class RunPage:
 
 @dataclass(frozen=True)
 class EventEnvelope:
-    """The exact v2 event envelope shared by timeline and SSE replay."""
+    """A v2 event; compact timeline deltas use the last source event's coordinate.
+
+    Only compact reads add ``data.sequence_start`` to describe covered events.
+    SSE and durable event identities are never rewritten.
+    """
 
     event: str
     run_id: str
@@ -105,6 +115,7 @@ class CandidateSnapshot:
     revision: int
     base_hash: str | None
     completion_evidence: dict[str, Any] | None
+    contract_report: ReconciliationReport | None
     active_run: RunSummary | None
     latest_run: RunSummary | None
 
@@ -165,12 +176,19 @@ class WorkflowAssistRunEventService:
         after_epoch: int,
         after_sequence: int,
         limit: int,
+        compact: bool = False,
     ) -> TimelinePage:
-        """Merge sequence-zero Run inputs with RunEvents after a tuple cursor."""
+        """Merge Run inputs and events, optionally compacting adjacent text deltas.
+
+        Compact reads scan a bounded larger source page, then apply the output
+        limit. The cursor always names the last represented source event, not
+        the last scanned row, so paging and subsequent SSE never skip facts.
+        """
         _validate_non_negative(after_epoch, field_name="after_epoch")
         _validate_non_negative(after_sequence, field_name="after_sequence")
         _validate_limit(limit, maximum=500)
         self._get_conversation(owner)
+        scan_limit = _COMPACT_TIMELINE_SCAN_LIMIT if compact else limit
 
         user_runs = tuple(
             self.session.scalars(
@@ -180,7 +198,7 @@ class WorkflowAssistRunEventService:
                     WorkflowAssistRun.epoch > after_epoch,
                 )
                 .order_by(WorkflowAssistRun.epoch.asc())
-                .limit(limit + 1)
+                .limit(scan_limit + 1)
             ).all()
         )
         user_events = tuple(
@@ -211,19 +229,20 @@ class WorkflowAssistRunEventService:
                     ),
                 )
                 .order_by(WorkflowAssistRunEvent.epoch.asc(), WorkflowAssistRunEvent.sequence.asc())
-                .limit(limit + 1)
+                .limit(scan_limit + 1)
             ).all()
         )
         merged = sorted(
             (*user_events, *(_event_envelope(event) for event in persisted)),
             key=lambda item: (item.epoch, item.sequence),
         )
-        visible = tuple(merged[:limit])
+        projected = _compact_timeline(merged[:scan_limit]) if compact else merged
+        visible = tuple(projected[:limit])
         cursor_epoch = visible[-1].epoch if visible else after_epoch
         cursor_sequence = visible[-1].sequence if visible else after_sequence
         return TimelinePage(
             items=visible,
-            has_more=len(merged) > limit,
+            has_more=len(merged) > scan_limit or len(projected) > limit,
             cursor_epoch=cursor_epoch,
             cursor_sequence=cursor_sequence,
         )
@@ -280,11 +299,38 @@ class WorkflowAssistRunEventService:
                 "app_mode": _enum_value(conversation.completion_app_mode),
                 "assertion": _enum_value(conversation.completion_assertion),
             }
+            if conversation.completion_contract_protocol_version is not None:
+                evidence.update(
+                    {
+                        "contract_protocol_version": conversation.completion_contract_protocol_version,
+                        "contract_revision": conversation.completion_contract_revision,
+                        "contract_hash": conversation.completion_contract_hash,
+                        "graph_hash": conversation.completion_graph_hash,
+                        "validation_version": conversation.completion_validation_version,
+                    }
+                )
+        contract_report = None
+        mode = _enum_value(conversation.completion_app_mode) or (
+            _enum_value(latest.mode) if latest is not None else None
+        )
+        if (
+            conversation.contract_protocol_version == 1
+            and isinstance(conversation.workflow_contract, dict)
+            and isinstance(conversation.candidate_graph, dict)
+            and mode in {"workflow", "advanced-chat"}
+        ):
+            contract_report = reconcile_workflow_contract(
+                contract=conversation.workflow_contract,
+                graph=conversation.candidate_graph,
+                mode=mode,
+                candidate_base_hash=conversation.candidate_base_hash,
+            )
         return CandidateSnapshot(
             graph=deepcopy(conversation.candidate_graph),
             revision=conversation.candidate_revision,
             base_hash=conversation.candidate_base_hash,
             completion_evidence=evidence,
+            contract_report=contract_report,
             active_run=_run_summary(active) if active is not None else None,
             latest_run=_run_summary(latest) if latest is not None else None,
         )
@@ -473,6 +519,55 @@ class WorkflowAssistRunEventStream:
                 run_id=self.run_id,
                 after=after,
             )
+
+
+def _compact_timeline(events: list[EventEnvelope]) -> list[EventEnvelope]:
+    """Coalesce only consecutive same-message/channel deltas, in linear text work."""
+    result: list[EventEnvelope] = []
+    previous: EventEnvelope | None = None
+    parts: list[str] = []
+    start_sequence = 0
+    length = 0
+    previous_metadata: dict[str, object] = {}
+
+    def flush() -> None:
+        if previous is not None:
+            result.append(
+                replace(previous, data={**previous.data, "text": "".join(parts), "sequence_start": start_sequence})
+                if len(parts) > 1
+                else previous
+            )
+
+    for event in events:
+        text = event.data.get("text")
+        if (
+            event.event not in {"message.delta", "reasoning.delta"}
+            or not event.data.get("message_id")
+            or not isinstance(text, str)
+        ):
+            flush()
+            previous = None
+            result.append(event)
+            continue
+        metadata = {key: value for key, value in event.data.items() if key not in {"text", "delta_index"}}
+        if previous is None or (
+            event.run_id != previous.run_id
+            or event.epoch != previous.epoch
+            or event.event != previous.event
+            or event.sequence != previous.sequence + 1
+            or metadata != previous_metadata
+            or length + len(text) > _COMPACT_TEXT_MAX_CHARACTERS
+        ):
+            flush()
+            parts = []
+            length = 0
+            start_sequence = event.sequence
+        parts.append(text)
+        length += len(text)
+        previous = event
+        previous_metadata = metadata
+    flush()
+    return result
 
 
 def _validate_non_negative(value: int, *, field_name: str) -> None:

@@ -16,7 +16,7 @@ from core.workflow.nodes.knowledge_index.protocols import (
     PreviewItem,
     SummaryIndexServiceProtocol,
 )
-from core.workflow.system_variables import SystemVariableKey, build_system_variables
+from core.workflow.runtime.variables.system_variables import SystemVariableKey, build_system_variables
 from graphon.enums import WorkflowNodeExecutionStatus
 from graphon.runtime import GraphRuntimeState, VariablePool
 from graphon.variables.segments import StringSegment

@@ -24,7 +24,7 @@ from core.app.apps.agent_app.app_generator import (
 from core.app.apps.exc import GenerateTaskStoppedError
 from core.app.entities.app_invoke_entities import AGENT_RUNTIME_EXIT_INTENT_ARG, InvokeFrom, UserFrom
 from core.app.entities.queue_entities import QueueAnnotationReplyEvent
-from core.workflow.file_reference import build_file_reference
+from core.workflow.runtime.adapters.file_reference import build_file_reference
 from models import Account, AppModelConfig
 from models.agent import AgentConfigDraftType
 

@@ -43,16 +43,16 @@ from core.workflow.node_factory import (
 )
 from core.workflow.nodes.human_input.boundary import enrich_graph_pause_reasons
 from core.workflow.nodes.human_input.pause_reason import HumanInputRequired
-from core.workflow.system_variables import (
+from core.workflow.runtime.variables.system_variables import (
     build_bootstrap_variables,
     default_system_variables,
     get_node_creation_preload_selectors,
     inject_default_system_variable_mappings,
     preload_node_creation_variables,
 )
-from core.workflow.variable_pool_initializer import add_variables_to_pool
-from core.workflow.workflow_entry import WorkflowEntry
-from core.workflow.workflow_run_outputs import project_node_outputs_for_workflow_run
+from core.workflow.runtime.variables.variable_pool_initializer import add_variables_to_pool
+from core.workflow.runtime.workflow_entry import WorkflowEntry
+from core.workflow.runtime.workflow_run_outputs import project_node_outputs_for_workflow_run
 from graphon.entities.graph_config import NodeConfigDictAdapter
 from graphon.graph import Graph
 from graphon.graph_engine.layers import GraphEngineLayer

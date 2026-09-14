@@ -1,7 +1,7 @@
 """Tests for knowledge-retrieval catalogue constraints in the generator."""
 
-from core.workflow.generator.graph_validator import GraphValidator
-from core.workflow.generator.node_builder import _MODEL_NODE_TYPES
+from core.workflow.generator.compiler.node_builder import _MODEL_NODE_TYPES
+from core.workflow.generator.validation.graph_validator import GraphValidator
 from graphon.enums import BuiltinNodeTypes
 
 

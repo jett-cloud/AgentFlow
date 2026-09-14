@@ -4,12 +4,12 @@ import pytest
 
 from configs import dify_config
 from core.helper.code_executor.code_executor import CodeLanguage
-from core.workflow.system_variables import build_system_variables, default_system_variables
-from core.workflow.variable_prefixes import (
+from core.workflow.runtime.variables.system_variables import build_system_variables, default_system_variables
+from core.workflow.runtime.variables.variable_prefixes import (
     CONVERSATION_VARIABLE_NODE_ID,
     ENVIRONMENT_VARIABLE_NODE_ID,
 )
-from core.workflow.workflow_entry import WorkflowEntry
+from core.workflow.runtime.workflow_entry import WorkflowEntry
 from graphon.entities.graph_config import NodeConfigDictAdapter
 from graphon.file import File, FileTransferMethod, FileType
 from graphon.nodes.code.code_node import CodeNode

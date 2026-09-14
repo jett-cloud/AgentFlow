@@ -57,7 +57,7 @@
         </p>
       </PanelSection>
 
-      <PanelSection label="查询变量 (Query Variable)" required>
+      <PanelSection label="查询变量 (Query Variable)">
         <VarReferencePicker
           v-model="querySelector"
           :node-id="nodeId"
@@ -115,9 +115,19 @@
         <PanelSection label="Rerank">
           <div class="switch-row">
             <el-switch v-model="rerankingEnable" :disabled="readOnly" />
-            <span class="hint">启用重排序模型</span>
+            <span class="hint">启用重排序或切换加权得分</span>
           </div>
-          <div v-if="rerankingEnable" class="rerank-model">
+          <div v-if="rerankingEnable || rerankingMode === 'weighted_score'" class="rerank-model">
+            <el-radio-group v-model="rerankingMode" size="small" :disabled="readOnly">
+              <el-radio-button
+                v-for="mode in RERANKING_MODES"
+                :key="mode.value"
+                :value="mode.value"
+              >
+                {{ mode.label }}
+              </el-radio-button>
+            </el-radio-group>
+            <template v-if="rerankingMode === 'reranking_model' && rerankingEnable">
             <el-select
               :model-value="rerankKey"
               filterable
@@ -139,6 +149,19 @@
               <RouterLink to="/integrations?tab=models">工作区集成</RouterLink>
               配置。
             </p>
+            </template>
+            <template v-else-if="rerankingMode === 'weighted_score'">
+              <div class="slider-row">
+                <span class="hint">语义 {{ vectorWeight }}</span>
+                <el-slider :model-value="vectorWeight" :min="0" :max="1" :step="0.05" :disabled="readOnly" @update:model-value="onVectorWeight" />
+              </div>
+              <div class="slider-row">
+                <span class="hint">关键词 {{ keywordWeight }}</span>
+                <el-slider :model-value="keywordWeight" :min="0" :max="1" :step="0.05" :disabled="readOnly" @update:model-value="onKeywordWeight" />
+              </div>
+              <p v-if="weightedEmbeddingHint" class="hint error">{{ weightedEmbeddingHint }}</p>
+              <p v-else class="hint">Embedding：{{ weightedScore?.vector_setting?.embedding_provider_name }} / {{ weightedScore?.vector_setting?.embedding_model_name }}</p>
+            </template>
           </div>
         </PanelSection>
       </template>
@@ -290,6 +313,7 @@ import ModelSelector from '../shared/ModelSelector.vue'
 import {
   useKnowledgeRetrievalConfig,
   RETRIEVAL_MODES,
+  RERANKING_MODES,
   METADATA_FILTER_MODES,
 } from './useKnowledgeRetrievalConfig.js'
 import { useDatasetStore } from '@/features/datasets/state/useDatasetStore.js'
@@ -298,6 +322,7 @@ import { fetchModelsByType } from '@/features/integrations/api/difyModelsApi.js'
 import {
   isKnowledgeAttachmentInput,
   isKnowledgeQueryInput,
+  syncWeightedScoreEmbedding,
 } from './knowledgeRetrievalNode.js'
 import {
   defaultOperatorForType,
@@ -328,6 +353,8 @@ const {
   scoreThresholdEnabled,
   scoreThreshold,
   rerankingEnable,
+  rerankingMode,
+  weightedScore,
   rerankModel,
   singleModel,
   metadataFilteringMode,
@@ -343,6 +370,52 @@ const selectedDatasets = computed(() => {
   const ids = new Set(datasetIds.value)
   return datasetStore.datasets.filter(d => ids.has(d.id))
 })
+
+const vectorWeight = computed(() => Number(weightedScore.value?.vector_setting?.vector_weight ?? 0.7))
+const keywordWeight = computed(() => Number(weightedScore.value?.keyword_setting?.keyword_weight ?? 0.3))
+const weightedEmbeddingHint = computed(() => {
+  const provider = weightedScore.value?.vector_setting?.embedding_provider_name
+  const model = weightedScore.value?.vector_setting?.embedding_model_name
+  if (provider && model)
+    return ''
+  return '所选知识库没有 embedding 配置，无法保存加权得分。'
+})
+
+watch([rerankingMode, selectedDatasets], () => {
+  if (rerankingMode.value !== 'weighted_score')
+    return
+  const next = syncWeightedScoreEmbedding(weightedScore.value, selectedDatasets.value)
+  const current = weightedScore.value
+  if (
+    current?.vector_setting?.vector_weight === next.vector_setting.vector_weight
+    && current?.keyword_setting?.keyword_weight === next.keyword_setting.keyword_weight
+    && current?.vector_setting?.embedding_provider_name === next.vector_setting.embedding_provider_name
+    && current?.vector_setting?.embedding_model_name === next.vector_setting.embedding_model_name
+  )
+    return
+  weightedScore.value = next
+}, { deep: true })
+
+function onVectorWeight(value) {
+  const next = Number(value)
+  onWeightPair(next, Number((1 - next).toFixed(2)))
+}
+
+function onKeywordWeight(value) {
+  const next = Number(value)
+  onWeightPair(Number((1 - next).toFixed(2)), next)
+}
+
+function onWeightPair(vector, keyword) {
+  const synced = syncWeightedScoreEmbedding(weightedScore.value, selectedDatasets.value)
+  weightedScore.value = {
+    vector_setting: {
+      ...synced.vector_setting,
+      vector_weight: vector,
+    },
+    keyword_setting: { keyword_weight: keyword },
+  }
+}
 
 const sharedMetadata = computed(() => intersectMetadataByName(
   selectedDatasets.value.map(dataset => dataset.doc_metadata || []),
@@ -558,5 +631,10 @@ function onDescriptionChange(val) {
 .hint { margin: 0; font-size: 12px; color: #667085; }
 .hint.error { color: #b42318; }
 .w-full { width: 100%; }
-.rerank-model { margin-top: 8px; }
+.rerank-model {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
 </style>

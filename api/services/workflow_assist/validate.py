@@ -1,15 +1,24 @@
-"""Pure workflow graph validation, including Agent v2 and local-mode constraints.
+"""Pure workflow graph validation, including Assist product-layer overlays.
 
-This module reports all discovered issues without modifying the draft graph. Local
-mode additionally delegates immutable-node enforcement to ``graph_diff``.
+This module reports all discovered issues without modifying the draft graph.
+Core node and topology checks live in ``GraphValidator``. Assist only adds
+``wants_agent`` intent and local-mode immutable-node enforcement.
 """
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
+from core.workflow.generator.types import GraphDict, WorkflowGenerationMode
+from core.workflow.generator.validation.graph_validator import validate_graph as validate_core_graph
 from services.workflow_assist.graph_diff import assert_local_mutable_respected
-from services.workflow_assist.types import ValidationIssue, ValidationIssueCode, ValidationResult
+from services.workflow_assist.types import ValidationIssue, ValidationResult
+from services.workflow_assist.validation_context import WorkflowValidationContext
+
+
+def generation_mode_from_app_mode(mode: object) -> WorkflowGenerationMode:
+    """Map an app mode value onto the generator's workflow/advanced-chat split."""
+    return "advanced-chat" if str(mode) == "advanced-chat" else "workflow"
 
 
 def _node_type(node: dict[str, Any]) -> object:
@@ -23,27 +32,44 @@ def _non_empty_string(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
-def _issue(code: ValidationIssueCode, detail: str, node_id: str | None = None) -> ValidationIssue:
+def _issue(code: str, detail: str, node_id: str | None = None) -> ValidationIssue:
     issue: ValidationIssue = {"code": code, "detail": detail}
     if node_id is not None:
         issue["node_id"] = node_id
     return issue
 
 
+def _has_ready_agent_v2(nodes: list[dict[str, Any]]) -> bool:
+    for node in nodes:
+        if _node_type(node) != "agent":
+            continue
+        data = node.get("data")
+        if not isinstance(data, dict):
+            continue
+        if str(data.get("version")) != "2" or data.get("agent_node_kind") != "dify_agent":
+            continue
+        if _non_empty_string(data.get("agent_task")):
+            return True
+    return False
+
+
 def validate_graph(
     *,
     graph: dict[str, Any],
     mode: Literal["local", "rebuild"],
+    generation_mode: WorkflowGenerationMode,
     base_graph: dict[str, Any] | None,
     mutable_node_ids: set[str],
     planned_new_ids: set[str],
     intent_flags: dict[str, bool],
+    validation_context: WorkflowValidationContext | None = None,
 ) -> ValidationResult:
-    """Validate universal graph invariants and Agent v2 requirements.
+    """Validate core graph invariants, then Assist-only product constraints.
 
     Args:
         graph: Candidate Dify draft graph.
         mode: ``local`` enforces immutable nodes against ``base_graph``; ``rebuild`` does not.
+        generation_mode: App mode used by ``GraphValidator`` (``workflow`` or ``advanced-chat``).
         base_graph: Graph preceding the local edit, when available.
         mutable_node_ids: User-authorized node ids for local edits.
         planned_new_ids: New node ids permitted during local edits.
@@ -54,80 +80,17 @@ def validate_graph(
     """
     errors: list[ValidationIssue] = []
     warnings: list[ValidationIssue] = []
-    nodes = [node for node in graph.get("nodes") or [] if isinstance(node, dict)]
+    for item in validate_core_graph(graph=cast(GraphDict, graph), mode=generation_mode, **(validation_context or {})):
+        node_id = item.get("node_id")
+        errors.append(_issue(str(item["code"]), item["detail"], node_id or None))
 
-    node_ids: set[str] = set()
-    duplicate_ids: set[str] = set()
-    start_count = 0
-    terminal_count = 0
-    has_agent_v2_shape_ready = False
-
-    for node in nodes:
-        node_id = str(node["id"]) if node.get("id") is not None else None
-        if node_id is not None:
-            if node_id in node_ids:
-                duplicate_ids.add(node_id)
-            node_ids.add(node_id)
-
-        node_type = _node_type(node)
-        if node_type == "start":
-            start_count += 1
-        if node_type in {"end", "answer"}:
-            terminal_count += 1
-
-        if node_type == "agent":
-            data = node.get("data")
-            if not isinstance(data, dict):
-                continue
-            is_v2_shape = str(data.get("version")) == "2" and data.get("agent_node_kind") == "dify_agent"
-            has_task = _non_empty_string(data.get("agent_task"))
-            if not is_v2_shape:
-                errors.append(_issue("AGENT_V2_SHAPE", "Agent node must use Agent v2 dify_agent shape", node_id))
-            if not has_task:
-                errors.append(_issue("AGENT_TASK_EMPTY", "Agent node must have a non-empty agent_task", node_id))
-
-            agent_binding = data.get("agent_binding")
-            needs_inline_binding = agent_binding is None
-            if isinstance(agent_binding, dict) and agent_binding.get("binding_type") == "inline_agent":
-                needs_inline_binding = True
-            has_inline_ids = (
-                isinstance(agent_binding, dict)
-                and _non_empty_string(agent_binding.get("agent_id"))
-                and _non_empty_string(agent_binding.get("current_snapshot_id"))
-            )
-            if needs_inline_binding and not has_inline_ids:
-                errors.append(
-                    _issue(
-                        "AGENT_BINDING_MISSING",
-                        "Inline Agent v2 binding requires agent_id and current_snapshot_id",
-                        node_id,
-                    )
-                )
-            has_agent_v2_shape_ready = has_agent_v2_shape_ready or (is_v2_shape and has_task)
-
-    if start_count != 1:
-        errors.append(_issue("MISSING_START", "Graph must contain exactly one start node"))
-    if terminal_count == 0:
-        errors.append(_issue("MISSING_TERMINAL", "Graph must contain at least one end or answer node"))
-    for node_id in sorted(duplicate_ids):
-        errors.append(_issue("DUPLICATE_NODE_ID", f"Duplicate node id: {node_id}", node_id))
-
-    for edge in graph.get("edges") or []:
-        if not isinstance(edge, dict):
-            continue
-        for endpoint in ("source", "target"):
-            referenced_node_id = edge.get(endpoint)
-            if referenced_node_id is None or str(referenced_node_id) not in node_ids:
-                errors.append(
-                    _issue(
-                        "DANGLING_EDGE",
-                        f"Edge references missing {endpoint} node: {referenced_node_id}",
-                        str(referenced_node_id) if referenced_node_id is not None else None,
-                    )
-                )
+    raw_nodes = graph.get("nodes")
+    if not isinstance(raw_nodes, list) or not all(isinstance(node, dict) for node in raw_nodes):
+        return {"ok": False, "errors": errors, "warnings": warnings}
+    nodes = raw_nodes
 
     wants_agent = intent_flags.get("wants_agent", False)
-    if wants_agent and not has_agent_v2_shape_ready:
+    if wants_agent and not _has_ready_agent_v2(nodes):
         errors.append(_issue("AGENT_SHOULD_BE_USED", "Intent requires a valid Agent v2 node"))
 
     if mode == "local" and base_graph is not None:

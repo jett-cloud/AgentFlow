@@ -27,7 +27,7 @@ export function catalogMentionItems({ nodes = [], tools = [], datasets = [] } = 
       }]
     }),
     ...tools.flatMap((tool) => {
-      const provider = String(tool?.provider_name || '').trim()
+      const provider = String(tool?.provider_catalogue_name || tool?.provider_id || tool?.provider_name || '').trim()
       const toolName = String(tool?.tool_name || '').trim()
       if (!provider || !toolName)
         return []
@@ -78,13 +78,13 @@ export function filterMentionGroups(items, query) {
   return GROUP_ORDER.map(kind => ({ kind, items: grouped[kind] }))
 }
 
-export function serializeMentionReferences(chips) {
+export function serializeMentionReferences(chips, catalog = []) {
   const references = []
   const seen = new Set()
   for (const chip of Array.isArray(chips) ? chips : []) {
     if (references.length >= ASSIST_MENTION_LIMIT)
       break
-    const reference = referenceFromChip(chip)
+    const reference = refreshToolReference(referenceFromChip(chip), catalog)
     if (!reference)
       continue
     const key = `${reference.kind}:${reference.id}`
@@ -96,15 +96,35 @@ export function serializeMentionReferences(chips) {
   return references
 }
 
+function refreshToolReference(reference, catalog) {
+  if (reference?.kind !== 'tool')
+    return reference
+  const matches = (Array.isArray(catalog) ? catalog : []).filter(item => (
+    item?.kind === 'tool'
+    && item?.tool_name === reference.tool_name
+  ))
+  const match = matches.find(item => item.id === reference.id)
+    || (matches.length === 1 ? matches[0] : null)
+  if (!match?.id || !match?.provider || !match?.tool_name)
+    return reference
+  return {
+    kind: 'tool',
+    id: match.id,
+    label: match.label || reference.label,
+    provider: match.provider,
+    tool_name: match.tool_name,
+  }
+}
+
 export function splitTextByMentions(text, references) {
   const source = String(text || '')
-  const remaining = Array.isArray(references) ? [...references] : []
+  const candidates = Array.isArray(references) ? references : []
   const parts = []
   let cursor = 0
   while (cursor < source.length) {
     let nextIndex = -1
     let nextReference = null
-    for (const reference of remaining) {
+    for (const reference of candidates) {
       const label = String(reference?.label || '')
       if (!label)
         continue
@@ -123,7 +143,6 @@ export function splitTextByMentions(text, references) {
     if (nextIndex > cursor)
       parts.push({ text: source.slice(cursor, nextIndex) })
     parts.push({ text: nextReference.label, reference: nextReference })
-    remaining.splice(remaining.indexOf(nextReference), 1)
     cursor = nextIndex + String(nextReference.label).length
   }
   return parts.filter(part => part.text)

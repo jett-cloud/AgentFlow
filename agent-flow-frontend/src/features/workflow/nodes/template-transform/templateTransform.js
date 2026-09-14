@@ -20,16 +20,26 @@ export const TEMPLATE_TRANSFORM_INPUT_TYPES = new Set([
   'array[object]',
 ])
 
+export const TEMPLATE_VARIABLE_NAME_MAX_LENGTH = 30
+
 export function isValidTemplateVariableName(name) {
-  return /^[A-Za-z_]\w*$/.test(String(name || '')) && String(name).length <= 30
+  return typeof name === 'string'
+    && /^[A-Za-z_]\w*$/.test(name)
+    && name.length <= TEMPLATE_VARIABLE_NAME_MAX_LENGTH
+}
+
+export function isValidTemplateVariableSelector(selector) {
+  return Array.isArray(selector)
+    && selector.length >= 2
+    && selector.every(part => typeof part === 'string' && part.trim().length > 0)
 }
 
 function normalizeVariable(variable = {}) {
   return {
     ...variable,
-    variable: String(variable.variable || ''),
+    variable: variable.variable ?? '',
     value_selector: Array.isArray(variable.value_selector)
-      ? variable.value_selector.map(String)
+      ? [...variable.value_selector]
       : [],
   }
 }
@@ -60,11 +70,13 @@ function uniqueVariableName(variables, preferred, index) {
     .filter((_, variableIndex) => variableIndex !== index)
     .map(variable => variable.variable)
     .filter(Boolean))
-  const base = String(preferred || 'variable').replace(/\W/g, '_').replace(/^\d/, '_$&') || 'variable'
+  const sanitized = String(preferred || 'variable').replace(/\W/g, '_').replace(/^\d/, '_$&') || 'variable'
+  const base = sanitized.slice(0, TEMPLATE_VARIABLE_NAME_MAX_LENGTH)
   let candidate = base
   let suffix = 1
   while (used.has(candidate)) {
-    candidate = `${base}_${suffix}`
+    const suffixText = `_${suffix}`
+    candidate = `${base.slice(0, Math.max(0, TEMPLATE_VARIABLE_NAME_MAX_LENGTH - suffixText.length))}${suffixText}`
     suffix += 1
   }
   return candidate

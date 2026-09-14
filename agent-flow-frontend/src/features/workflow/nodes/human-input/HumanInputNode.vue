@@ -112,6 +112,8 @@ const { prompt, deliveryMethods, targetBranches } = useHumanInputConfig(props, (
 }
 .primary { color: #155eef; background: #eff4ff; }
 .default { color: #475467; background: #f2f4f7; }
+.accent { color: #6941c6; background: #f4ebff; }
+.ghost { color: #344054; background: #ffffff; border: 1px solid #d0d5dd; }
 .danger { color: #b42318; background: #fef3f2; }
 .timeout { color: #b54708; background: #fffaeb; }
 

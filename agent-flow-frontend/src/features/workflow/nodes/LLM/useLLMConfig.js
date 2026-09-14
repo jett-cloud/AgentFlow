@@ -2,7 +2,7 @@
 import { reactive, computed, ref } from 'vue'
 import { useModelStore, ModelFeatureEnum } from '@/features/integrations/state/useModelStore.js'
 import { useResolvedNodeData } from '../../model/nodeProps.js'
-import { normalizeLLMNodeData } from './llmNode.js'
+import { normalizeLLMNodeData, isLLMVisionFileVariable } from './llmNode.js'
 
 export const EditionType = {
   basic: 'basic',
@@ -254,6 +254,18 @@ export function useLLMConfig(props, emit) {
       configs: { ...(inputs.vision?.configs || {}), detail },
     }),
   })
+  const visionVariableSelector = computed({
+    get: () => inputs.vision?.configs?.variable_selector || [],
+    set: (selector) => {
+      inputs.vision.enabled = true
+      inputs.vision.configs = {
+        detail: inputs.vision.configs?.detail || 'high',
+        ...(inputs.vision.configs || {}),
+        variable_selector: Array.isArray(selector) ? selector : [],
+      }
+      notifyChange()
+    },
+  })
   const structuredOutputSchemaText = computed({
     get: () => structuredSchemaDraft.value,
     set: (value) => {
@@ -281,6 +293,8 @@ export function useLLMConfig(props, emit) {
     memoryWindowSize,
     visionEnabled,
     visionDetail,
+    visionVariableSelector,
+    isLLMVisionFileVariable,
     structuredOutputSchemaText,
     EditionType,
     handleModelChanged,

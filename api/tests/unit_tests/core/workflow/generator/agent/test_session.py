@@ -52,6 +52,44 @@ def test_execute_keeps_history_and_candidate() -> None:
     assert len(updated.messages) == 3
 
 
+def test_restore_session_keeps_contract_out_of_compacted_state() -> None:
+    contract = {
+        "protocol_version": 1,
+        "schema_version": 1,
+        "revision": 2,
+        "contract_hash": "a" * 64,
+        "status": "draft",
+    }
+
+    session = restore_session(
+        [],
+        candidate_state={
+            "contract_protocol_version": 1,
+            "workflow_contract": contract,
+            "contract_revision": 2,
+            "contract_hash": "a" * 64,
+            "compacted_state": {"summary": "untrusted summary"},
+        },
+        generation_mode="workflow",
+    )
+
+    assert session.contract_protocol_version == 1
+    assert session.workflow_contract == contract
+    assert session.workflow_contract is not contract
+    assert session.contract_revision == 2
+    assert session.contract_hash == "a" * 64
+    assert session.compacted_state == {"summary": "untrusted summary"}
+
+
+def test_restore_legacy_session_does_not_invent_a_contract() -> None:
+    session = restore_session([], candidate_state={}, generation_mode="workflow")
+
+    assert session.contract_protocol_version is None
+    assert session.workflow_contract is None
+    assert session.contract_revision == 0
+    assert session.contract_hash is None
+
+
 def test_apply_user_turn_stores_references_on_the_user_payload() -> None:
     rows = [
         _row(sequence=1, event_type="message", role="user", status="completed", payload={"text": "做 RAG 测试工作流"}),
@@ -74,3 +112,33 @@ def test_malformed_row_raises_instead_of_inventing_session() -> None:
 
     with pytest.raises(InvalidAgentMessageError):
         restore_session(rows, candidate_state={}, generation_mode="workflow")
+
+
+def test_restore_session_preserves_activate_skills_for_active_set() -> None:
+    from core.workflow.generator.agent.prompts import active_skill_names
+
+    rows = [
+        _row(sequence=1, event_type="message", role="user", status="completed", payload={"text": "做 RAG 测试工作流"}),
+        _row(
+            sequence=2,
+            event_type="tool_call",
+            role="assistant",
+            status="completed",
+            payload={"id": "act-1", "name": "activate_skills", "arguments": {"names": ["create-from-scratch"]}},
+        ),
+        _row(
+            sequence=3,
+            event_type="tool_result",
+            role="assistant",
+            status="completed",
+            payload={
+                "tool_call_id": "act-1",
+                "name": "activate_skills",
+                "ok": True,
+                "changed": False,
+                "content": {"active_skills": ["create-from-scratch", "bind-resources"]},
+            },
+        ),
+    ]
+    session = restore_session(rows, candidate_state={}, generation_mode="workflow")
+    assert active_skill_names(session) == ("create-from-scratch", "bind-resources")

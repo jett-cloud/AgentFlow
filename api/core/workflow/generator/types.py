@@ -25,6 +25,8 @@ WorkflowGenerationModeRequest = Literal["workflow", "advanced-chat", "auto"]
 class WorkflowGenerateErrorCode(StrEnum):
     INVALID_JSON = "INVALID_JSON"
     INVALID_SCHEMA = "INVALID_SCHEMA"
+    INVALID_NODE_CONFIG = "INVALID_NODE_CONFIG"
+    REFERENCE_NOT_AVAILABLE = "REFERENCE_NOT_AVAILABLE"
     EMPTY_INSTRUCTION = "EMPTY_INSTRUCTION"
     INSTRUCTION_TOO_LONG = "INSTRUCTION_TOO_LONG"
     DUPLICATE_NODE_ID = "DUPLICATE_NODE_ID"
@@ -35,6 +37,10 @@ class WorkflowGenerateErrorCode(StrEnum):
     UNRESOLVED_REFERENCE = "UNRESOLVED_REFERENCE"
     UNKNOWN_TOOL = "UNKNOWN_TOOL"
     UNKNOWN_DATASET = "UNKNOWN_DATASET"
+    INVALID_CODE_OUTPUT = "INVALID_CODE_OUTPUT"
+    INVALID_END_OUTPUT = "INVALID_END_OUTPUT"
+    INVALID_AGENT_NODE = "INVALID_AGENT_NODE"
+    AGENT_BINDING_MISSING = "AGENT_BINDING_MISSING"
     MISSING_TERMINAL = "MISSING_TERMINAL"
     MISSING_START = "MISSING_START"
     DANGLING_EDGE = "DANGLING_EDGE"
@@ -94,7 +100,7 @@ class PlannerStartInputDict(TypedDict):
 
     variable: str
     label: str
-    type: str  # "text-input" | "paragraph" | "number" | "select" | "file" | "file-list"
+    type: str  # text-input | paragraph | number | select | file | file-list | checkbox | json_object
 
 
 class PlannerResourceRequestDict(TypedDict):

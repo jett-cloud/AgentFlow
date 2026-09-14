@@ -9,7 +9,7 @@ from collections.abc import Mapping
 
 import pytest
 
-from core.workflow.file_reference import build_file_reference
+from core.workflow.runtime.adapters.file_reference import build_file_reference
 from core.workflow.nodes.agent_v2.output_type_checker import (
     OutputTypeCheckStatus,
     PerOutputTypeChecker,

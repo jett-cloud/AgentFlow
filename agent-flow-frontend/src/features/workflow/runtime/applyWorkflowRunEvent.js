@@ -107,15 +107,28 @@ function formatOutputsAsText(outputs) {
   }
 }
 
+function executionIdOf(data) {
+  return data.node_execution_id || data.form_id || data.id
+}
+
+function matchingFormIndex(list, data) {
+  const id = executionIdOf(data)
+  if (id)
+    return list.findIndex(item => item.node_id === data.node_id && executionIdOf(item) === id)
+  const candidates = list.map((item, index) => item.node_id === data.node_id ? index : -1).filter(index => index >= 0)
+  return candidates.length === 1 ? candidates[0] : -1
+}
+
 function upsertTracing(tracing, entry) {
   const list = Array.isArray(tracing) ? [...tracing] : []
-  const index = list.findIndex(item => item.nodeId === entry.nodeId && item.status === 'running')
-  if (entry.status === 'running') {
-    list.push(entry)
-    return list
-  }
+  const index = entry.executionId
+    ? list.findLastIndex(item => item.nodeId === entry.nodeId && item.executionId === entry.executionId)
+    : entry.status === 'running' ? -1 : list.findIndex(item => item.nodeId === entry.nodeId && ['running', 'paused'].includes(item.status))
   if (index >= 0) {
-    list[index] = { ...list[index], ...entry }
+    if (entry.status === 'running' && list[index].status !== 'running')
+      return list
+    const defined = Object.fromEntries(Object.entries(entry).filter(([, value]) => value !== undefined))
+    list[index] = { ...list[index], ...defined, index: list[index].index ?? entry.index }
     return list
   }
   list.push(entry)
@@ -129,6 +142,7 @@ export function buildTracingEntry(data = {}, overrides = {}) {
     ?? (data.error ? 'failed' : 'running')
   return {
     nodeId: data.node_id,
+    executionId: executionIdOf(data),
     title: data.title || data.node_type || data.node_id,
     nodeType: data.node_type,
     status,
@@ -195,11 +209,15 @@ export function applyWorkflowRunEvent(state, event) {
     next.parentMessageId = data.message_id
 
   if (name === 'workflow_started') {
+    const runId = data.id || event.workflow_run_id
+    const continuing = runId && runId === next.workflowRunId && ['running', 'paused'].includes(next.runStatus)
     next.taskId = event.task_id || data.task_id || next.taskId
     next.workflowRunId = data.id || event.workflow_run_id || next.workflowRunId
     next.isRunning = true
     next.runStatus = RUN_STATUS.running
     next.runError = ''
+    if (continuing)
+      return { state: next, nodeState, canvasEvent }
     next.resultText = ''
     next.transcript = ''
     next.runOutputs = null
@@ -246,6 +264,12 @@ export function applyWorkflowRunEvent(state, event) {
       executionMetadata: data.execution_metadata,
     }
     next.tracing = upsertTracing(next.tracing, buildTracingEntry(data, { status }))
+    const executionId = executionIdOf(data)
+    if (executionId) {
+      next.humanInputFormDataList = (next.humanInputFormDataList || []).filter(
+        item => item.node_id !== data.node_id || executionIdOf(item) !== executionId,
+      )
+    }
     return { state: next, nodeState, canvasEvent }
   }
 
@@ -339,12 +363,16 @@ export function applyWorkflowRunEvent(state, event) {
   }
 
   if (name === 'human_input_required') {
+    const executionId = executionIdOf(data)
+    if (executionId && next.tracing.some(item => item.nodeId === data.node_id
+      && item.executionId === executionId && ['succeeded', 'failed', 'stopped', 'exception'].includes(item.status)))
+      return { state: next, nodeState, canvasEvent }
     if (event.workflow_run_id)
       next.workflowRunId = event.workflow_run_id
     const list = Array.isArray(next.humanInputFormDataList)
       ? [...next.humanInputFormDataList]
       : []
-    const idx = list.findIndex(item => item.node_id === data.node_id)
+    const idx = matchingFormIndex(list, data)
     if (idx >= 0)
       list[idx] = data
     else
@@ -362,15 +390,23 @@ export function applyWorkflowRunEvent(state, event) {
   }
 
   if (name === 'human_input_form_filled') {
-    const list = Array.isArray(next.humanInputFormDataList)
-      ? next.humanInputFormDataList.filter(item => item.node_id !== data.node_id)
-      : []
-    next.humanInputFormDataList = list
+    const list = next.humanInputFormDataList || []
+    const index = matchingFormIndex(list, data)
+    // Unmatched events must not fall through to list[-1] (the last pending form).
+    if (index < 0)
+      return { state: next, nodeState, canvasEvent }
+    const resolved = { ...list[index], ...data }
+    next.humanInputFormDataList = list.filter((_, i) => i !== index)
     const filled = Array.isArray(next.humanInputFilledFormDataList)
-      ? [...next.humanInputFilledFormDataList, data]
-      : [data]
+      ? [...next.humanInputFilledFormDataList]
+      : []
+    const filledIndex = matchingFormIndex(filled, resolved)
+    if (filledIndex >= 0)
+      filled[filledIndex] = resolved
+    else
+      filled.push(resolved)
     next.humanInputFilledFormDataList = filled
-    next.tracing = upsertTracing(next.tracing, buildTracingEntry(data, {
+    next.tracing = upsertTracing(next.tracing, buildTracingEntry(resolved, {
       status: 'succeeded',
       title: data.node_title || data.node_id,
     }))
@@ -378,11 +414,13 @@ export function applyWorkflowRunEvent(state, event) {
   }
 
   if (name === 'human_input_form_timeout') {
-    const list = Array.isArray(next.humanInputFormDataList)
-      ? next.humanInputFormDataList.filter(item => item.node_id !== data.node_id)
-      : []
-    next.humanInputFormDataList = list
-    next.tracing = upsertTracing(next.tracing, buildTracingEntry(data, {
+    const list = next.humanInputFormDataList || []
+    const index = matchingFormIndex(list, data)
+    if (index < 0)
+      return { state: next, nodeState, canvasEvent }
+    const resolved = { ...list[index], ...data }
+    next.humanInputFormDataList = list.filter((_, i) => i !== index)
+    next.tracing = upsertTracing(next.tracing, buildTracingEntry(resolved, {
       status: 'failed',
       title: data.node_title || data.node_id,
       error: data.error || 'human input timed out',

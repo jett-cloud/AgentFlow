@@ -4,7 +4,7 @@ import { fetchAllTools } from '@/features/integrations/api/difyToolsApi.js'
 import { flattenToolCatalog, toolIdentityMatches } from './toolCatalog.js'
 
 export const useToolStore = defineStore('toolStore', () => {
-  const groups = ref({ builtin: [], mcp: [] })
+  const groups = ref({ builtin: [], api: [], workflow: [], mcp: [] })
   const loading = ref(false)
   const loaded = ref(false)
   const loadError = ref('')
@@ -20,7 +20,7 @@ export const useToolStore = defineStore('toolStore', () => {
       loaded.value = true
     } catch (e) {
       loadError.value = e.message || '工具列表加载失败'
-      groups.value = { builtin: [], mcp: [] }
+      groups.value = { builtin: [], api: [], workflow: [], mcp: [] }
       loaded.value = true
     } finally {
       loading.value = false

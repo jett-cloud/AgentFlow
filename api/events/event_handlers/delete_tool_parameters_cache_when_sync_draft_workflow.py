@@ -4,7 +4,7 @@ from core.tools.entities.tool_entities import ToolProviderType
 from core.tools.errors import ToolProviderNotFoundError
 from core.tools.tool_manager import ToolManager
 from core.tools.utils.configuration import ToolParameterConfigurationManager
-from core.workflow.human_input_adapter import adapt_node_config_for_graph
+from core.workflow.graph.adapters.human_input_adapter import adapt_node_config_for_graph
 from events.app_event import app_draft_workflow_was_synced
 from graphon.nodes import BuiltinNodeTypes
 from graphon.nodes.tool.entities import ToolEntity

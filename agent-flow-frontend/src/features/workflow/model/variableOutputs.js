@@ -66,11 +66,6 @@ const STATIC_OUTPUTS = {
     { variable: 'headers', type: VarType.object },
     { variable: 'files', type: VarType.arrayFile },
   ],
-  [BlockEnum.Tool]: [
-    { variable: 'text', type: VarType.string },
-    { variable: 'files', type: VarType.arrayFile },
-    { variable: 'json', type: VarType.arrayObject },
-  ],
   [BlockEnum.QuestionClassifier]: [
     { variable: 'class_name', type: VarType.string },
     { variable: 'class_label', type: VarType.string },
@@ -114,7 +109,18 @@ const INPUT_VAR_TYPE_MAP = {
   checkbox: VarType.boolean,
   file: VarType.file,
   'file-list': VarType.arrayFile,
-  'json-object': VarType.object,
+  json_object: VarType.object,
+  array: VarType.array,
+  arrayString: VarType.arrayString,
+  arrayNumber: VarType.arrayNumber,
+  arrayBoolean: VarType.arrayBoolean,
+  arrayObject: VarType.arrayObject,
+  arrayFile: VarType.arrayFile,
+  'array[string]': VarType.arrayString,
+  'array[number]': VarType.arrayNumber,
+  'array[boolean]': VarType.arrayBoolean,
+  'array[object]': VarType.arrayObject,
+  'array[file]': VarType.arrayFile,
 }
 
 const RAG_INPUT_TYPE_MAP = {
@@ -161,14 +167,18 @@ function mapJsonSchemaType(prop) {
       return VarType.arrayNumber
     if (item === 'object')
       return VarType.arrayObject
+    if (item === 'file')
+      return VarType.arrayFile
     return VarType.array
   }
   if (prop.type === 'integer')
     return VarType.number
+  if (prop.type === 'file')
+    return VarType.file
   return prop.type || VarType.string
 }
 
-/** Normalize Var.children: Var[] | StructuredOutput → Var[] */
+/** Normalize Var.children: Var[] | StructuredOutput | code children map → Var[] */
 export function normalizeVarChildren(children) {
   if (!children)
     return []
@@ -176,6 +186,22 @@ export function normalizeVarChildren(children) {
     return children
   if (children.schema)
     return schemaPropertiesToVars(children.schema)
+  if (typeof children === 'object') {
+    const entries = Object.entries(children)
+    const isOutputMap = entries.length > 0 && entries.every(([, prop]) => (
+      prop
+      && typeof prop === 'object'
+      && !Array.isArray(prop)
+      && typeof prop.type === 'string'
+    ))
+    if (isOutputMap) {
+      return entries.map(([key, prop]) => ({
+        variable: key,
+        type: CODE_OUTPUT_TYPE_MAP[prop.type] || prop.type || VarType.string,
+        children: prop.children ?? undefined,
+      }))
+    }
+  }
   return []
 }
 
@@ -220,6 +246,36 @@ export function mapRagPipelineVars(ragVariables = [], belongToNodeId = 'shared')
     }))
 }
 
+function toolSchemaObject(schema) {
+  if (!schema || typeof schema !== 'object')
+    return null
+  if (Array.isArray(schema))
+    return schema
+  if (schema.properties && typeof schema.properties === 'object')
+    return schema
+  const keys = Object.keys(schema).filter(key => key !== 'type')
+  if (keys.length && keys.every(key => schema[key] && typeof schema[key] === 'object'))
+    return { type: 'object', properties: schema }
+  return null
+}
+
+/** Catalogue/runtime Tool outputs only. Do not invent text/json/files. */
+export function getToolDeclaredOutputVars(data = {}) {
+  const schema = toolSchemaObject(data.output_schema || data.outputs || data._outputs)
+  if (!schema)
+    return []
+  if (Array.isArray(schema)) {
+    return schema.map(item => ({
+      variable: item?.name || item?.variable || item?.key,
+      type: item?.type === 'array' && item?.array_item?.type === 'file'
+        ? VarType.arrayFile
+        : (CODE_OUTPUT_TYPE_MAP[item?.type] || item?.type || VarType.string),
+      des: item?.description || item?.des,
+    })).filter(item => item.variable)
+  }
+  return schemaPropertiesToVars(schema)
+}
+
 /**
  * 获取单个节点的可引用输出变量列表。
  * Contrasts Dify toNodeOutputVars / formatItem.
@@ -241,7 +297,7 @@ export function getNodeOutputVars(node, { isChatMode = false, ragPipelineVariabl
         type: INPUT_VAR_TYPE_MAP[v.type] || VarType.string,
         des: v.label || v.variable,
       }
-      if (v.type === 'json-object' && v.json_schema)
+      if (v.type === 'json_object' && v.json_schema)
         mapped.children = { schema: typeof v.json_schema === 'string' ? safeParseSchema(v.json_schema) : v.json_schema }
       return mapped
     })
@@ -274,30 +330,21 @@ export function getNodeOutputVars(node, { isChatMode = false, ragPipelineVariabl
     vars = [...params, ...PARAMETER_EXTRACTOR_COMMON_STRUCT]
   }
   else if (type === BlockEnum.HumanInput) {
-    const actionVars = (data.user_actions || []).flatMap(a => [
-      { variable: `${a.id}_approved`, type: VarType.boolean },
-      { variable: `${a.id}_comment`, type: VarType.string },
-    ])
     const formVars = (Array.isArray(data.inputs) ? data.inputs : [])
-      .filter(item => item?.output_variable_name || item?.variable || item?.name)
+      .filter(item => item?.output_variable_name)
       .map(item => ({
-        variable: item.output_variable_name || item.variable || item.name,
+        variable: item.output_variable_name,
         type: item.type === 'file-list' ? VarType.arrayFile : (INPUT_VAR_TYPE_MAP[item.type] || VarType.string),
-        des: item.label,
       }))
-    vars = [...formVars, ...actionVars, ...HUMAN_INPUT_OUTPUT_STRUCT]
+    vars = [...formVars, ...HUMAN_INPUT_OUTPUT_STRUCT]
   }
   else if (type === BlockEnum.LLM) {
     vars = [...(STATIC_OUTPUTS[BlockEnum.LLM] || [])]
-    if (
-      data.structured_output_enabled
-      && data.structured_output?.schema?.properties
-      && Object.keys(data.structured_output.schema.properties).length > 0
-    ) {
+    if (data.structured_output_enabled) {
       vars.push({
         variable: 'structured_output',
         type: VarType.object,
-        children: data.structured_output,
+        children: data.structured_output || { schema: { type: 'object', properties: {} } },
       })
     }
   }
@@ -325,14 +372,11 @@ export function getNodeOutputVars(node, { isChatMode = false, ragPipelineVariabl
     }]
   }
   else if (type === BlockEnum.Loop) {
-    const loopVars = (data.loop_variables || []).map(v => ({
+    vars = (data.loop_variables || []).map(v => ({
       variable: v.label || v.variable || v.name,
-      type: v.value_type || v.type || VarType.string,
+      type: v.var_type || v.type || VarType.string,
       isLoopVariable: true,
     })).filter(v => v.variable)
-    vars = loopVars.length
-      ? loopVars
-      : [...(STATIC_OUTPUTS[BlockEnum.Loop] || [])]
   }
   else if (type === BlockEnum.VariableAssigner) {
     if (data.advanced_settings?.group_enabled && Array.isArray(data.advanced_settings.groups)) {
@@ -372,6 +416,9 @@ export function getNodeOutputVars(node, { isChatMode = false, ragPipelineVariabl
       des: item.description || '',
     })).filter(item => item.variable)
   }
+  else if (type === BlockEnum.Tool) {
+    vars = getToolDeclaredOutputVars(data)
+  }
   else if (type === BlockEnum.TriggerWebhook && Array.isArray(data.variables)) {
     vars = data.variables.map(v => ({
       variable: v.variable || v.name,
@@ -397,26 +444,76 @@ function safeParseSchema(raw) {
 }
 
 /** 迭代/循环容器内子节点额外可用的变量 */
-export function getContainerInnerVars(parentNode) {
+export function getContainerInnerVars(parentNode, { nodes = [] } = {}) {
   if (!parentNode)
     return []
   const type = parentNode.data?.type
   if (type === BlockEnum.Iteration) {
-    const itemType = parentNode.data?.output_type === VarType.arrayFile
-      ? VarType.file
-      : VarType.object
     return attachFileChildren([
-      { variable: 'item', type: itemType, des: '当前迭代项' },
+      resolveIterationItemVar(parentNode, nodes),
       { variable: 'index', type: VarType.number, des: '当前迭代索引' },
     ])
   }
   if (type === BlockEnum.Loop) {
-    return [
-      { variable: 'item', type: VarType.object, des: '当前循环项' },
-      { variable: 'index', type: VarType.number, des: '当前循环索引' },
-    ]
+    return (parentNode.data?.loop_variables || []).map(v => ({
+      variable: v.label || v.variable || v.name,
+      type: v.var_type || v.type || VarType.string,
+      isLoopVariable: true,
+      des: '循环变量',
+    })).filter(v => v.variable)
   }
   return []
+}
+
+function resolveIterationItemVar(parentNode, nodes) {
+  const fallback = { variable: 'item', type: VarType.object, des: '当前迭代项' }
+  const selector = parentNode.data?.iterator_selector
+  if (!Array.isArray(selector) || selector.length < 2 || !nodes.length)
+    return fallback
+  const source = nodes.find(node => node.id === selector[0])
+  if (!source)
+    return fallback
+  const matched = findVarAtPath(getNodeOutputVars(source), selector.slice(1))
+  if (!matched)
+    return fallback
+  const itemType = elementTypeOf(matched.type)
+  const children = itemType === VarType.file
+    ? OUTPUT_FILE_SUB_VARIABLES.map(item => ({ ...item }))
+    : (itemType === VarType.object ? normalizeVarChildren(matched.children) : [])
+  return {
+    variable: 'item',
+    type: itemType,
+    des: '当前迭代项',
+    children: children.length ? children : undefined,
+  }
+}
+
+function elementTypeOf(arrayType) {
+  if (arrayType === VarType.arrayString)
+    return VarType.string
+  if (arrayType === VarType.arrayNumber)
+    return VarType.number
+  if (arrayType === VarType.arrayBoolean)
+    return VarType.boolean
+  if (arrayType === VarType.arrayFile)
+    return VarType.file
+  if (arrayType === VarType.arrayObject || arrayType === VarType.array)
+    return VarType.object
+  return VarType.object
+}
+
+function findVarAtPath(vars, path) {
+  if (!path.length)
+    return null
+  const [head, ...rest] = path
+  for (const item of vars || []) {
+    if (item.variable !== head)
+      continue
+    if (!rest.length)
+      return item
+    return findVarAtPath(normalizeVarChildren(item.children), rest)
+  }
+  return null
 }
 
 /** 格式化 value_selector 为可读文本 */

@@ -10,7 +10,7 @@
       >
         {{ running ? '运行中…' : '运行此节点' }}
       </button>
-      <button type="button" class="ghost-btn" :disabled="loading" @click="reload">刷新</button>
+      <button type="button" class="ghost-btn" :disabled="loading || running" @click="refresh">刷新</button>
     </div>
 
     <label class="field">
@@ -25,7 +25,7 @@
       <small v-if="inputsError" class="error">{{ inputsError }}</small>
     </label>
 
-    <div v-if="loading" class="state">加载上次运行…</div>
+    <div v-if="loading && !displayResult" class="state">加载上次运行…</div>
     <div v-else-if="!displayResult && !running" class="state empty">
       <p>还没有运行记录。填写输入后点击「运行此节点」。</p>
     </div>
@@ -57,13 +57,13 @@ const props = defineProps({
   appId: { type: String, default: '' },
   nodeId: { type: String, required: true },
   nodeData: { type: Object, default: () => ({}) },
-  /** Latest result from this session's single-node run (overrides GET until refresh). */
+  /** Selected execution from the current trace or an explicitly requested standalone run. */
   liveResult: { type: Object, default: null },
   running: { type: Boolean, default: false },
   readOnly: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['run'])
+const emit = defineEmits(['run', 'refresh'])
 
 const loading = ref(false)
 const lastRun = ref(null)
@@ -120,20 +120,33 @@ async function reload() {
   if (!props.appId || !props.nodeId)
     return
   loading.value = true
+  const requestedNodeId = props.nodeId
+  const requestedAppId = props.appId
   try {
-    lastRun.value = await fetchNodeLastRun(props.appId, props.nodeId)
-    if (lastRun.value?.inputs && typeof lastRun.value.inputs === 'object')
+    const result = await fetchNodeLastRun(requestedAppId, requestedNodeId)
+    if (props.nodeId !== requestedNodeId || props.appId !== requestedAppId)
+      return
+    lastRun.value = result
+    if (!props.liveResult && lastRun.value?.inputs && typeof lastRun.value.inputs === 'object')
       inputsText.value = JSON.stringify(lastRun.value.inputs, null, 2)
   }
   catch (error) {
+    if (props.nodeId !== requestedNodeId || props.appId !== requestedAppId)
+      return
     if (error.response?.status === 404)
       lastRun.value = null
     else
       lastRun.value = null
   }
   finally {
-    loading.value = false
+    if (props.nodeId === requestedNodeId && props.appId === requestedAppId)
+      loading.value = false
   }
+}
+
+function refresh() {
+  emit('refresh')
+  reload()
 }
 
 function submitRun() {
@@ -161,6 +174,11 @@ watch(
   },
   { immediate: true },
 )
+
+watch(() => props.liveResult, (result) => {
+  if (result?.inputs && typeof result.inputs === 'object')
+    inputsText.value = JSON.stringify(result.inputs, null, 2)
+}, { immediate: true })
 </script>
 
 <style scoped>

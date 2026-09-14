@@ -1,3 +1,5 @@
+import { resolveRemoteMcpIcon } from '../lib/remoteMcpPresentation.js'
+
 export function normalizeToolProviderType(type) {
   const value = String(type || 'builtin')
   return value === 'plugin' ? 'builtin' : value
@@ -13,6 +15,8 @@ export function toolIdentityMatches(item, query = {}) {
 
 const TOOL_GROUPS = Object.freeze([
   Object.freeze({ type: 'builtin', label: '工具插件' }),
+  Object.freeze({ type: 'api', label: 'API 工具' }),
+  Object.freeze({ type: 'workflow', label: '工作流工具' }),
   Object.freeze({ type: 'mcp', label: 'MCP 工具' }),
 ])
 
@@ -39,9 +43,12 @@ export function flattenToolCatalog(groups) {
         provider_id: providerId,
         provider_type: group.type,
         provider_name: providerName,
+        provider_catalogue_name: providerId,
         allow_delete: !!provider.allow_delete,
         is_team_authorization: provider.is_team_authorization,
-        icon: provider.icon,
+        icon: group.type === 'mcp'
+          ? { content: resolveRemoteMcpIcon({ ...provider, name: providerName }).value, background: '#eff4ff' }
+          : provider.icon,
         icon_small: provider.icon_small,
         plugin_id: provider.plugin_id,
         plugin_unique_identifier: provider.plugin_unique_identifier,

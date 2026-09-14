@@ -3,10 +3,10 @@ from typing import cast
 
 import pytest
 
-from core.workflow.generator.agent.graph_ops import empty_graph
-from core.workflow.generator.agent.tools import ToolContext, ToolEnv, ToolTurnState
-from core.workflow.generator.llm_response import LLMJsonClient, ModelInvoker
-from core.workflow.generator.node_builder import BuilderInput
+from core.workflow.generator.agent.tools.tools import ToolContext, ToolEnv, ToolTurnState
+from core.workflow.generator.compiler.node_builder import BuilderInput
+from core.workflow.generator.graph.graph_ops import empty_graph
+from core.workflow.generator.model_io.llm_response import LLMJsonClient, ModelInvoker
 
 
 def _builder_input() -> BuilderInput:
@@ -46,6 +46,11 @@ def tool_context() -> ToolContext:
             tools_available=False,
             builder_input=_builder_input(),
             llm_client=LLMJsonClient(model_instance=cast("ModelInvoker", object()), model_parameters={}),
+            agent_model_entries=(
+                {"provider": "openai", "name": "gpt-4o", "model_type": "llm", "features": ()},
+                {"provider": "openai", "name": "gpt-4.1", "model_type": "llm", "features": ()},
+            ),
+            models_available=True,
             hydrate_graph=None,
         ),
         state=ToolTurnState(graph=empty_graph()),

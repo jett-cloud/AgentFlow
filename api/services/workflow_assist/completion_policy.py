@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from core.workflow.generator.contracts.workflow_reconciliation import reconcile_workflow_contract
 from models.agent import (
     Agent,
     AgentConfigSnapshot,
@@ -47,10 +48,25 @@ class CompletionPolicy:
         owner: RunOwner,
         graph: dict[str, Any],
         mode: WorkflowAssistMode,
+        contract_protocol_version: int | None = None,
+        contract: dict[str, object] | None = None,
+        candidate_base_hash: str | None = None,
     ) -> bool:
+        """Require one mode-specific terminal and, for protocol runs, contract reconciliation."""
         candidate = _canonicalize_candidate(graph, mode=mode)
         if candidate is None or not candidate.reaches_terminal:
             return False
+        if contract_protocol_version is not None:
+            if contract_protocol_version != 1 or contract is None:
+                return False
+            report = reconcile_workflow_contract(
+                contract=contract,
+                graph=graph,
+                mode="workflow" if mode is WorkflowAssistMode.WORKFLOW else "advanced-chat",
+                candidate_base_hash=candidate_base_hash,
+            )
+            if not report["passed"]:
+                return False
         if not candidate.inline_bindings:
             return True
 

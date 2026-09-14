@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from core.workflow.system_variables import SystemVariableKey, get_system_text
+from core.workflow.runtime.variables.system_variables import SystemVariableKey, get_system_text
 from graphon.runtime import GraphRuntimeState
 
 if TYPE_CHECKING:

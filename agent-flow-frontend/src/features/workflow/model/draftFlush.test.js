@@ -6,6 +6,28 @@ test('flush when dirty and not readOnly', () => {
   assert.equal(shouldFlushDraftOnLeave({ draftStatus: 'dirty', readOnly: false }), true)
 })
 
+test('flush when the last save failed', () => {
+  assert.equal(shouldFlushDraftOnLeave({ draftStatus: 'error', readOnly: false }), true)
+})
+
+test('flush later edits if the user leaves while a save is in flight', () => {
+  assert.equal(shouldFlushDraftOnLeave({
+    draftStatus: 'saving',
+    readOnly: false,
+    inFlightSignature: 's1',
+    latestSignature: 's2',
+  }), true)
+})
+
+test('no flush when saving the same in-flight graph', () => {
+  assert.equal(shouldFlushDraftOnLeave({
+    draftStatus: 'saving',
+    readOnly: false,
+    inFlightSignature: 's1',
+    latestSignature: 's1',
+  }), false)
+})
+
 test('no flush when saved', () => {
   assert.equal(shouldFlushDraftOnLeave({ draftStatus: 'saved', readOnly: false }), false)
 })

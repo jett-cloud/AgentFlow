@@ -7,7 +7,7 @@ from typing import Annotated, Any, Final, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_validator, model_validator
 
 from core.rag.entities.metadata_entities import ConditionValue, SupportedComparisonOperator
-from core.workflow.file_reference import is_canonical_file_reference
+from core.workflow.runtime.adapters.file_reference import is_canonical_file_reference
 from graphon.file import FileTransferMethod, FileType
 
 

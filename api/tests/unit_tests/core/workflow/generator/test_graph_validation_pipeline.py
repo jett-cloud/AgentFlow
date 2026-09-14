@@ -50,7 +50,17 @@ class TestWorkflowGeneratorStructuredErrors:
                     "id": "node2",
                     "type": "custom",
                     "position": {"x": 0, "y": 0},
-                    "data": {"type": "end", "title": "End"},
+                    "data": {
+                        "type": "end",
+                        "title": "End",
+                        "outputs": [
+                            {
+                                "variable": "result",
+                                "value_selector": ["node1", "query"],
+                                "value_type": "string",
+                            }
+                        ],
+                    },
                 },
             ],
             edges=[{"id": "x", "source": "node1", "target": "node2", "type": "custom"}],
@@ -67,6 +77,72 @@ class TestWorkflowGeneratorStructuredErrors:
         )
         assert result["error"] == ""
         assert result["errors"] == []
+
+    def test_json_object_start_input_survives_the_full_generation_pipeline(self):
+        planner = json.dumps(
+            {
+                "title": "JSON intake",
+                "description": "Return a structured payload.",
+                "start_inputs": [{"variable": "payload", "label": "Payload", "type": "json_object"}],
+                "nodes": [
+                    {"label": "Start", "node_type": "start", "purpose": "Receive JSON."},
+                    {"label": "End", "node_type": "end", "purpose": "Return JSON."},
+                ],
+            }
+        )
+        builder = self._builder(
+            nodes=[
+                {
+                    "id": "node1",
+                    "type": "custom",
+                    "position": {"x": 0, "y": 0},
+                    "data": {
+                        "type": "start",
+                        "title": "Start",
+                        "variables": [
+                            {
+                                "variable": "payload",
+                                "label": "Payload",
+                                "type": "json_object",
+                                "required": True,
+                                "json_schema": {"type": "object", "properties": {}},
+                            }
+                        ],
+                    },
+                },
+                {
+                    "id": "node2",
+                    "type": "custom",
+                    "position": {"x": 0, "y": 0},
+                    "data": {
+                        "type": "end",
+                        "title": "End",
+                        "outputs": [
+                            {
+                                "variable": "payload",
+                                "value_selector": ["node1", "payload"],
+                                "value_type": "object",
+                            }
+                        ],
+                    },
+                },
+            ],
+            edges=[{"id": "edge", "source": "node1", "target": "node2", "type": "custom"}],
+        )
+
+        result = WorkflowGenerator.generate_workflow_graph(
+            model_instance=_GraphFixtureModel(planner, builder),
+            model_parameters={},
+            provider="openai",
+            model_name="gpt-4o",
+            model_mode="chat",
+            mode="workflow",
+            instruction="Receive and return a JSON payload",
+        )
+
+        assert result["errors"] == []
+        start = next(node for node in result["graph"]["nodes"] if node["data"]["type"] == "start")
+        assert start["data"]["variables"][0]["type"] == "json_object"
 
     def test_validator_rejects_terminal_that_is_unreachable_from_start(self):
         planner = self._planner(
@@ -156,7 +232,12 @@ class TestWorkflowGeneratorStructuredErrors:
                     "id": "node2",
                     "type": "custom",
                     "position": {"x": 0, "y": 0},
-                    "data": {"type": "llm", "title": "LLM", "parentId": "ghostcontainer"},
+                    "data": {
+                        "type": "llm",
+                        "title": "LLM",
+                        "parentId": "ghostcontainer",
+                        "prompt_template": [{"role": "user", "text": "Process the input."}],
+                    },
                 },
                 {
                     "id": "node3",
@@ -376,7 +457,11 @@ class TestWorkflowGeneratorStructuredErrors:
                     "id": "node2",
                     "type": "custom",
                     "position": {"x": 0, "y": 0},
-                    "data": {"type": "llm", "title": "Process"},
+                    "data": {
+                        "type": "llm",
+                        "title": "Process",
+                        "prompt_template": [{"role": "user", "text": "Process the input."}],
+                    },
                 },
             ],
             edges=[{"source": "node1", "target": "node2"}],
@@ -526,7 +611,17 @@ class TestWorkflowGeneratorStructuredErrors:
                         "id": "node2",
                         "type": "custom",
                         "position": {"x": 0, "y": 0},
-                        "data": {"type": "end", "title": "End"},
+                        "data": {
+                            "type": "end",
+                            "title": "End",
+                            "outputs": [
+                                {
+                                    "variable": "result",
+                                    "value_selector": ["node1", "query"],
+                                    "value_type": "string",
+                                }
+                            ],
+                        },
                     },
                 ],
                 "edges": [{"id": "x", "source": "node1", "target": "node2", "type": "custom"}],

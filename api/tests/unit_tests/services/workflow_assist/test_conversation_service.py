@@ -65,6 +65,47 @@ def test_create_and_get_conversation_persists_safe_resume_state(sqlite_session: 
 
 
 @pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
+def test_internal_rollout_keeps_new_conversation_legacy(
+    sqlite_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "services.workflow_assist.conversations.dify_config.WORKFLOW_ASSIST_CONTRACT_ROLLOUT",
+        "internal_samples",
+    )
+    conversation = WorkflowAssistConversationService(sqlite_session).create(
+        tenant_id="tenant-1",
+        app_id="app-1",
+        account_id="account-1",
+    )
+    sqlite_session.commit()
+
+    assert conversation.contract_protocol_version is None
+    assert conversation.contract_revision == 0
+    assert conversation.contract_hash is None
+    assert conversation.workflow_contract is None
+
+
+@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
+def test_new_conversation_rollout_enables_workflow_contract_protocol(
+    sqlite_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "services.workflow_assist.conversations.dify_config.WORKFLOW_ASSIST_CONTRACT_ROLLOUT",
+        "new_conversations",
+    )
+
+    conversation = WorkflowAssistConversationService(sqlite_session).create(
+        tenant_id="tenant-1",
+        app_id="app-1",
+        account_id="account-1",
+    )
+
+    assert conversation.contract_protocol_version == 1
+
+
+@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
 def test_conversation_is_inaccessible_to_a_different_account(sqlite_session: Session) -> None:
     service = WorkflowAssistConversationService(sqlite_session)
     conversation = service.create(tenant_id="tenant-1", app_id="app-1", account_id="account-1")
@@ -235,3 +276,81 @@ def test_superseding_run_fences_old_graph_write(sqlite_session: Session) -> None
     sqlite_session.refresh(conversation)
     assert conversation.active_run_id == "r2"
     assert conversation.candidate_revision == 1
+
+
+@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
+def test_contract_checkpoint_requires_next_revision_or_exact_replay(sqlite_session: Session) -> None:
+    service = WorkflowAssistConversationService(sqlite_session)
+    conversation = service.create(tenant_id="tenant-1", app_id="app-1", account_id="account-1")
+    conversation.contract_protocol_version = 1
+    sqlite_session.flush()
+    lease = service.acquire_run(conversation=conversation, run_id="r1")
+    graph = {"nodes": [], "edges": [], "viewport": {"x": 0.0, "y": 0.0, "zoom": 0.7}}
+
+    def save(revision: int, marker: str) -> bool:
+        contract_hash = marker * 64
+        return service.save_candidate_state(
+            conversation.id,
+            lease,
+            graph=graph,
+            revision=0,
+            base_hash=None,
+            compacted_until_sequence=None,
+            compacted_state=None,
+            contract_protocol_version=1,
+            workflow_contract={
+                "protocol_version": 1,
+                "revision": revision,
+                "contract_hash": contract_hash,
+                "status": "draft",
+            },
+            contract_revision=revision,
+            contract_hash=contract_hash,
+        )
+
+    assert save(2, "b") is False
+    assert save(1, "a") is True
+    assert save(1, "a") is True
+    assert save(1, "b") is False
+    assert save(2, "b") is True
+    assert save(1, "a") is False
+
+    sqlite_session.refresh(conversation)
+    assert conversation.contract_revision == 2
+    assert conversation.contract_hash == "b" * 64
+    assert conversation.candidate_revision == 0
+
+
+@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
+def test_contract_checkpoint_cannot_upgrade_a_legacy_conversation(sqlite_session: Session) -> None:
+    service = WorkflowAssistConversationService(sqlite_session)
+    conversation = service.create(tenant_id="tenant-1", app_id="app-1", account_id="account-1")
+    conversation.contract_protocol_version = None
+    sqlite_session.commit()
+    lease = service.acquire_run(conversation=conversation, run_id="r1")
+    graph = {"nodes": [], "edges": [], "viewport": {"x": 0.0, "y": 0.0, "zoom": 0.7}}
+    contract_hash = "a" * 64
+
+    updated = service.save_candidate_state(
+        conversation.id,
+        lease,
+        graph=graph,
+        revision=0,
+        base_hash=None,
+        compacted_until_sequence=None,
+        compacted_state=None,
+        contract_protocol_version=1,
+        workflow_contract={
+            "protocol_version": 1,
+            "revision": 1,
+            "contract_hash": contract_hash,
+            "status": "draft",
+        },
+        contract_revision=1,
+        contract_hash=contract_hash,
+    )
+
+    assert updated is False
+    sqlite_session.refresh(conversation)
+    assert conversation.contract_protocol_version is None
+    assert conversation.workflow_contract is None

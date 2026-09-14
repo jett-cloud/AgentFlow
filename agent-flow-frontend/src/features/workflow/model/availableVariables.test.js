@@ -15,7 +15,13 @@ import {
   toValueSelector,
   toValueSelectorFromPath,
   buildSpecialVarGroups,
+  buildDirectChildOutputGroups,
+  selectAvailableVariableGroups,
+  resolveAvailableVariable,
 } from './availableVariables.js'
+import { getContainerInnerVars, getNodeOutputVars, normalizeVarChildren } from './variableOutputs.js'
+import { isIterationArrayVariable } from '../nodes/iteration/iterationNode.js'
+import { isFilteredVariableSelectable, mapGroupsToPickerRows } from './objectChildTree.js'
 
 test('isSystemVar / isGlobalVar distinguish query/files from global sys vars', () => {
   assert.equal(isSystemVar(['sys', 'query']), true)
@@ -58,9 +64,13 @@ test('collectUsedSelectors finds value_selector arrays and {{#...#}} tokens', ()
 test('isSelectorAvailable accepts special prefixes and matching node outputs', () => {
   const groups = [
     { nodeId: 'llm', vars: [{ variable: 'text', type: 'string' }] },
+    { nodeId: 'global', vars: [{ variable: 'sys.user_id', type: 'string' }] },
+    { nodeId: 'start', vars: [{ variable: 'sys.files', type: 'arrayFile' }], isStartNode: true },
   ]
-  assert.equal(isSelectorAvailable(['sys', 'query'], groups), true)
-  assert.equal(isSelectorAvailable(['env', 'KEY'], groups), true)
+  assert.equal(isSelectorAvailable(['sys', 'query'], groups), false)
+  assert.equal(isSelectorAvailable(['sys', 'user_id'], groups), true)
+  assert.equal(isSelectorAvailable(['sys', 'files'], groups), true)
+  assert.equal(isSelectorAvailable(['env', 'KEY'], groups), false)
   assert.equal(isSelectorAvailable(['llm', 'text'], groups), true)
   assert.equal(isSelectorAvailable(['llm', 'missing'], groups), false)
   assert.equal(isSelectorAvailable(['other', 'text'], groups), false)
@@ -129,4 +139,146 @@ test('isSelectorAvailable matches nested children paths', () => {
   }]
   assert.equal(isSelectorAvailable(['http', 'files', 'name'], groups), true)
   assert.equal(isSelectorAvailable(['http', 'files', 'missing'], groups), false)
+})
+
+test('collectUsedSelectors skips constants, schema lists, and multi-selector query', () => {
+  const found = collectUsedSelectors({
+    dataset_ids: ['dataset-a', 'dataset-b'],
+    required: ['question', 'answer'],
+    tool_parameters: {
+      q: { type: 'constant', value: '{{#start.query#}}' },
+      src: { type: 'variable', value: ['code', 'result'] },
+    },
+    query: [['llm_a', 'text'], ['llm_b', 'text']],
+    variables: [['branch_a', 'text']],
+  })
+  const keys = found.map(s => s.join('.')).sort()
+  assert.deepEqual(keys, ['branch_a.text', 'code.result'])
+})
+
+test('isSelectorAvailable allows object drill-down and rejects arrayObject', () => {
+  const groups = [{
+    nodeId: 'iter',
+    vars: [
+      { variable: 'item', type: 'object' },
+      { variable: 'rows', type: 'arrayObject' },
+    ],
+  }]
+  assert.equal(isSelectorAvailable(['iter', 'item', 'question'], groups), true)
+  assert.equal(isSelectorAvailable(['iter', 'rows', 'question'], groups), false)
+})
+
+test('loop inner vars use labels and var_type, not synthetic item/index', () => {
+  const loop = {
+    id: 'loop1',
+    data: {
+      type: 'loop',
+      loop_variables: [
+        { label: 'acc', var_type: 'number', value_type: 'constant', value: 0 },
+      ],
+    },
+  }
+  const inner = getContainerInnerVars(loop)
+  assert.deepEqual(inner.map(v => v.variable), ['acc'])
+  assert.equal(inner[0].type, 'number')
+  const outputs = getNodeOutputVars(loop)
+  assert.deepEqual(outputs.map(v => v.variable), ['acc'])
+  assert.equal(outputs[0].type, 'number')
+})
+
+test('iteration item type comes from iterator element type', () => {
+  const nodes = [
+    {
+      id: 'code1',
+      data: { type: 'code', outputs: { rows: { type: 'array[object]', children: { question: { type: 'string' } } } } },
+    },
+    {
+      id: 'iter1',
+      data: { type: 'iteration', iterator_selector: ['code1', 'rows'] },
+    },
+  ]
+  const inner = getContainerInnerVars(nodes[1], { nodes })
+  const item = inner.find(v => v.variable === 'item')
+  assert.equal(item.type, 'object')
+  assert.ok(item.children?.some(child => child.variable === 'question'))
+})
+
+test('container output scope contains direct children but not outside nodes', () => {
+  const container = { id: 'iter-1', data: { type: 'iteration' } }
+  const groups = buildDirectChildOutputGroups(container, [
+    { id: 'inside', parentId: 'iter-1', data: { type: 'code', title: '内部代码', outputs: { result: { type: 'string' } } } },
+    { id: 'outside', data: { type: 'code', title: '外部代码', outputs: { result: { type: 'string' } } } },
+  ])
+  assert.deepEqual(groups.map(group => group.nodeId), ['inside'])
+})
+
+test('direct-child picker scope excludes upstream and special groups', () => {
+  const nodeGroups = [{ nodeId: 'outside' }]
+  const directChildGroups = [{ nodeId: 'inside' }]
+  const specialGroups = [{ nodeId: 'global' }]
+  assert.deepEqual(selectAvailableVariableGroups({
+    nodeGroups,
+    directChildGroups,
+    specialGroups,
+    includeDirectChildren: true,
+  }).map(group => group.nodeId), ['inside'])
+  assert.deepEqual(selectAvailableVariableGroups({
+    nodeGroups,
+    directChildGroups,
+    specialGroups,
+    includeDirectChildren: false,
+  }).map(group => group.nodeId), ['outside', 'global'])
+})
+
+test('normalizeVarChildren reads code output maps and ignores a Var-shaped object', () => {
+  const fromCode = normalizeVarChildren({ question: { type: 'string' }, answer: { type: 'string' } })
+  assert.deepEqual(fromCode.map(v => v.variable), ['question', 'answer'])
+  assert.deepEqual(
+    normalizeVarChildren({ variable: 'row', type: 'object' }),
+    [],
+  )
+})
+
+test('resolveAvailableVariable returns metadata for direct and nested selectors', () => {
+  const groups = [{
+    nodeId: 'code-1',
+    vars: [{
+      variable: 'rows',
+      type: 'arrayObject',
+      children: [{ variable: 'score', type: 'number' }],
+    }],
+  }, {
+    nodeId: 'sys',
+    vars: [{ variable: 'sys.files', type: 'arrayFile' }],
+  }]
+
+  assert.equal(resolveAvailableVariable(['code-1', 'rows'], groups)?.type, 'arrayObject')
+  assert.equal(resolveAvailableVariable(['code-1', 'rows', 'score'], groups)?.type, 'number')
+  assert.equal(resolveAvailableVariable(['sys', 'files'], groups)?.type, 'arrayFile')
+  assert.equal(resolveAvailableVariable(['code-1', 'missing'], groups), null)
+})
+
+test('array filter keeps object ancestors so nested array fields stay pickable', () => {
+  const groups = [{
+    nodeId: 'start',
+    title: 'Start',
+    vars: [{
+      variable: 'payload',
+      type: 'object',
+      children: [
+        { variable: 'items', type: 'array[number]' },
+        { variable: 'title', type: 'string' },
+      ],
+    }],
+  }]
+  const filtered = filterVarGroupsByType(groups, { filterVar: isIterationArrayVariable })
+  const picker = mapGroupsToPickerRows(filtered)
+  assert.equal(picker[0].rows[0].variable, 'payload')
+  assert.equal(isFilteredVariableSelectable(picker[0].rows[0], isIterationArrayVariable), false)
+  assert.deepEqual(
+    (picker[0].rows[0].children || []).map(child => child.variable),
+    ['items'],
+  )
+  const droppedByRootFilter = (filtered[0].vars || []).filter(isIterationArrayVariable)
+  assert.equal(droppedByRootFilter.length, 0)
 })

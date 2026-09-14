@@ -61,17 +61,31 @@ export function refreshMcpProviderTools(providerId) {
   )
 }
 
+export function fetchApiTools(config) {
+  return difyClient.get('/workspaces/current/tools/api', config)
+}
+
+export function fetchWorkflowTools(config) {
+  return difyClient.get('/workspaces/current/tools/workflow', config)
+}
+
 export async function fetchAllTools(fetchers = {
   builtin: fetchBuiltinTools,
+  api: fetchApiTools,
+  workflow: fetchWorkflowTools,
   mcp: fetchMcpTools,
 }) {
   const silent = { silent: true }
-  const [builtin, mcp] = await Promise.all([
+  const [builtin, api, workflow, mcp] = await Promise.all([
     fetchers.builtin?.(silent).catch(() => []) ?? [],
+    fetchers.api?.(silent).catch(() => []) ?? [],
+    fetchers.workflow?.(silent).catch(() => []) ?? [],
     fetchers.mcp?.(silent).catch(() => []) ?? [],
   ])
   return {
     builtin: unwrapList(builtin),
+    api: unwrapList(api),
+    workflow: unwrapList(workflow),
     mcp: unwrapList(mcp),
   }
 }

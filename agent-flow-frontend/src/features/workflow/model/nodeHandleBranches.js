@@ -1,3 +1,5 @@
+import { getHumanInputBranches } from '../nodes/human-input/humanInputNode.js'
+
 const TERMINAL_TYPES = new Set(['end', 'loop-end', 'note', 'start-placeholder'])
 
 function branch(id, name = '', kind = 'normal') {
@@ -19,32 +21,29 @@ function resolveClassifierBranches(data) {
 }
 
 function resolveIfElseBranches(data) {
-  const runtimeBranches = data._targetBranches
-  if (Array.isArray(runtimeBranches) && runtimeBranches.length) {
-    return normalizeBranches(runtimeBranches, (index, item) => {
-      if (item.id === 'false') return 'ELSE'
-      return index === 0 ? 'IF' : `ELIF ${index}`
-    })
+  const caseItems = Array.isArray(data.cases) ? data.cases : []
+  if (caseItems.length) {
+    const cases = caseItems
+      .filter(item => item?.case_id != null && item.case_id !== '')
+      .map((item, index) => branch(
+        item.case_id,
+        caseItems.length === 1 ? 'IF' : `CASE ${index + 1}`,
+      ))
+    return [...cases, branch('false', 'ELSE')]
   }
-  const cases = (data.cases || []).map((item, index) => branch(
-    item.case_id,
-    index === 0 ? 'IF' : `ELIF ${index}`,
-  ))
-  return [...cases, branch('false', 'ELSE')]
+
+  const runtimeBranches = data._targetBranches
+  if (Array.isArray(runtimeBranches) && runtimeBranches.length)
+    return normalizeBranches(runtimeBranches, (index, item) => item.id === 'false' ? 'ELSE' : index === 0 ? 'IF' : `CASE ${index + 1}`)
+  return [branch('true', 'IF'), branch('false', 'ELSE')]
 }
 
 function resolveHumanInputBranches(data) {
-  const runtimeBranches = data._targetBranches
-  if (Array.isArray(runtimeBranches) && runtimeBranches.length) {
-    return normalizeBranches(runtimeBranches, (_index, item) => item.id)
-  }
-  const actions = (data.user_actions || []).map(item => branch(
-    item.id,
-    item.title || item.name || item.id,
-  ))
-  if (data.timeout != null)
-    actions.push(branch('__timeout', 'Timeout (超时)'))
-  return actions
+  return getHumanInputBranches(data).map(item => ({
+    id: item.id,
+    name: item.name,
+    kind: 'normal',
+  }))
 }
 
 function hasFailureBranch(data) {
@@ -73,14 +72,38 @@ export function getRemovedOutputHandleIds(previousData = {}, nextData = {}) {
     .filter(id => !nextIds.has(id))
 }
 
+export function getRenamedOutputHandles(previousData = {}, nextData = {}) {
+  const previousIds = getNodeOutputBranches(previousData).map(item => item.id)
+  const nextIds = getNodeOutputBranches(nextData).map(item => item.id)
+  const removed = previousIds.filter(id => !nextIds.includes(id) && id !== '__timeout')
+  const added = nextIds.filter(id => !previousIds.includes(id) && id !== '__timeout')
+  if (removed.length === 1 && added.length === 1)
+    return [{ from: removed[0], to: added[0] }]
+  return []
+}
+
 export function getEdgesAfterNodeDataUpdate({
   nodeId,
   previousData,
   nextData,
   edges = [],
 }) {
-  const removedHandles = new Set(getRemovedOutputHandleIds(previousData, nextData))
-  const removedEdgeIds = edges
+  const renamedHandles = getRenamedOutputHandles(previousData, nextData)
+  const renameMap = new Map(renamedHandles.map(item => [item.from, item.to]))
+  const remappedEdges = []
+  const edgesAfterRename = edges.map((edge) => {
+    if (edge.source !== nodeId)
+      return edge
+    const nextHandle = renameMap.get(edge.sourceHandle || 'source')
+    if (!nextHandle)
+      return edge
+    const nextEdge = { ...edge, sourceHandle: nextHandle }
+    remappedEdges.push({ id: edge.id, sourceHandle: nextHandle })
+    return nextEdge
+  })
+
+  const removedHandles = new Set(getRemovedOutputHandleIds(previousData, nextData).filter(id => !renameMap.has(id)))
+  const removedEdgeIds = edgesAfterRename
     .filter(edge => edge.source === nodeId && removedHandles.has(edge.sourceHandle || 'source'))
     .map(edge => edge.id)
   const removedEdgeIdSet = new Set(removedEdgeIds)
@@ -89,7 +112,7 @@ export function getEdgesAfterNodeDataUpdate({
       .filter(edge => removedEdgeIdSet.has(edge.id))
       .map(edge => edge.target),
   )]
-  const remainingEdges = edges.filter(edge => !removedEdgeIdSet.has(edge.id))
+  const remainingEdges = edgesAfterRename.filter(edge => !removedEdgeIdSet.has(edge.id))
   const connectedSourceHandleIds = [...new Set(
     remainingEdges
       .filter(edge => edge.source === nodeId)
@@ -99,6 +122,7 @@ export function getEdgesAfterNodeDataUpdate({
   return {
     edges: remainingEdges,
     removedEdgeIds,
+    remappedEdges,
     affectedTargetIds,
     connectedSourceHandleIds,
   }

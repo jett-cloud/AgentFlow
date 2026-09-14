@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from core.workflow.generator.llm_response import (
+from core.workflow.generator.model_io.llm_response import (
     LLMJsonClient,
     StageSchemaError,
     chunk_finish_reason,
@@ -28,7 +28,7 @@ def _chunk(text: str, finish_reason: str | None = None) -> LLMResultChunk:
 
 
 def test_interrupted_stream_discards_partial_attempt(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("core.workflow.generator.llm_response.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("core.workflow.generator.model_io.llm_response.time.sleep", lambda _seconds: None)
     attempts = 0
 
     def invoke_llm(**_kwargs):
@@ -140,7 +140,7 @@ class TestWorkflowGeneratorTransientRetry:
         # The planner's first invoke raises a transient connection error; the
         # retry succeeds and the pipeline completes normally. Sleep is patched
         # out so the test doesn't actually wait for the backoff.
-        import core.workflow.generator.llm_response as _runner_mod
+        import core.workflow.generator.model_io.llm_response as _runner_mod
         from graphon.model_runtime.errors.invoke import InvokeConnectionError
 
         monkeypatch.setattr(_runner_mod.time, "sleep", lambda _s: None)
@@ -173,7 +173,7 @@ class TestWorkflowGeneratorTransientRetry:
         assert model_instance.invoke_llm.call_count == 4
 
     def test_midstream_retry_discards_partial_attempt_before_parsing(self, monkeypatch: pytest.MonkeyPatch):
-        import core.workflow.generator.llm_response as _runner_mod
+        import core.workflow.generator.model_io.llm_response as _runner_mod
         from graphon.model_runtime.errors.invoke import InvokeConnectionError
 
         monkeypatch.setattr(_runner_mod.time, "sleep", lambda _s: None)
@@ -215,7 +215,7 @@ class TestWorkflowGeneratorTransientRetry:
         # Every attempt hits the transient error — once we exhaust the retry
         # budget the failure surfaces as a normal error envelope rather than
         # hanging or looping forever.
-        import core.workflow.generator.llm_response as _runner_mod
+        import core.workflow.generator.model_io.llm_response as _runner_mod
         from graphon.model_runtime.errors.invoke import InvokeServerUnavailableError
 
         monkeypatch.setattr(_runner_mod.time, "sleep", lambda _s: None)
@@ -235,7 +235,7 @@ class TestWorkflowGeneratorTransientRetry:
 
         assert result["error"]
         # Bounded: planner attempts == the retry budget, nothing more.
-        from core.workflow.generator.llm_response import INVOKE_MAX_ATTEMPTS as _INVOKE_MAX_ATTEMPTS
+        from core.workflow.generator.model_io.llm_response import INVOKE_MAX_ATTEMPTS as _INVOKE_MAX_ATTEMPTS
 
         assert model_instance.invoke_llm.call_count == _INVOKE_MAX_ATTEMPTS
 
@@ -244,7 +244,7 @@ class TestWorkflowGeneratorTransientRetry:
         # The runner must fail on the first attempt.
         # If the code wrongly slept here we'd want the test to still be fast;
         # patch sleep defensively so a regression can't hang CI.
-        import core.workflow.generator.llm_response as _runner_mod
+        import core.workflow.generator.model_io.llm_response as _runner_mod
         from graphon.model_runtime.errors.invoke import InvokeAuthorizationError
 
         monkeypatch.setattr(_runner_mod.time, "sleep", lambda _s: None)
@@ -270,12 +270,12 @@ class TestJsonFailureDetail:
     """``_json_failure_detail`` must name the empty case and quote prose."""
 
     def test_blank_response_names_the_empty_case(self):
-        from core.workflow.generator.llm_response import json_failure_detail as _json_failure_detail
+        from core.workflow.generator.model_io.llm_response import json_failure_detail as _json_failure_detail
 
         assert _json_failure_detail("   \n  ") == "empty model response (0 chars)"
 
     def test_prose_response_quotes_a_preview(self):
-        from core.workflow.generator.llm_response import json_failure_detail as _json_failure_detail
+        from core.workflow.generator.model_io.llm_response import json_failure_detail as _json_failure_detail
 
         detail = _json_failure_detail("好的，我来帮你规划这个工作流。")
         assert "no JSON object in response" in detail
@@ -283,7 +283,7 @@ class TestJsonFailureDetail:
         assert "(15 chars)" in detail
 
     def test_preview_collapses_whitespace_and_truncates(self):
-        from core.workflow.generator.llm_response import json_failure_detail as _json_failure_detail
+        from core.workflow.generator.model_io.llm_response import json_failure_detail as _json_failure_detail
 
         detail = _json_failure_detail("first line\n\n   second line" + "x" * 500)
         assert "first line second line" in detail
@@ -295,34 +295,34 @@ class TestParseStageJson:
     """``_parse_stage_json`` recovers the response shapes json_repair alone rejects."""
 
     def test_plain_object_parses(self):
-        from core.workflow.generator.llm_response import parse_stage_json as _parse_stage_json
+        from core.workflow.generator.model_io.llm_response import parse_stage_json as _parse_stage_json
 
         assert _parse_stage_json('{"nodes": []}') == {"nodes": []}
 
     def test_reasoning_block_is_stripped_before_parsing(self):
-        from core.workflow.generator.llm_response import parse_stage_json as _parse_stage_json
+        from core.workflow.generator.model_io.llm_response import parse_stage_json as _parse_stage_json
 
         raw = '<think>先看看用户想要什么 {不是JSON}</think>\n{"nodes": [1]}'
         assert _parse_stage_json(raw) == {"nodes": [1]}
 
     def test_unclosed_reasoning_block_leaves_nothing_to_parse(self):
-        from core.workflow.generator.llm_response import parse_stage_json as _parse_stage_json
+        from core.workflow.generator.model_io.llm_response import parse_stage_json as _parse_stage_json
 
         assert _parse_stage_json("<think>思考被 max_tokens 截断了，还没开始输出") is None
 
     def test_duplicated_objects_take_the_richest_one(self):
-        from core.workflow.generator.llm_response import parse_stage_json as _parse_stage_json
+        from core.workflow.generator.model_io.llm_response import parse_stage_json as _parse_stage_json
 
         raw = '{"nodes": []}{"nodes": [1], "edges": [2], "title": "t"}'
         assert _parse_stage_json(raw) == {"nodes": [1], "edges": [2], "title": "t"}
 
     def test_prose_without_braces_returns_none(self):
-        from core.workflow.generator.llm_response import parse_stage_json as _parse_stage_json
+        from core.workflow.generator.model_io.llm_response import parse_stage_json as _parse_stage_json
 
         assert _parse_stage_json("好的，我来帮你规划这个工作流。") is None
 
     def test_blank_returns_none(self):
-        from core.workflow.generator.llm_response import parse_stage_json as _parse_stage_json
+        from core.workflow.generator.model_io.llm_response import parse_stage_json as _parse_stage_json
 
         assert _parse_stage_json("   ") is None
 
@@ -373,7 +373,7 @@ class TestModelMaxOutputTokens:
     """Reading the model's declared output ceiling must never break generation."""
 
     def test_reads_the_declared_max_tokens_rule(self):
-        from core.workflow.generator.llm_response import model_max_output_tokens as _model_max_output_tokens
+        from core.workflow.generator.model_io.llm_response import model_max_output_tokens as _model_max_output_tokens
 
         model_instance = MagicMock()
         model_instance.get_model_schema.return_value.parameter_rules = [
@@ -384,7 +384,7 @@ class TestModelMaxOutputTokens:
         assert _model_max_output_tokens(model_instance) == 16384
 
     def test_returns_none_when_the_rule_is_absent(self):
-        from core.workflow.generator.llm_response import model_max_output_tokens as _model_max_output_tokens
+        from core.workflow.generator.model_io.llm_response import model_max_output_tokens as _model_max_output_tokens
 
         model_instance = MagicMock()
         model_instance.get_model_schema.return_value.parameter_rules = [
@@ -394,7 +394,7 @@ class TestModelMaxOutputTokens:
         assert _model_max_output_tokens(model_instance) is None
 
     def test_returns_none_when_the_rule_declares_no_max(self):
-        from core.workflow.generator.llm_response import model_max_output_tokens as _model_max_output_tokens
+        from core.workflow.generator.model_io.llm_response import model_max_output_tokens as _model_max_output_tokens
 
         model_instance = MagicMock()
         model_instance.get_model_schema.return_value.parameter_rules = [
@@ -404,7 +404,7 @@ class TestModelMaxOutputTokens:
         assert _model_max_output_tokens(model_instance) is None
 
     def test_schema_lookup_failure_is_swallowed(self):
-        from core.workflow.generator.llm_response import model_max_output_tokens as _model_max_output_tokens
+        from core.workflow.generator.model_io.llm_response import model_max_output_tokens as _model_max_output_tokens
 
         model_instance = MagicMock()
         model_instance.get_model_schema.side_effect = RuntimeError("plugin daemon unreachable")
@@ -412,7 +412,7 @@ class TestModelMaxOutputTokens:
         assert _model_max_output_tokens(model_instance) is None
 
     def test_model_without_the_method_is_tolerated(self):
-        from core.workflow.generator.llm_response import model_max_output_tokens as _model_max_output_tokens
+        from core.workflow.generator.model_io.llm_response import model_max_output_tokens as _model_max_output_tokens
 
         class _BareModel:
             pass

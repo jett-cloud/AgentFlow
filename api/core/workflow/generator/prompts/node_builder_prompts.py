@@ -11,41 +11,21 @@ from typing import Any
 
 from core.workflow.generator.prompts.builder_prompts import get_node_config_snippet
 
-_CONTAINER_CONFIG_SNIPPETS = {
-    "iteration": """- iteration:
-    {"iterator_selector": ["<src>", "<list-var>"],
-     "output_selector": ["<last-child>", "<out-var>"],
-     "is_parallel": false, "parallel_nums": 10,
-     "error_handle_mode": "terminated", "flatten_output": true}
-    The runner supplies start_node_id, child wrappers, and the synthetic start node.""",
-    "loop": """- loop:
-    {"break_conditions": [{"id": "c1",
-                            "variable_selector": ["<child>", "<var>"],
-                            "comparison_operator": "is",
-                            "value": "<value>"}],
-     "loop_count": 10, "logical_operator": "and"}
-    The runner supplies start_node_id, child wrappers, and the synthetic start node.""",
-}
-
-_NODE_BUILDER_HEAD = """You configure exactly ONE node in a Dify workflow.
+_NODE_BUILDER_HEAD = """Configure exactly one Dify workflow node.
 
 # Output language
 
-Use the output language named in the user prompt for all user-visible node
-content. Keep schema keys, identifiers, selector values, and required literals unchanged.
+Use the requested language for user-visible content; never translate schema keys,
+identifiers, selectors, or literals.
 
-Return one JSON object with exactly this shape: {"config": {...}}.
-``config`` contains only node-type-specific ``data`` fields. Do NOT repeat id,
-type, title, desc, selected, position, wrapper fields, edges, or viewport.
+Return only {"config": {...}} with node data. Omit graph/wrapper fields.
 
 Rules:
-- Use only ids from the supplied normalized plan.
-- Placeholder strings use ``{{#node_id.variable#}}``; selector fields use
-  ``["node_id", "variable"]``. Never invent an upstream output.
-- Use the selected model verbatim for llm, question-classifier, and
-  parameter-extractor nodes.
-- Keep prompts/code concise but complete for the user's requested behavior.
-- Emit strict JSON only: no prose, Markdown, comments, or trailing commas.
+- Purpose is the spec; preserve its variable references.
+- Placeholders use ``{{#node_id.variable#}}``; selectors use ``["node_id", "variable"]``.
+- Confirmed outputs exist; provisional ones are same-batch. Never invent IDs.
+- Copy the selected model where required.
+- Keep prompts/code complete; emit strict JSON.
 
 # Target node schema
 
@@ -76,7 +56,7 @@ Return {{"config": {{...}}}} for target node {node_id} now.
 
 def get_node_builder_system_prompt(node_type: str) -> str:
     """Build a one-node prompt containing only that node's semantic schema."""
-    snippet = _CONTAINER_CONFIG_SNIPPETS.get(node_type) or get_node_config_snippet(node_type)
+    snippet = get_node_config_snippet(node_type)
     return _NODE_BUILDER_HEAD + (snippet or f"- {node_type}: emit the minimum valid config fields.")
 
 
@@ -136,7 +116,7 @@ def format_start_inputs_section(start_inputs: list[dict[str, Any]]) -> str:
 
 
 def format_tool_catalogue_section(catalogue_text: str) -> str:
-    """Render exact tool identifiers for a tool-node builder only."""
+    """Render exact short identifiers for legacy Tool or selected Agent tools."""
     if not catalogue_text.strip():
         return ""
     return (

@@ -14,9 +14,7 @@ them up at runtime, not by this facade.
 
 from core.db.session_factory import session_factory
 from core.workflow.generator.agent.loop import iter_agent_events
-from core.workflow.generator.agent.tools import ToolContext
-from core.workflow.generator.knowledge_catalogue import build_knowledge_catalogue
-from core.workflow.generator.tool_catalogue import build_tool_catalogue
+from core.workflow.generator.agent.tools.tools import ToolContext
 from services.workflow_assist.agent_initializer import (
     CHAT_SYSTEM_PROMPT,
     ChatRunLimits,
@@ -47,6 +45,8 @@ from services.workflow_assist.chat_persistence import (
     persist_user_turn,
 )
 from services.workflow_assist.hydrate import hydrate_agent_bindings
+from services.workflow_assist.knowledge_catalogue_loader import build_knowledge_catalogue
+from services.workflow_assist.tool_catalogue_loader import build_tool_catalogue
 
 __all__ = [
     "CHAT_SYSTEM_PROMPT",

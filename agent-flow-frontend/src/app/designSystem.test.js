@@ -28,7 +28,7 @@ test('three landing pages share the same product page heading structure', () => 
   const datasets = read('../features/datasets/pages/DatasetListPage.vue')
 
   assert.match(workflow, /class="page-header"/)
-  assert.match(workflow, /<h1>CoPilot 协同设计<\/h1>/)
+  assert.match(workflow, /<h1>工作流编排<\/h1>/)
   assert.match(integrations, /class="page-header"/)
   assert.match(datasets, /class="page-header"/)
 })

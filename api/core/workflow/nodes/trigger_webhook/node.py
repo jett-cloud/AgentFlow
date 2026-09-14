@@ -3,8 +3,8 @@ from collections.abc import Mapping
 from typing import Any, override
 
 from core.trigger.constants import TRIGGER_WEBHOOK_NODE_TYPE
-from core.workflow.file_reference import resolve_file_record_id
-from core.workflow.variable_prefixes import SYSTEM_VARIABLE_NODE_ID
+from core.workflow.runtime.adapters.file_reference import resolve_file_record_id
+from core.workflow.runtime.variables.variable_prefixes import SYSTEM_VARIABLE_NODE_ID
 from factories.variable_factory import build_segment_with_type
 from graphon.enums import NodeExecutionType, WorkflowNodeExecutionStatus
 from graphon.file import FileTransferMethod
@@ -27,7 +27,7 @@ class TriggerWebhookNode(Node[WebhookData]):
 
     @override
     def post_init(self) -> None:
-        from core.workflow.node_runtime import DifyFileReferenceFactory
+        from core.workflow.runtime.adapters.files import DifyFileReferenceFactory
 
         self._file_reference_factory = DifyFileReferenceFactory(self.run_context)
 

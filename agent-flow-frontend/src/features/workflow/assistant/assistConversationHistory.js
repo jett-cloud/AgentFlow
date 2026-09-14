@@ -134,7 +134,18 @@ function assistantEventMessages(events, failed, language) {
         message: error.message,
       }, language)
     }
-    return [...failAssistActivity(activity), ...replies, ...plans]
+    const failedMessages = failAssistActivity(activity)
+    if (failedMessages.length)
+      return [...failedMessages, ...replies, ...plans]
+    return [{
+      role: 'assistant',
+      kind: 'activity',
+      status: 'failed',
+      message: String(error?.message || ''),
+      items: [],
+      collapsed: false,
+      streaming: false,
+    }, ...replies, ...plans]
   }
   return [...finalizeAssistStreamMessages(activity), ...replies, ...plans]
 }
@@ -143,7 +154,7 @@ function semanticMessageKey(message) {
   if (message?.turnKey?.startsWith('clarification-answer:'))
     return message.turnKey
   if (message?.role === 'user')
-    return `user:${String(message.text || '').trim()}`
+    return message.turnKey || `user:${String(message.text || '').trim()}`
   if (message?.kind === 'clarification')
     return `clarification:${message.clarification?.clarification_id || ''}`
   if (message?.kind === 'activity')
@@ -175,38 +186,79 @@ function deduplicateMessages(messages) {
   })
 }
 
+function appendHistoryRecord(messages, record, pendingClarification, language) {
+  const payload = record?.payload || {}
+  if (record?.role === 'user')
+    return [...messages, ...userMessages(record, payload)]
+  if (record?.event_type === 'clarification') {
+    const pending = pendingClarification?.clarification_id === payload.clarification_id
+    return [...messages, {
+      role: 'assistant',
+      kind: 'clarification',
+      clarification: payload,
+      status: pending ? 'pending' : 'resolved',
+      resolved: !pending,
+    }]
+  }
+  if (record?.event_type === 'tool_call' && payload.name === 'ask_user' && record.status === 'pending') {
+    return [...messages, {
+      role: 'assistant',
+      kind: 'clarification',
+      clarification: {
+        clarification_id: payload.id || record.id,
+        questions: payload.arguments?.questions || payload.questions || [],
+      },
+      status: 'pending',
+      resolved: false,
+    }]
+  }
+  if (record?.event_type === 'tool_call' && payload.name !== 'ask_user') {
+    return applyAssistStreamEvent(messages, {
+      event: 'tool_call',
+      tool_call_id: payload.id || payload.tool_call_id,
+      name: payload.name,
+      arguments: payload.arguments && typeof payload.arguments === 'object' ? payload.arguments : {},
+    }, language, { mode: 'hydrate' })
+  }
+  if (record?.event_type === 'tool_result') {
+    const content = payload.content
+    const summary = typeof content === 'string'
+      ? content
+      : (content && typeof content === 'object' ? String(content.summary || content.message || '') : '')
+    return applyAssistStreamEvent(messages, {
+      event: 'tool_result',
+      tool_call_id: payload.tool_call_id,
+      name: payload.name,
+      ok: payload.ok,
+      error: payload.error,
+      summary,
+    }, language, { mode: 'hydrate' })
+  }
+  if (record?.event_type === 'message' && record?.role === 'assistant') {
+    const text = String(payload.text || payload.message || '')
+    const reasoning = String(payload.reasoning || '')
+    if (!text && !reasoning)
+      return messages
+    return [...messages, {
+      role: 'assistant',
+      kind: 'assistant_text',
+      text,
+      reasoning,
+      message_id: payload.message_id || record.id,
+      streaming: false,
+      turnKey: record?.id ? `message:${record.id}` : undefined,
+    }]
+  }
+  const events = Array.isArray(payload.events) ? payload.events : []
+  const failed = record?.status === 'failed' || events.some(event => event?.event === 'error')
+  return [...messages, ...assistantEventMessages(events, failed, language)]
+}
+
 export function buildAssistHistoryMessages(records, pendingClarification = null, language = 'zh-Hans') {
-  const messages = uniqueRecords(records).flatMap((record) => {
-    const payload = record?.payload || {}
-    if (record?.role === 'user')
-      return userMessages(record, payload)
-    if (record?.event_type === 'clarification') {
-      const pending = pendingClarification?.clarification_id === payload.clarification_id
-      return [{
-        role: 'assistant',
-        kind: 'clarification',
-        clarification: payload,
-        status: pending ? 'pending' : 'resolved',
-        resolved: !pending,
-      }]
-    }
-    if (record?.event_type === 'tool_call' && payload.name === 'ask_user' && record.status === 'pending') {
-      return [{
-        role: 'assistant',
-        kind: 'clarification',
-        clarification: {
-          clarification_id: payload.id || record.id,
-          questions: payload.arguments?.questions || payload.questions || [],
-        },
-        status: 'pending',
-        resolved: false,
-      }]
-    }
-    const events = Array.isArray(payload.events) ? payload.events : []
-    const failed = record?.status === 'failed' || events.some(event => event?.event === 'error')
-    return assistantEventMessages(events, failed, language)
-  })
-  return deduplicateMessages(messages)
+  let messages = []
+  for (const record of uniqueRecords(records))
+    messages = appendHistoryRecord(messages, record, pendingClarification, language)
+  return deduplicateMessages(finalizeAssistStreamMessages(messages))
 }
 
 export function formatAssistConversationTimestamp(value, language = 'zh-Hans') {

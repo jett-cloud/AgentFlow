@@ -1,6 +1,5 @@
 """Node-id sanitization and reference-rewrite tests."""
 
-
 from ._runner_test_support import (
     Any,
     VariableReferences,
@@ -253,3 +252,23 @@ class TestWorkflowGeneratorIdSanitization:
         assert new_id
         assert new_id != "节点"
         assert edges[0]["source"] == new_id
+
+    def test_rewrites_nested_selector_node_id(self):
+        nodes = [
+            {"id": "node-iter", "data": {"type": "iteration"}},
+            {
+                "id": "child",
+                "parentId": "node-iter",
+                "data": {
+                    "type": "knowledge-retrieval",
+                    "query_variable_selector": ["node-iter", "item", "question"],
+                },
+            },
+        ]
+        edges: list[dict[str, Any]] = []
+
+        VariableReferences._sanitize_node_ids(nodes=nodes, edges=edges)
+
+        assert nodes[0]["id"] == "nodeiter"
+        assert nodes[1]["parentId"] == "nodeiter"
+        assert nodes[1]["data"]["query_variable_selector"] == ["nodeiter", "item", "question"]

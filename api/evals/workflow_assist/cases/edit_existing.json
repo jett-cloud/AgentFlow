@@ -2,9 +2,9 @@
   "instruction": "只改检索节点的提示",
   "initial_graph": {
     "nodes": [
-      {"id": "start", "data": {"type": "start", "title": "开始", "desc": "", "variables": []}},
-      {"id": "kr", "data": {"type": "knowledge-retrieval", "title": "检索", "desc": "", "dataset_ids": ["ds-1"]}},
-      {"id": "end", "data": {"type": "end", "title": "结束", "desc": ""}},
+      {"id": "start", "data": {"type": "start", "title": "开始", "desc": "", "variables": [{"variable": "query", "label": "query", "type": "text-input"}]}},
+      {"id": "kr", "data": {"type": "knowledge-retrieval", "title": "检索", "desc": "", "dataset_ids": ["ds-1"], "query_variable_selector": ["start", "query"], "query_attachment_selector": [], "retrieval_mode": "multiple", "multiple_retrieval_config": {"top_k": 4, "score_threshold": null, "reranking_enable": false}}},
+      {"id": "end", "data": {"type": "end", "title": "结束", "desc": "", "outputs": [{"variable": "answer", "value_selector": ["kr", "result"], "value_type": "array[object]"}]}},
       {"id": "extra", "data": {"type": "llm", "title": "多余", "desc": ""}}
     ],
     "edges": [

@@ -207,16 +207,21 @@ function renderMarkdownFragment(text) {
     return `\u0000CODE${index}\u0000`
   })
 
-  // Inline code: `code`
-  html = html.replace(/`([^`]+)`/g, '<code class="markdown-inline-code">$1</code>')
+  // Keep inline code out of all later emphasis/link substitutions.
+  const inlineCodes = []
+  html = html.replace(/`([^`]+)`/g, (_match, code) => {
+    const index = inlineCodes.length
+    inlineCodes.push(`<code class="markdown-inline-code">${code}</code>`)
+    return `\u0000INLINECODE${index}\u0000`
+  })
 
   // Bold: **text** or __text__
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-  html = html.replace(/__([^_]+)__/g, '<strong>$1</strong>')
+  html = html.replace(/(?<![\p{L}\p{N}_])__([^_]+)__(?![\p{L}\p{N}_])/gu, '<strong>$1</strong>')
 
   // Italic: *text* or _text_
   html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>')
-  html = html.replace(/_([^_]+)_/g, '<em>$1</em>')
+  html = html.replace(/(?<![\p{L}\p{N}_])_([^_]+)_(?![\p{L}\p{N}_])/gu, '<em>$1</em>')
 
   // Links: [text](url)
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, p1, p2) => {
@@ -304,6 +309,7 @@ function renderMarkdownFragment(text) {
 
   // Restore fenced code blocks
   finalHtml = finalHtml.replace(/\u0000CODE(\d+)\u0000/g, (_m, index) => codeBlocks[Number(index)] || '')
+  finalHtml = finalHtml.replace(/\u0000INLINECODE(\d+)\u0000/g, (_m, index) => inlineCodes[Number(index)] || '')
 
   // Restore KaTeX (trusted HTML from katex.renderToString)
   return restoreMathSlots(finalHtml, mathSlots)

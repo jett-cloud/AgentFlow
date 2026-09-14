@@ -1,6 +1,5 @@
 """Container and refine-mode integration tests for node building."""
 
-
 from ._runner_test_support import (
     WorkflowGenerator,
     _GraphFixtureModel,
@@ -202,7 +201,17 @@ class TestWorkflowGeneratorRefine:
                     "id": "node3",
                     "type": "custom",
                     "position": {"x": 0, "y": 0},
-                    "data": {"type": "end", "title": "End", "outputs": []},
+                    "data": {
+                        "type": "end",
+                        "title": "End",
+                        "outputs": [
+                            {
+                                "variable": "result",
+                                "value_selector": ["node2", "text"],
+                                "value_type": "string",
+                            }
+                        ],
+                    },
                 },
             ],
             "edges": [

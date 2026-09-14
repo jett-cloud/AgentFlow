@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from typing import Any, override
 
 from core.trigger.constants import TRIGGER_PLUGIN_NODE_TYPE
-from core.workflow.variable_prefixes import SYSTEM_VARIABLE_NODE_ID
+from core.workflow.runtime.variables.variable_prefixes import SYSTEM_VARIABLE_NODE_ID
 from graphon.enums import NodeExecutionType, WorkflowNodeExecutionMetadataKey, WorkflowNodeExecutionStatus
 from graphon.node_events import NodeRunResult
 from graphon.nodes.base.node import Node

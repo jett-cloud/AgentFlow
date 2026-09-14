@@ -55,6 +55,17 @@
 
       <div class="action-group variable-group">
         <button
+          v-if="canExport"
+          type="button"
+          class="export-action"
+          aria-label="导出 DSL"
+          title="导出 DSL"
+          :disabled="exporting"
+          @click="$emit('export')"
+        >
+          {{ exporting ? '导出中…' : '导出 DSL' }}
+        </button>
+        <button
           type="button"
           class="env-action"
           :class="{ active: variablesOpen && variablesTab === 'env' }"
@@ -97,9 +108,11 @@ const props = defineProps({
   runHistoryOpen: { type: Boolean, default: false },
   variablesOpen: { type: Boolean, default: false },
   variablesTab: { type: String, default: 'sys' },
+  canExport: { type: Boolean, default: false },
+  exporting: { type: Boolean, default: false },
 })
 
-defineEmits(['back', 'checklist', 'run-history', 'variables', 'run', 'stop'])
+defineEmits(['back', 'checklist', 'run-history', 'variables', 'run', 'stop', 'export'])
 
 const saveStatusLabel = computed(() => formatCanvasSaveStatus(props))
 </script>
@@ -275,6 +288,14 @@ kbd {
   padding: 0 8px;
   font-size: 11px;
   font-weight: 700;
+}
+
+.export-action {
+  padding: 0 9px;
+  color: var(--text-accent, #155eef);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 @media (max-width: 1100px) {

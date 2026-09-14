@@ -2,8 +2,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.workflow.generator.llm_response import StageSchemaError, StageTruncatedError
-from core.workflow.generator.planner import (
+from core.workflow.generator.model_io.llm_response import StageSchemaError, StageTruncatedError
+from core.workflow.generator.pipeline.planner import PlanningEngine, iter_plan
+from core.workflow.generator.pipeline.planner_context_values import PlannerContextLimitError
+from core.workflow.generator.pipeline.planner_support import (
     PlannerAssistantMessageOutcome,
     PlannerBudgetExhaustedError,
     PlannerClarificationLimitError,
@@ -11,13 +13,10 @@ from core.workflow.generator.planner import (
     PlannerInput,
     PlannerNoProgressError,
     PlannerPlanOutcome,
-    PlanningEngine,
-    iter_plan,
     resolve_generation_mode,
     validate_planner_schema,
 )
-from core.workflow.generator.planner_context import PlannerContextLimitError
-from core.workflow.generator.planning_session import UserTurn
+from core.workflow.generator.pipeline.planning_types import UserTurn
 from graphon.model_runtime.entities.model_entities import ModelPropertyKey
 
 
@@ -274,7 +273,7 @@ def test_runtime_rag_and_agent_generated_testset_never_search_the_workspace():
 
 def test_terminal_plan_is_delivered_when_completed_call_crosses_time_budget(monkeypatch):
     ticks = iter([0.0, 121.0])
-    monkeypatch.setattr("core.workflow.generator.planner.time.perf_counter", lambda: next(ticks))
+    monkeypatch.setattr("core.workflow.generator.pipeline.planner.time.perf_counter", lambda: next(ticks))
     client = _ActionClient([{"action": "submit_plan", "plan": _submitted_plan(), "assumptions": []}])
 
     _, outcome = _collect_planner(iter_plan(client=client, request=_planner_request()))
@@ -285,7 +284,7 @@ def test_terminal_plan_is_delivered_when_completed_call_crosses_time_budget(monk
 
 def test_budget_error_after_nonterminal_action_carries_latest_checkpoint(monkeypatch):
     ticks = iter([0.0, 121.0])
-    monkeypatch.setattr("core.workflow.generator.planner.time.perf_counter", lambda: next(ticks))
+    monkeypatch.setattr("core.workflow.generator.pipeline.planner.time.perf_counter", lambda: next(ticks))
     client = _ActionClient([{"action": "acknowledge_turn"}])
 
     with pytest.raises(PlannerBudgetExhaustedError) as raised:
@@ -941,9 +940,7 @@ def test_iter_plan_rejects_resource_candidates_not_returned_by_search() -> None:
                         "question": "Choose knowledge.",
                         "resource_kind": "dataset",
                         "multiple": False,
-                        "candidates": [
-                            {"id": "invented-dataset", "label": "Invented", "description": "Not searched."}
-                        ],
+                        "candidates": [{"id": "invented-dataset", "label": "Invented", "description": "Not searched."}],
                         "default_resource_ids": [],
                     }
                 ],
@@ -998,6 +995,24 @@ def test_validate_planner_schema_rejects_non_string_start_variable():
                 "start_inputs": [{"variable": 1, "label": "Input", "type": "text-input"}],
             }
         )
+
+
+@pytest.mark.parametrize("input_type", ["checkbox", "json_object"])
+def test_validate_planner_schema_accepts_current_start_input_types(input_type: str):
+    plan = _submitted_plan()
+    plan["start_inputs"] = [{"variable": "payload", "label": "Payload", "type": input_type}]
+
+    parsed = validate_planner_schema(plan)
+
+    assert parsed["start_inputs"][0]["type"] == input_type
+
+
+def test_validate_planner_schema_rejects_legacy_json_object_alias():
+    plan = _submitted_plan()
+    plan["start_inputs"] = [{"variable": "payload", "label": "Payload", "type": "json-object"}]
+
+    with pytest.raises(StageSchemaError, match="start_inputs"):
+        validate_planner_schema(plan)
 
 
 def test_plan_rejects_builder_configuration_fields():
@@ -1169,7 +1184,7 @@ class TestAutoModeResolution:
         assert result["mode"] == "advanced-chat"
 
     def test_auto_with_no_terminal_node_defaults_to_conversational(self):
-        from core.workflow.generator.planner import resolve_generation_mode as _resolve_generation_mode
+        from core.workflow.generator.pipeline.planner_support import resolve_generation_mode as _resolve_generation_mode
 
         plan = cast(Any, {"title": "x", "description": "x", "nodes": [{"node_type": "llm"}]})
         assert _resolve_generation_mode("auto", plan) == "advanced-chat"

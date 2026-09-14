@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from core.repositories.human_input_repository import HumanInputFormSubmissionRepository
-from core.workflow.human_input_policy import resolve_variable_select_input_options
+from core.workflow.nodes.human_input.human_input_policy import resolve_variable_select_input_options
 from graphon.entities.pause_reason import HitlRequired, SchedulingPause
 from graphon.runtime.graph_runtime_state_protocol import ReadOnlyVariablePool
 

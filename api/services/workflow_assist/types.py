@@ -1,18 +1,8 @@
 """Shared result shapes for workflow assist orchestration validations."""
 
-from typing import Literal, NotRequired, TypedDict
+from typing import NotRequired, TypedDict
 
-ValidationIssueCode = Literal[
-    "MISSING_START",
-    "MISSING_TERMINAL",
-    "DUPLICATE_NODE_ID",
-    "DANGLING_EDGE",
-    "LOCAL_IMMUTABLE_CHANGED",
-    "AGENT_V2_SHAPE",
-    "AGENT_TASK_EMPTY",
-    "AGENT_BINDING_MISSING",
-    "AGENT_SHOULD_BE_USED",
-]
+ValidationIssueCode = str
 
 
 class ValidationIssue(TypedDict):

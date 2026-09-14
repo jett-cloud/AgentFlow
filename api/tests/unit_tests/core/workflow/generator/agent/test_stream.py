@@ -2,10 +2,38 @@
 
 from types import SimpleNamespace
 
-from core.workflow.generator.agent.stream import StreamTurnAssembler, assemble_stream_turn
+import pytest
+
+from core.workflow.generator.agent.protocol.stream import StreamTurnAssembler, assemble_stream_turn
 
 
-def _chunk(*, text: str = "", tool_calls: list[dict] | None = None, reasoning_content: str | None = None) -> SimpleNamespace:
+@pytest.mark.parametrize("chunk_size", [1, 7, 1000])
+def test_leaked_protocol_never_reaches_public_stream(chunk_size: int) -> None:
+    text = (
+        '我来修改。\n{"id":"call_00","name":"build_node","arguments":{"id":"node_start"}'
+        "</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>"
+    )
+    events, turn = assemble_stream_turn(
+        [_chunk(text=text[i : i + chunk_size]) for i in range(0, len(text), chunk_size)]
+    )
+    public = "".join(event[1]["delta"] for event in events if event[0] == "text")
+    assert public == turn["text"] == "我来修改。\n"
+    assert turn["tool_calls"] == []
+    assert turn["protocol_error"] is True
+
+
+def test_code_examples_and_regular_json_remain_literal() -> None:
+    text = '示例：`{"name":"build_node","arguments":{}}`\n```xml\n<｜DSML｜tool_calls>\n```\n{"value":42}'
+    events, turn = assemble_stream_turn([_chunk(text=char) for char in text])
+    assert turn["text"] == text
+    assert "".join(event[1]["delta"] for event in events if event[0] == "text") == text
+    assert turn["tool_calls"] == []
+    assert not turn.get("protocol_error")
+
+
+def _chunk(
+    *, text: str = "", tool_calls: list[dict] | None = None, reasoning_content: str | None = None
+) -> SimpleNamespace:
     calls = []
     for item in tool_calls or []:
         function = SimpleNamespace(name=item.get("name") or "", arguments=item.get("arguments") or "")
@@ -40,6 +68,34 @@ def test_incomplete_tool_json_is_dropped_not_dispatched() -> None:
     assembler.push(_chunk(tool_calls=[{"index": 0, "id": "c1", "name": "read_graph", "arguments": '{"id":'}]))
     turn = assembler.finish()
     assert turn["tool_calls"] == []
+    assert turn["protocol_error"] is True
+
+
+def test_native_call_is_preserved_without_executing_text_duplicate() -> None:
+    events, turn = assemble_stream_turn(
+        [
+            _chunk(text='准备读取。{"name":"read_graph","arguments":{}}'),
+            _chunk(tool_calls=[{"index": 0, "id": "native", "name": "read_graph", "arguments": "{}"}]),
+        ]
+    )
+    assert turn["tool_calls"] == [{"id": "native", "name": "read_graph", "arguments": {}}]
+    assert turn["protocol_error"] is True
+    assert "".join(payload["delta"] for kind, payload in events if kind == "text") == "准备读取。"
+
+
+def test_invalid_native_call_rejects_entire_batch_before_dispatch() -> None:
+    _, turn = assemble_stream_turn(
+        [
+            _chunk(
+                tool_calls=[
+                    {"index": 0, "id": "good", "name": "read_graph", "arguments": "{}"},
+                    {"index": 1, "id": "bad", "name": "build_node", "arguments": '{"id":'},
+                ]
+            ),
+        ]
+    )
+    assert turn["tool_calls"] == []
+    assert turn["protocol_error"] is True
 
 
 def test_think_blocks_are_not_emitted_as_public_deltas() -> None:

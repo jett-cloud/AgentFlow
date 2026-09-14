@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from core.app.entities.app_invoke_entities import AdvancedChatAppGenerateEntity, WorkflowAppGenerateEntity
 from core.repositories.human_input_repository import HumanInputFormSubmissionRepository
 from core.workflow.nodes.human_input.boundary import enrich_graph_pause_reasons
-from core.workflow.system_variables import SystemVariableKey, get_system_text
+from core.workflow.runtime.variables.system_variables import SystemVariableKey, get_system_text
 from graphon.filters import ResponseStreamFilter
 from graphon.graph_engine.layers import GraphEngineLayer
 from graphon.graph_events import GraphEngineEvent, GraphRunPausedEvent

@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "model": {
+    "provider": "openai",
+    "name": "gpt-4o",
+    "mode": "chat",
+    "parameters": {"temperature": 0}
+  },
+  "runs_per_case": 5,
+  "budgets": {
+    "max_model_calls": 32,
+    "max_tool_calls": 64,
+    "max_total_tokens": 400000
+  },
+  "cases": [
+    "simple_llm",
+    "rag",
+    "tool_to_llm",
+    "agent_knowledge",
+    "condition_branch",
+    "iteration_nested_field",
+    "loop_accumulation",
+    "code_dynamic_output",
+    "local_edit",
+    "multi_turn_requirement_change",
+    "advanced_chat"
+  ]
+}

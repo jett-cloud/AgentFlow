@@ -44,10 +44,15 @@ test('knowledge retrieval config writes multiple_retrieval_config', () => {
 
 test('http request config normalizes body to Dify shape', () => {
   const source = readFileSync(new URL('../nodes/http-request/useHttpRequestConfig.js', import.meta.url), 'utf8')
-  assert.match(source, /type: 'json'/)
-  assert.match(source, /type: 'raw-text'/)
-  assert.match(source, /type: 'none'/)
-  assert.match(source, /normalizeBody/)
+  const panel = readFileSync(new URL('../nodes/http-request/HttpRequestPanel.vue', import.meta.url), 'utf8')
+  assert.match(source, /type = 'json'/)
+  assert.match(source, /type = 'raw-text'/)
+  assert.match(source, /type === 'none'/)
+  assert.match(source, /convertHttpBody/)
+  assert.match(source, /setHttpErrorStrategy/)
+  assert.match(panel, /ErrorHandleConfig/)
+  assert.match(panel, /form-data/)
+  assert.match(panel, /binary/)
 })
 
 test('agent node default data uses agent-v2 binding shape', () => {
@@ -103,7 +108,7 @@ test('integrations page routes models/tools tabs and top navigation entry exists
 
   assert.match(router, /path: '\/integrations'/)
   assert.match(navigation, /to: '\/integrations'/)
-  assert.match(navigation, /label: 'Integrations'/)
+  assert.match(navigation, /label: '模型与工具'/)
   assert.match(page, /ModelProvidersPanel/)
   assert.match(page, /ToolsAuthPanel/)
   assert.match(page, /query: \{ tab \}/)
@@ -131,7 +136,7 @@ test('datasets routes and top navigation mirror Dify knowledge module shell', ()
   assert.match(router, /HitTestingPage/)
   assert.match(router, /DatasetSettingsPage/)
   assert.match(navigation, /to: '\/datasets'/)
-  assert.match(navigation, /label: 'Knowledge'/)
+  assert.match(navigation, /label: '知识库'/)
   assert.match(list, /创建空知识库/)
   assert.match(wizard, /选择数据源/)
   assert.match(wizard, /createFirstDocument|\/datasets\/init/)

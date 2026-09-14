@@ -3,22 +3,32 @@
 Paths are relative to ``core/workflow/generator/prompts/``. Missing or
 out-of-tree files return empty content so callers can treat unknown node
 types the same way ``get_node_config_snippet`` always has.
+
+Workflow-agent skills are discovered from a trusted directory only. Callers
+look up skills by registered name; they never pass a filesystem path.
 """
 
 from functools import cache
+from operator import itemgetter
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import yaml
 
 _ROOT = Path(__file__).resolve().parent
-ALWAYS_ON_CHAR_LIMIT = 4000
-PLAYBOOK_SKILLS = (
-    "create-from-scratch",
-    "repair-validation",
-    "bind-resources",
-    "edit-local-node",
-)
+_SKILLS_ROOT = _ROOT / "agent" / "skills"
+ALWAYS_ON_CHAR_LIMIT = 10000
+
+
+class SkillSummary(TypedDict):
+    name: str
+    description: str
+
+
+class SkillRecord(TypedDict):
+    name: str
+    description: str
+    body: str
 
 
 def _safe_path(relative: str) -> Path | None:
@@ -67,24 +77,105 @@ def read_frontmatter(relative: str) -> dict[str, Any]:
     return meta
 
 
-def playbook_index() -> list[tuple[str, str]]:
-    """``(name, description)`` for the four always-on playbook catalogue lines."""
-    entries: list[tuple[str, str]] = []
-    for name in PLAYBOOK_SKILLS:
-        meta = read_frontmatter(f"agent/skills/{name}/SKILL.md")
+def load_skill_records(root: Path) -> tuple[SkillRecord, ...]:
+    """Discover ``SKILL.md`` files under ``root`` and validate each record.
+
+    Raises ``ValueError`` on a missing fence, empty name/description/body,
+    directory/name mismatch, or duplicate name. Output is sorted by name.
+    """
+    skill_root = root.resolve()
+    if not skill_root.is_dir():
+        raise ValueError(f"Skill directory does not exist: {skill_root}")
+    files = sorted(path for path in skill_root.rglob("SKILL.md") if path.is_file())
+    if not files:
+        raise ValueError(f"No SKILL.md files found under {skill_root}")
+
+    records: list[SkillRecord] = []
+    seen: dict[str, Path] = {}
+    for path in files:
+        try:
+            path.resolve().relative_to(skill_root)
+        except ValueError as exc:
+            raise ValueError(f"Skill file {path} is outside the trusted skill root {skill_root}") from exc
+        directory_name = path.parent.name
+        text = path.read_text(encoding="utf-8")
+        if not text.startswith("---"):
+            raise ValueError(f"Skill {directory_name!r} is missing YAML frontmatter")
+        meta, body = _split_frontmatter(text)
+        name = str(meta.get("name") or "").strip()
         description = str(meta.get("description") or "").strip()
-        entries.append((name, description))
-    return entries
+        body = body.strip()
+        if not name:
+            raise ValueError(f"Skill {directory_name!r} is missing a name")
+        if name != directory_name:
+            raise ValueError(f"Skill name {name!r} must equal directory name {directory_name!r}")
+        if not description:
+            raise ValueError(f"Skill {name!r} is missing a description")
+        if not body:
+            raise ValueError(f"Skill {name!r} is missing a body")
+        previous = seen.get(name)
+        if previous is not None:
+            raise ValueError(f"Duplicate skill name {name!r} ({previous} and {path})")
+        seen[name] = path
+        records.append({"name": name, "description": description, "body": body})
+    records.sort(key=itemgetter("name"))
+    return tuple(records)
+
+
+@cache
+def _cached_skill_records() -> tuple[SkillRecord, ...]:
+    return load_skill_records(_SKILLS_ROOT)
+
+
+def skill_summaries() -> tuple[SkillSummary, ...]:
+    """Return deterministic name/description summaries sorted by name."""
+    return tuple(
+        SkillSummary(name=record["name"], description=record["description"]) for record in _cached_skill_records()
+    )
+
+
+def registered_skill_names() -> tuple[str, ...]:
+    """Return registered skill names in catalogue order."""
+    return tuple(item["name"] for item in skill_summaries())
+
+
+def skill_body(name: str) -> str | None:
+    """Return one registered skill body; never resolve an arbitrary path."""
+    if not isinstance(name, str) or not name:
+        return None
+    if any(token in name for token in ("/", "\\", "..")):
+        return None
+    for record in _cached_skill_records():
+        if record["name"] == name:
+            return record["body"]
+    return None
+
+
+def render_skill_catalogue() -> str:
+    """Render compact name/description entries for the system prompt."""
+    lines = ["# Available skills", ""]
+    for item in skill_summaries():
+        lines.append(f"- {item['name']}: {item['description']}")
+    return "\n".join(lines) + "\n"
+
+
+def available_node_types() -> tuple[str, ...]:
+    """Return ``nodes.md`` H2 titles in file order."""
+    return tuple(node_config_snippets().keys())
+
+
+def render_available_node_types() -> str:
+    """Render a compact node-type directory from ``nodes.md`` headings."""
+    names = ", ".join(available_node_types())
+    return f"# Available node types\n\n{names}\n"
 
 
 def always_on_system_prompt() -> str:
-    """Stable system prefix: hard rules plus playbook names, no skill bodies."""
+    """Stable system prefix: hard rules, skill names, and node type names."""
     body = read_prompt("agent/SYSTEM.md").rstrip()
-    lines = [body, "", "# Playbooks"]
-    for name, description in playbook_index():
-        suffix = f": {description}" if description else ""
-        lines.append(f"- {name}{suffix}")
-    return "\n".join(lines) + "\n"
+    skills = render_skill_catalogue().rstrip()
+    nodes = render_available_node_types().rstrip()
+    return f"{body}\n\n{skills}\n\n{nodes}\n"
 
 
 @cache

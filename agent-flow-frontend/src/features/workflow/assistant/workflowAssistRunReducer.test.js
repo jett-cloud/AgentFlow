@@ -3,8 +3,10 @@ import assert from 'node:assert/strict'
 
 import {
   createWorkflowAssistRunState,
+  hydrateWorkflowAssistTimeline,
   reduceWorkflowAssistRunEvent,
   reduceWorkflowAssistTimeline,
+  settleHydratedAssistRunState,
   workflowAssistRunCursor,
 } from './workflowAssistRunReducer.js'
 
@@ -19,6 +21,47 @@ function envelope(runId, epoch, sequence, event, data = {}) {
     data,
   }
 }
+
+test('timeline and live clarification retain Chinese after model identifiers', () => {
+  const events = [
+    envelope('run-1', 1, 0, 'user.message', { text: '请生成抠图工作流' }),
+    envelope('run-2', 2, 0, 'user.message', { text: 'deepseek-v4-pro 深度求索\ndoubao-seedream-3-0-t2i-250415' }),
+  ]
+  const restored = hydrateWorkflowAssistTimeline(createWorkflowAssistRunState(), events)
+  assert.equal(restored.language, 'zh-Hans')
+  const next = reduceWorkflowAssistRunEvent(restored,
+    envelope('run-3', 3, 0, 'user.message', { text: 'continue' }))
+  assert.equal(next.language, 'zh-Hans')
+  const switched = reduceWorkflowAssistRunEvent(next,
+    envelope('run-4', 4, 0, 'user.message', { text: '请改用英文回答' }))
+  assert.equal(switched.language, 'en')
+})
+
+test('compact history covers source sequences and resumes live text without duplicate fragments', () => {
+  const hydrated = hydrateWorkflowAssistTimeline(createWorkflowAssistRunState(), [
+    envelope('run-1', 1, 0, 'user.message', { text: 'request' }),
+    envelope('run-1', 1, 3, 'reasoning.delta', { message_id: 'a', text: '先思考', sequence_start: 1 }),
+    envelope('run-1', 1, 5, 'message.delta', { message_id: 'a', text: '你好🌈', sequence_start: 4 }),
+  ])
+  assert.deepEqual(workflowAssistRunCursor(hydrated, 'run-1'), { epoch: 1, sequence: 5 })
+  const duplicate = reduceWorkflowAssistRunEvent(hydrated,
+    envelope('run-1', 1, 4, 'message.delta', { message_id: 'a', text: '你好' }))
+  assert.equal(duplicate, hydrated)
+  const continued = reduceWorkflowAssistRunEvent(duplicate,
+    envelope('run-1', 1, 6, 'message.delta', { message_id: 'a', text: '继续' }))
+  assert.equal(continued.messages.at(-1).text, '你好🌈继续')
+  assert.equal(continued.messages.at(-1).reasoning, '先思考')
+})
+
+test('restoring a later user turn disables the preceding clarification card', () => {
+  const restored = hydrateWorkflowAssistTimeline(createWorkflowAssistRunState(), [
+    envelope('run-1', 1, 1, 'waiting_user', { tool_call_id: 'ask-1', questions: ['Which color?'] }),
+    envelope('run-2', 2, 0, 'user.message', { text: 'blue' }),
+  ])
+  const card = restored.messages.find(message => message.kind === 'clarification')
+  assert.equal(card.status, 'resolved')
+  assert.equal(card.resolved, true)
+})
 
 test('timeline replay keeps sequence-zero turns distinct and duplicate envelopes are strict no-ops', () => {
   const events = [
@@ -158,6 +201,41 @@ test('compact dedupe accepts out-of-order gaps once and collapses them when fill
   assert.equal(reduceWorkflowAssistRunEvent(state, sequenceTwo), state)
   assert.equal(state.eventSequencesByRun['run-1'].through, 2)
   assert.equal(state.eventSequencesByRun['run-1'].pending.length, 0)
+})
+
+test('hydrate mode concatenates deltas without a live streaming flag', () => {
+  const state = hydrateWorkflowAssistTimeline(createWorkflowAssistRunState(), [
+    envelope('run-1', 1, 0, 'user.message', { text: 'build it' }),
+    envelope('run-1', 1, 1, 'message.delta', { text: 'hel' }),
+    envelope('run-1', 1, 2, 'message.delta', { text: 'lo' }),
+    envelope('run-1', 1, 3, 'tool_call', { tool_call_id: 'call-1', name: 'read_graph' }),
+    envelope('run-1', 1, 4, 'tool_result', { tool_call_id: 'call-1', name: 'read_graph', summary: 'ok' }),
+    envelope('run-1', 1, 5, 'turn_complete'),
+  ])
+  const settled = settleHydratedAssistRunState(state)
+
+  const bubble = settled.messages.find(message => message.kind === 'assistant_text')
+  const activity = settled.messages.find(message => message.kind === 'activity')
+  assert.equal(bubble?.text, 'hello')
+  assert.equal(bubble?.streaming, false)
+  assert.equal(activity?.status, 'completed')
+  assert.equal(activity?.collapsed, true)
+  assert.equal(activity?.streaming, false)
+})
+
+test('hydrate then live tail appends new deltas onto the restored prefix', () => {
+  const hydrated = hydrateWorkflowAssistTimeline(createWorkflowAssistRunState(), [
+    envelope('run-1', 1, 0, 'user.message', { text: 'build it' }),
+    envelope('run-1', 1, 1, 'message.delta', { text: 'hel' }),
+    envelope('run-1', 1, 2, 'message.delta', { text: 'lo' }),
+  ])
+  const live = settleHydratedAssistRunState(hydrated, { keepLiveTail: true })
+  const next = reduceWorkflowAssistRunEvent(live, envelope('run-1', 1, 3, 'message.delta', { text: '!' }))
+
+  const bubble = next.messages.find(message => message.kind === 'assistant_text')
+  assert.equal(bubble?.text, 'hello!')
+  assert.equal(bubble?.streaming, true)
+  assert.equal(next.messages.filter(message => message.kind === 'assistant_text').length, 1)
 })
 
 test('a non-zero resume cursor compresses a sequential sparse gap into one range', () => {

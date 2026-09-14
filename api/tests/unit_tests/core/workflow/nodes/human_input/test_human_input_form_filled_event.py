@@ -17,7 +17,7 @@ from core.workflow.nodes.human_input.entities import (
     UserActionConfig,
 )
 from core.workflow.nodes.human_input.enums import HumanInputFormStatus
-from core.workflow.system_variables import default_system_variables
+from core.workflow.runtime.variables.system_variables import default_system_variables
 from graphon.entities import GraphInitParams
 from graphon.enums import BuiltinNodeTypes
 from graphon.file import File, FileTransferMethod, FileType
@@ -230,6 +230,7 @@ def _build_timeout_node() -> HumanInputNode:
 
 def test_human_input_node_emits_form_filled_event_before_succeeded():
     node = _build_node()
+    node.bind_execution_id("execution-id")
 
     events = list(node.run())
 
@@ -257,9 +258,10 @@ def test_human_input_node_emits_form_filled_event_before_succeeded():
 
 def test_human_input_node_emits_timeout_event_before_succeeded():
     node = _build_timeout_node()
+    node.bind_execution_id("execution-id")
 
     events = list(node.run())
 
     assert isinstance(events[0], NodeRunStartedEvent)
     assert isinstance(events[1], NodeRunSucceededEvent)
-    assert events[1].node_run_result.edge_source_handle == "__timeout__"
+    assert events[1].node_run_result.edge_source_handle == "__timeout"

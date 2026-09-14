@@ -18,7 +18,13 @@ const catalog = catalogMentionItems({
   ],
   tools: [
     { provider_name: 'time', tool_name: 'current_time', tool_label: '当前时间' },
-    { provider_id: 'uuid-should-not-win', provider_name: 'web', tool_name: 'search', tool_label: '网页搜索' },
+    { provider_id: 'web/provider', provider_name: 'web', tool_name: 'search', tool_label: '网页搜索' },
+    {
+      provider_catalogue_name: 'ghy/doubao-image/doubao-image',
+      provider_name: '豆包图片',
+      tool_name: 'image_generate',
+      tool_label: '图片生成',
+    },
   ],
   datasets: [
     { id: 'ds-1', name: '产品文档' },
@@ -46,7 +52,14 @@ test('catalogues nodes, tools, and datasets with provider/tool ids', () => {
     provider: 'time',
     tool_name: 'current_time',
   })
-  assert.equal(catalog.find(item => item.kind === 'tool' && item.tool_name === 'search').id, 'web/search')
+  assert.equal(catalog.find(item => item.kind === 'tool' && item.tool_name === 'search').id, 'web/provider/search')
+  assert.deepEqual(catalog.find(item => item.tool_name === 'image_generate'), {
+    kind: 'tool',
+    id: 'ghy/doubao-image/doubao-image/image_generate',
+    label: '图片生成',
+    provider: 'ghy/doubao-image/doubao-image',
+    tool_name: 'image_generate',
+  })
   assert.deepEqual(catalog.find(item => item.kind === 'dataset'), {
     kind: 'dataset',
     id: 'ds-1',
@@ -105,6 +118,27 @@ test('serializes at most eight chip references and keeps inner labels readable',
   assert.equal(serializeMentionReferences(overflow).length, ASSIST_MENTION_LIMIT)
 })
 
+test('serializing a retained draft refreshes a uniquely matched tool provider identity', () => {
+  const chips = [{
+    dataset: {
+      kind: 'tool',
+      id: '火山引擎豆包/image_gerenate_image',
+      provider: '火山引擎豆包',
+      toolName: 'image_gerenate_image',
+    },
+    textContent: '图片生成',
+  }]
+  const currentCatalog = [{
+    kind: 'tool',
+    id: 'ghy/doubao-image/doubao-image/image_gerenate_image',
+    label: '图片生成',
+    provider: 'ghy/doubao-image/doubao-image',
+    tool_name: 'image_gerenate_image',
+  }]
+
+  assert.deepEqual(serializeMentionReferences(chips, currentCatalog), [currentCatalog[0]])
+})
+
 test('splits user text so timeline chips restore at the label', () => {
   const parts = splitTextByMentions('把 知识库检索 接到 LLM', [
     { kind: 'node', id: 'n1', label: '知识库检索' },
@@ -114,4 +148,18 @@ test('splits user text so timeline chips restore at the label', () => {
     { text: '知识库检索', reference: { kind: 'node', id: 'n1', label: '知识库检索' } },
     { text: ' 接到 LLM' },
   ])
+})
+
+test('restores every occurrence of the same referenced tool as a chip', () => {
+  const parts = splitTextByMentions('通过 图片生成 扣图，再用 图片生成 提取颜色，最后交给 图片生成', [
+    {
+      kind: 'tool',
+      id: 'ghy/doubao-image/doubao-image/image_generate',
+      label: '图片生成',
+      provider: 'ghy/doubao-image/doubao-image',
+      tool_name: 'image_generate',
+    },
+  ])
+
+  assert.equal(parts.filter(part => part.reference).length, 3)
 })

@@ -14,7 +14,7 @@ from core.repositories.human_input_repository import (
     HumanInputFormRecord,
     HumanInputFormSubmissionRepository,
 )
-from core.workflow.human_input_policy import resolve_variable_select_input_options
+from core.workflow.nodes.human_input.human_input_policy import resolve_variable_select_input_options
 from core.workflow.nodes.human_input.entities import (
     FileInputConfig,
     FileListInputConfig,

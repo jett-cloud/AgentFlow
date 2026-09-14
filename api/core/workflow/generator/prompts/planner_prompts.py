@@ -51,6 +51,9 @@ minimum set of Dify workflow nodes needed to fulfil it, in execution order.
                           fed into or produced by an "iteration").
 - "assigner"            — update an existing conversation or loop variable.
 - "human-input"         — pause for a person to review, approve, or enter data.
+                          Default to WebApp. Do not invent Email recipients or
+                          member IDs. Do not emit Slack/Teams/Discord or
+                          ``_targetBranches``. New nodes use timeout 3 day.
 
 # Rules
 
@@ -109,10 +112,12 @@ minimum set of Dify workflow nodes needed to fulfil it, in execution order.
     reference will fail at run time with "variable not found". Each entry
     is ``{"variable": "<snake_case>", "label": "<UI label>",
     "type": "text-input" | "paragraph" | "number" | "select" | "file" |
-    "file-list"}``. Use:
+    "file-list" | "checkbox" | "json_object"}``. Use:
       - "text-input" for short single-line values (URLs, names),
       - "paragraph" for free-form multi-line text (descriptions, queries),
-      - "number" / "select" / "file" / "file-list" for the obvious cases.
+      - "number" / "select" / "file" / "file-list" for the obvious cases,
+      - "checkbox" for a boolean toggle,
+      - "json_object" for a structured JSON object; never emit "json-object".
     In Advanced-Chat mode the ``sys.query`` / ``sys.files`` system
     variables are automatic — downstream nodes may reference them without
     a ``start_inputs`` entry. In Workflow mode there is NO automatic
@@ -122,7 +127,7 @@ minimum set of Dify workflow nodes needed to fulfil it, in execution order.
     order. In refine mode preserve the existing id for every retained node.
 13. Emit the target graph's edges in ``edges``. Each edge is
     ``{"source": "<id>", "target": "<id>"}``; add ``source_handle`` only
-    for branch nodes: if-else case id, question-classifier class id, or
+    for branch nodes: if-else case id / ``false`` ELSE, classifier class id, or
     human-input action id. Container children reference the container id in
     their ``parent`` field; do not emit the synthetic iteration/loop start node.
 14. In refine mode add ``action`` to every retained target node:

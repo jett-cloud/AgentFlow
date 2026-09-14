@@ -8,6 +8,7 @@ export const ANSWER_DEFAULTS = {
 export function normalizeAnswerNodeData(data = {}) {
   return {
     ...data,
+    type: 'answer',
     variables: Array.isArray(data.variables) ? data.variables : [],
     answer: String(data.answer ?? ''),
   }
@@ -22,5 +23,5 @@ export function isAnswerVariableSupported(variable) {
 }
 
 export function getAnswerValidationErrors(data = {}) {
-  return normalizeAnswerNodeData(data).answer ? [] : ['请填写回复内容']
+  return normalizeAnswerNodeData(data).answer.trim() ? [] : ['请填写回复内容']
 }

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from unittest.mock import MagicMock
 
 from core.model_manager import ModelInstance
-from core.workflow.node_runtime import DifyToolNodeRuntime
+from core.workflow.runtime.adapters.tools import DifyToolNodeRuntime
 from core.workflow.nodes.agent import AgentNode
 from core.workflow.nodes.knowledge_retrieval.knowledge_retrieval_node import KnowledgeRetrievalNode
 from graphon.enums import WorkflowNodeExecutionMetadataKey, WorkflowNodeExecutionStatus

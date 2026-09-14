@@ -11,7 +11,7 @@ from core.app.apps.workflow import app_generator as wf_app_gen_module
 from core.app.entities.app_invoke_entities import InvokeFrom
 from core.workflow import node_factory as node_factory_module
 from core.workflow.node_factory import DifyNodeFactory
-from core.workflow.system_variables import build_system_variables
+from core.workflow.runtime.variables.system_variables import build_system_variables
 from graphon.entities import WorkflowStartReason
 from graphon.entities.base_node_data import BaseNodeData, RetryConfig
 from graphon.entities.pause_reason import SchedulingPause

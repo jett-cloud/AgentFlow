@@ -26,12 +26,15 @@
       :run-history-open="showRunHistory"
       :variables-open="showVariables"
       :variables-tab="variablesTab"
+      :can-export="canExport"
+      :exporting="exporting"
       @back="$emit('back')"
       @checklist="toggleChecklist"
       @run-history="toggleRunHistory"
       @variables="openVariables"
       @run="openDebugPreview"
       @stop="$emit('stop-run')"
+      @export="$emit('export')"
     />
     <div
       v-if="assistPreviewing"
@@ -256,7 +259,7 @@
         :width="drawerWidth"
         :active-tab="nodePanelTab"
         :supports-single-run="panelSupportsSingleRun"
-        :live-result="singleRunResults[activePanelNode.id]"
+        :live-result="activePanelRunResult"
         :running="singleRunningNodeId === activePanelNode.id"
         @update:width="drawerWidth = $event"
         @update:active-tab="nodePanelTab = $event"
@@ -264,6 +267,7 @@
         @close="handleClosePanel"
         @select-node="handlePanelSelectNode"
         @run="handleLastRunSubmit"
+        @refresh="refreshNodePanelResult"
         @stop="$emit('stop-run')"
       />
 
@@ -331,7 +335,7 @@ import WorkflowCommentsLayer from './components/WorkflowCommentsLayer.vue'
 import WorkflowUserCursors from './components/WorkflowUserCursors.vue'
 import WorkflowVariablesPanel from './components/WorkflowVariablesPanel.vue'
 import NodePanelHost from './components/NodePanelHost.vue'
-import { openNodePanelState } from './nodePanelHost.js'
+import { openNodePanelState, selectNodePanelResult } from './nodePanelHost.js'
 import WorkflowAssistDock from '@/features/workflow/assistant/WorkflowAssistDock.vue'
 import { assistCopy } from '@/features/workflow/assistant/assistLanguage.js'
 import { isPreviewableAssistGraph } from '@/features/workflow/assistant/workflowAssistUx.js'
@@ -356,6 +360,11 @@ import {
 } from '../model/draftSignature.js'
 import { buildAssistGraphSnapshot } from '../model/graphSnapshot.js'
 import { shouldFlushDraftOnLeave } from '../model/draftFlush.js'
+import {
+  needsFollowUpSave,
+  nextDraftStatusOnSignature,
+  shouldRestartAutosaveTimer,
+} from '../model/draftAutosave.js'
 import { useWorkflowAssistStore } from '@/stores/useWorkflowAssistStore.js'
 import {
   applyContainerFinishedToGraph,
@@ -425,6 +434,8 @@ const props = defineProps({
   canStop: { type: Boolean, default: false },
   publishing: { type: Boolean, default: false },
   publishStatus: { type: String, default: '' },
+  canExport: { type: Boolean, default: false },
+  exporting: { type: Boolean, default: false },
   runStatus: { type: String, default: 'idle' },
   resultText: { type: String, default: '' },
   runError: { type: String, default: '' },
@@ -456,6 +467,7 @@ const emit = defineEmits([
   'cursor-move',
   'save-features',
   'assist-applied',
+  'export',
 ])
 
 const store = useWorkflowStore()
@@ -681,11 +693,19 @@ const effectiveRunError = computed(() => (
   viewingHistory.value ? (historyRunView.value?.error || '') : props.runError
 ))
 
-/** Checklist is refreshed on demand — never track live Vue Flow nodes in render. */
+/** Snapshot refreshed on content changes — never track live Vue Flow nodes in render. */
 const checklistIssues = ref([])
 const checklistCount = computed(() => checklistIssues.value.length)
+let lastChecklistSignature = ''
 
-function refreshChecklistIssues() {
+function refreshChecklistIssues(draftSignature = readDraftSignature()) {
+  const signature = JSON.stringify([
+    draftSignature,
+    props.workflowMode,
+    store.ragPipelineVariables || [],
+  ])
+  if (signature === lastChecklistSignature)
+    return
   const nodes = (getNodes.value || []).map(n => ({
     id: n.id,
     type: n.type,
@@ -703,15 +723,19 @@ function refreshChecklistIssues() {
   }))
   checklistIssues.value = buildWorkflowChecklist({ nodes, edges }, {
     isChatMode: isChatflowMode(props.workflowMode),
+    isPipelineFlow: props.flowType === 'pipeline',
     environmentVariables: environmentVariables.value,
     conversationVariables: conversationVariables.value,
     ragPipelineVariables: store.ragPipelineVariables || [],
   })
+  lastChecklistSignature = signature
 }
 
 const lastSavedSignature = ref('')
 const AUTOSAVE_POLL_MS = 1500
 let draftPollTimer = null
+let lastObservedSignature = ''
+let inFlightSignature = ''
 
 function readDraftSignature() {
   return buildDraftContentSignature({
@@ -723,12 +747,14 @@ function readDraftSignature() {
   })
 }
 
-function scheduleAutosave() {
-  clearTimeout(autosaveTimer)
+function scheduleAutosave({ restart = false } = {}) {
   if (readOnly.value || assistPreviewing.value)
     return
+  if (autosaveTimer && !restart)
+    return
+  clearTimeout(autosaveTimer)
   autosaveTimer = setTimeout(() => {
-    if (draftStatus.value !== 'dirty')
+    if (draftStatus.value !== 'dirty' && draftStatus.value !== 'error')
       return
     saveWorkflowDraft({ silent: true })
   }, AUTOSAVE_DELAY_MS)
@@ -737,30 +763,46 @@ function scheduleAutosave() {
 function markDraftDirty() {
   if (draftStatus.value !== 'dirty' && draftStatus.value !== 'saving')
     draftStatus.value = 'dirty'
-  scheduleAutosave()
+  lastObservedSignature = readDraftSignature()
+  scheduleAutosave({ restart: true })
 }
 
 function applyDraftSignature(signature) {
   if (!lastSavedSignature.value) {
     lastSavedSignature.value = signature
+    lastObservedSignature = signature
     return
   }
-  if (signature === lastSavedSignature.value) {
-    if (draftStatus.value === 'dirty')
-      draftStatus.value = 'saved'
+  const restart = shouldRestartAutosaveTimer({
+    lastSavedSignature: lastSavedSignature.value,
+    lastObservedSignature,
+    nextSignature: signature,
+  })
+  const nextStatus = nextDraftStatusOnSignature({
+    lastSavedSignature: lastSavedSignature.value,
+    lastObservedSignature,
+    nextSignature: signature,
+    draftStatus: draftStatus.value,
+  })
+  lastObservedSignature = signature
+  if (nextStatus !== draftStatus.value)
+    draftStatus.value = nextStatus
+  if (nextStatus === 'saved') {
     clearTimeout(autosaveTimer)
     return
   }
-  markDraftDirty()
+  if (restart)
+    scheduleAutosave({ restart: true })
 }
 
 function pollDraftSignature() {
   // Imperative poll — must NOT be a computed/watch on getNodes (Vue Flow mutates
   // nodes during render; tracking them causes Maximum recursive updates).
-  if (assistPreviewing.value)
-    return
   try {
-    applyDraftSignature(readDraftSignature())
+    const signature = readDraftSignature()
+    refreshChecklistIssues(signature)
+    if (!assistPreviewing.value)
+      applyDraftSignature(signature)
   }
   catch {
     // Ignore transient graph read errors during init.
@@ -796,23 +838,37 @@ function buildDraftPayload() {
 }
 
 function saveWorkflowDraft({ silent = false } = {}) {
+  inFlightSignature = readDraftSignature()
   draftStatus.value = 'saving'
   emit('save-draft', { ...buildDraftPayload(), silent })
 }
 
-function flushDraftIfNeeded() {
+function cancelPendingAutosave() {
   clearTimeout(autosaveTimer)
   autosaveTimer = null
+}
+
+function shouldFlushCurrentDraft() {
+  return shouldFlushDraftOnLeave({
+    draftStatus: draftStatus.value,
+    readOnly: readOnly.value,
+    inFlightSignature,
+    latestSignature: readDraftSignature(),
+  })
+}
+
+function flushDraftIfNeeded() {
+  cancelPendingAutosave()
   if (assistPreviewing.value)
     return false
-  if (!shouldFlushDraftOnLeave({ draftStatus: draftStatus.value, readOnly: readOnly.value }))
+  if (!shouldFlushCurrentDraft())
     return false
   saveWorkflowDraft({ silent: true })
   return true
 }
 
 function handleBeforeUnload(event) {
-  if (!shouldFlushDraftOnLeave({ draftStatus: draftStatus.value, readOnly: readOnly.value }))
+  if (!shouldFlushCurrentDraft())
     return
   flushDraftIfNeeded()
   event.preventDefault()
@@ -1016,10 +1072,18 @@ async function refreshVersionHistory() {
 }
 
 function markDraftSaved() {
-  lastSavedSignature.value = readDraftSignature()
+  const latest = readDraftSignature()
+  lastObservedSignature = latest
+  clearTimeout(autosaveTimer)
+  if (needsFollowUpSave({ inFlightSignature, latestSignature: latest })) {
+    lastSavedSignature.value = inFlightSignature
+    draftStatus.value = 'dirty'
+    scheduleAutosave({ restart: true })
+    return
+  }
+  lastSavedSignature.value = latest
   draftStatus.value = 'saved'
   draftUpdatedAt.value = Date.now()
-  clearTimeout(autosaveTimer)
 }
 
 function markDraftSaveFailed() {
@@ -1037,6 +1101,7 @@ function initializeDraft(draft = {}) {
   clearRuntimeState()
   refreshStartVariables()
   markDraftSaved()
+  refreshChecklistIssues(lastSavedSignature.value)
   // Defer fitView, then select on a later frame so layout/measure and selection
   // do not fight in the same reactive flush.
   nextTick(() => {
@@ -1151,6 +1216,8 @@ function applyNodeRunState(payload = {}) {
       : null)
 
   if (type === 'workflow_started') {
+    singleRunResults.value = {}
+    singleResultNodeId.value = ''
     applyWorkflowStartedToGraph(nodes, edges)
   }
   else if (type === 'workflow_finished') {
@@ -1266,6 +1333,7 @@ function handleLastRunSubmit({ nodeId, inputs }) {
   if (!nodeId || singleRunningNodeId.value)
     return
   singleRunningNodeId.value = nodeId
+  singleResultNodeId.value = nodeId
   const node = findNode(nodeId)
   if (node?.data) {
     node.data._singleRunningStatus = 'running'
@@ -1348,6 +1416,8 @@ function handleDebugSubmitRun(payload) {
 
 function clearRuntimeState() {
   runtimeRecords.value = {}
+  singleRunResults.value = {}
+  singleResultNodeId.value = ''
   clearGraphRuntime(getNodes.value, getEdges.value)
   refreshGraphRuntimeBindings(getNodes.value, getEdges.value)
 }
@@ -1425,6 +1495,8 @@ provide('workflowUi', {
 provide('workflowGraph', {
   getNodes: () => getNodes.value,
   getEdges: () => getEdges.value,
+  nodes: getNodes,
+  edges: getEdges,
 })
 provide('workflowAppId', computed(() => props.appId))
 provide('workflowMode', computed(() => props.workflowMode))
@@ -1464,6 +1536,18 @@ watch(
 const activePanelNodeId = ref(null)
 const nodePanelTab = ref('settings')
 const singleRunResults = ref({})
+const singleResultNodeId = ref('')
+const activePanelRunResult = computed(() => selectNodePanelResult({
+  nodeId: activePanelNode.value?.id,
+  tracing: effectiveTracing.value,
+  singleResult: singleRunResults.value[activePanelNode.value?.id] || null,
+  preferSingle: !viewingHistory.value && singleResultNodeId.value === activePanelNode.value?.id,
+}))
+
+function refreshNodePanelResult() {
+  singleResultNodeId.value = ''
+  singleRunResults.value = {}
+}
 const singleRunningNodeId = ref('')
 
 /**
@@ -2310,6 +2394,7 @@ defineExpose({
   initializeDraft,
   exportGraph,
   buildDraftPayload,
+  cancelPendingAutosave,
   addNode,
   applyNodeRunState,
   applySingleNodeRunResult,

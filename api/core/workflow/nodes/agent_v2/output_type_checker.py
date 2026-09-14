@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
 
-from core.workflow.file_reference import is_canonical_file_reference, parse_file_reference
+from core.workflow.runtime.adapters.file_reference import is_canonical_file_reference, parse_file_reference
 from graphon.file import FileTransferMethod
 from models.agent_config_entities import (
     DeclaredArrayItem,

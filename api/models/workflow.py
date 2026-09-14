@@ -24,7 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from typing_extensions import deprecated
 
 from core.trigger.constants import TRIGGER_PLUGIN_NODE_TYPE
-from core.workflow.human_input_adapter import adapt_node_config_for_graph
+from core.workflow.graph.adapters.human_input_adapter import adapt_node_config_for_graph
 from core.workflow.nodes.human_input.pause_reason import (
     HumanInputRequired,
 )
@@ -32,7 +32,7 @@ from core.workflow.nodes.human_input.pause_reason import (
     PauseReason as DifyPauseReason,
 )
 from core.workflow.nodes.human_input.session_binding import default_session_binding
-from core.workflow.variable_prefixes import (
+from core.workflow.runtime.variables.variable_prefixes import (
     CONVERSATION_VARIABLE_NODE_ID,
     SYSTEM_VARIABLE_NODE_ID,
 )

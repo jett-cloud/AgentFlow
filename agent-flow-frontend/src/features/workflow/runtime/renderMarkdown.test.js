@@ -2,6 +2,15 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { renderMarkdown } from '../utils/helpers.js'
 
+test('inline code and identifiers preserve underscores without cross-element emphasis', () => {
+  const html = renderMarkdown('确认：`source_query` 删除 `node_source_retrieval`，build_node 和 eval_count。_斜体_')
+  assert.match(html, /<code class="markdown-inline-code">source_query<\/code>/)
+  assert.match(html, /<code class="markdown-inline-code">node_source_retrieval<\/code>/)
+  assert.match(html, /build_node 和 eval_count/)
+  assert.match(html, /<em>斜体<\/em>/)
+  assert.equal((html.match(/<em>/g) || []).length, 1)
+})
+
 test('renderMarkdown escapes raw HTML', () => {
   const html = renderMarkdown('<script>alert(1)</script>')
   assert.equal(html.includes('<script>'), false)
@@ -31,6 +40,13 @@ test('renderMarkdown renders bold italic code links lists headings', () => {
   assert.match(html, /<ol class="markdown-list">/)
   assert.match(html, /class="markdown-link"/)
   assert.match(html, /href="https:\/\/example.com"/)
+})
+
+test('inline code stays literal and escaped during later formatting', () => {
+  const html = renderMarkdown('`**bold** _italic_ [link](javascript:alert(1)) <img src=x onerror=alert(1)>`')
+  assert.doesNotMatch(html, /<(?:strong|em|a|img)\b/)
+  assert.match(html, /\*\*bold\*\* _italic_/)
+  assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/)
 })
 
 test('renderMarkdown rejects executable and attribute-injection links', () => {

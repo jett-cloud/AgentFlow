@@ -30,7 +30,7 @@ from core.app.apps.base_app_generator import BaseAppGenerator
 from core.app.apps.common.workflow_response_converter import WorkflowResponseConverter
 from core.app.apps.message_generator import MessageGenerator
 from core.app.apps.workflow.app_generator import WorkflowAppGenerator
-from core.workflow.human_input_policy import HumanInputSurface, is_recipient_type_allowed_for_surface
+from core.workflow.nodes.human_input.human_input_policy import HumanInputSurface, is_recipient_type_allowed_for_surface
 from extensions.ext_database import db
 from libs.login import login_required
 from models import Account, App

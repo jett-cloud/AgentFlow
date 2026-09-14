@@ -4,10 +4,15 @@ import pytest
 
 from core.app.entities.app_invoke_entities import InvokeFrom, UserFrom, build_dify_run_context
 from core.workflow.node_factory import DifyNodeFactory
+from graphon.entities.base_node_data import BaseNodeData
 from graphon.enums import BuiltinNodeTypes
 
 
 class DummyNode:
+    @classmethod
+    def validate_node_data(cls, node_data: BaseNodeData) -> BaseNodeData:
+        return node_data
+
     def __init__(self, *, node_id, data, graph_init_params, graph_runtime_state, **kwargs):
         self.id = node_id
         self.data = data

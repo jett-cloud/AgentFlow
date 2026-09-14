@@ -24,7 +24,7 @@ from core.app.entities.queue_entities import (
     QueueNodeStartedEvent,
     QueueNodeSucceededEvent,
 )
-from core.workflow.system_variables import build_system_variables
+from core.workflow.runtime.variables.system_variables import build_system_variables
 from graphon.entities import WorkflowStartReason
 from graphon.enums import BuiltinNodeTypes
 from libs.datetime_utils import naive_utc_now

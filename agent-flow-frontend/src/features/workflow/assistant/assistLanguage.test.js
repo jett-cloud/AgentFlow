@@ -3,18 +3,37 @@ import assert from 'node:assert/strict'
 
 import * as assistLanguage from './assistLanguage.js'
 
-test('recovered copy follows the latest authoritative user message', () => {
+test('recovered copy follows explicit language changes', () => {
   assert.equal(typeof assistLanguage.detectRecoveredAssistLanguage, 'function')
 
   const messages = [
     { role: 'user', text: '请添加一个节点' },
     { role: 'assistant', text: 'Working' },
-    { role: 'user', text: 'Add a final answer node' },
+    { role: 'user', text: 'Please respond in English' },
     { role: 'assistant', text: 'Done' },
   ]
 
   assert.equal(assistLanguage.detectRecoveredAssistLanguage(messages), 'en')
   assert.equal(assistLanguage.detectRecoveredAssistLanguage([]), 'zh-Hans')
+})
+
+test('model clarification and subsequent instructions inherit the conversation language', () => {
+  const messages = [
+    { role: 'user', text: '请生成抠图工作流' },
+    { role: 'assistant', text: 'Which model?' },
+    { role: 'user', text: 'deepseek-v4-pro 深度求索\ndoubao-seedream-3-0-t2i-250415' },
+    { role: 'user', text: 'continue' },
+  ]
+  assert.equal(assistLanguage.detectRecoveredAssistLanguage(messages), 'zh-Hans')
+  assert.equal(assistLanguage.detectRecoveredAssistLanguage([
+    ...messages, { role: 'user', text: '请改用英文回答' },
+  ]), 'en')
+  assert.equal(assistLanguage.detectRecoveredAssistLanguage([
+    { role: 'user', text: 'Build a workflow' }, { role: 'user', text: '请用中文回答' },
+  ]), 'zh-Hans')
+  assert.equal(assistLanguage.detectRecoveredAssistLanguage([
+    ...messages, { role: 'user', text: '不要用英文回答' },
+  ]), 'zh-Hans')
 })
 
 test('English completion copy is available to mounted message and live-status paths', () => {

@@ -17,7 +17,7 @@
             type="source"
             position="right"
             :handle-id="caseItem.case_id || `case-${cIdx}`"
-            :label="cIdx === 0 ? 'IF' : `ELIF ${cIdx}`"
+            :label="branchLabel(caseItem.case_id, cIdx)"
             :read-only="readOnly"
             branch
           />
@@ -26,7 +26,7 @@
           <div v-for="(cond, condIdx) in caseItem.conditions" :key="condIdx" class="cond-row">
             <span class="mono">{{ formatVarSelector(cond.variable_selector) }}</span>
             <span class="op">{{ formatOpName(cond.comparison_operator) }}</span>
-            <span class="mono">{{ cond.value || '-' }}</span>
+            <span class="mono">{{ formatIfElseConditionValue(cond) }}</span>
           </div>
         </div>
         <div v-else class="condition-empty">条件未配置</div>
@@ -43,7 +43,8 @@
 <script setup>
 import BaseNode from '../base/BaseNode.vue'
 import NodeHandle from '../base/NodeHandle.vue'
-import { useIfElseConfig, COMPARISON_OPERATORS } from './useIfElseConfig.js'
+import { formatIfElseConditionValue, getIfElseOperators } from './ifElseNode.js'
+import { useIfElseConfig } from './useIfElseConfig.js'
 
 const props = defineProps({
   id: { type: String, required: true },
@@ -52,7 +53,10 @@ const props = defineProps({
   readOnly: { type: Boolean, default: false }
 })
 
-const { cases } = useIfElseConfig(props, () => {})
+const { cases, targetBranches } = useIfElseConfig(props, () => {})
+
+const branchLabel = (caseId, index) => targetBranches.value.find(item => item.id === caseId)?.name
+  || (cases.value.length === 1 ? 'IF' : `CASE ${index + 1}`)
 
 // 格式化变量路径文本
 const formatVarSelector = (selector) => {
@@ -63,7 +67,7 @@ const formatVarSelector = (selector) => {
 
 // 格式化比较运算符缩写
 const formatOpName = (opValue) => {
-  const target = COMPARISON_OPERATORS.find((item) => item.value === opValue)
+  const target = getIfElseOperators('string').find((item) => item.value === opValue)
   return target ? target.name.split(' ')[0] : opValue || '=='
 }
 </script>

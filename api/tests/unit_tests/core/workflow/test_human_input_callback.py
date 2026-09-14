@@ -36,6 +36,26 @@ def test_session_binding_identity_mapping() -> None:
     assert binding.resolve_form_id_from_session_id(session_id="form-1") == "form-1"
 
 
+def test_form_is_scoped_to_node_execution_in_repeated_container_runs() -> None:
+    repository = MagicMock(spec=HumanInputFormRepository)
+    repository.get_form.return_value = None
+    repository.create_form.side_effect = lambda params: SimpleNamespace(id=params.form_id)
+    execution_id = "iteration-one"
+    callback = DifyHITLCallback(
+        form_repository=repository,
+        node_data=HumanInputNodeData(title="Approval", form_content="Approve"),
+        execution_id_getter=lambda: execution_id,
+    )
+
+    first = callback(_ctx("run-1", "approval"))
+    execution_id = "iteration-two"
+    second = callback(_ctx("run-1", "approval"))
+
+    assert first == callback.pause_requested_type(session_id="iteration-one")
+    assert second == callback.pause_requested_type(session_id="iteration-two")
+    repository.get_form.assert_called_with("approval", form_id="iteration-two")
+
+
 def test_dify_hitl_callback_creates_pause_requested_for_new_form() -> None:
     repository = MagicMock(spec=HumanInputFormRepository)
     repository.get_form.return_value = None
@@ -111,7 +131,7 @@ def test_dify_hitl_callback_returns_timeout_for_explicit_timeout_form() -> None:
 
     decision = callback(_ctx("run-1", "node-1"))
 
-    assert decision.selected_handle == "__timeout__"
+    assert decision.selected_handle == "__timeout"
     assert decision.outputs == {
         "__action_id": build_segment(""),
         "__action_value": build_segment(""),
@@ -138,7 +158,7 @@ def test_dify_hitl_callback_returns_timeout_for_waiting_form_past_node_deadline(
 
     decision = callback(_ctx("run-1", "node-1"))
 
-    assert decision.selected_handle == "__timeout__"
+    assert decision.selected_handle == "__timeout"
     assert decision.outputs == {
         "__action_id": build_segment(""),
         "__action_value": build_segment(""),

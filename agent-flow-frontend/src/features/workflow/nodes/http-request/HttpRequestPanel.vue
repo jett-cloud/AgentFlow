@@ -19,6 +19,7 @@
           <el-option label="DELETE" value="delete" />
           <el-option label="PATCH" value="patch" />
           <el-option label="HEAD" value="head" />
+          <el-option label="OPTIONS" value="options" />
         </el-select>
       </div>
 
@@ -39,10 +40,19 @@
 
       <div class="form-section">
         <label class="section-label">认证</label>
-        <el-select v-model="authorization.type" class="w-full" size="small" :disabled="readOnly">
+        <el-select v-model="authorizationType" class="w-full" size="small" :disabled="readOnly">
           <el-option label="无认证" value="no-auth" />
           <el-option label="API Key" value="api-key" />
         </el-select>
+        <template v-if="authorizationType === 'api-key'">
+          <el-select v-model="authorizationConfigType" class="w-full" size="small" :disabled="readOnly">
+            <el-option label="Basic" value="basic" />
+            <el-option label="Bearer" value="bearer" />
+            <el-option label="Custom" value="custom" />
+          </el-select>
+          <el-input v-model="authorizationApiKey" type="password" show-password placeholder="API Key" size="small" :disabled="readOnly" />
+          <el-input v-if="authorizationConfigType === 'custom'" v-model="authorizationHeader" placeholder="Header name" size="small" :disabled="readOnly" />
+        </template>
       </div>
 
       <div class="form-section">
@@ -57,20 +67,7 @@
         </el-select>
       </div>
 
-      <div class="form-section">
-        <label class="section-label">超时 (毫秒)</label>
-        <el-input-number v-model="timeout.max_read_timeout" :min="0" size="small" :disabled="readOnly" />
-      </div>
-      <div class="form-section inline-section">
-        <label class="section-label">验证 SSL</label>
-        <el-switch v-model="sslVerify" :disabled="readOnly" />
-      </div>
-      <div class="form-section inline-section">
-        <label class="section-label">失败重试</label>
-        <el-switch v-model="retryConfig.retry_enabled" :disabled="readOnly" />
-      </div>
-
-      <div class="form-section" v-if="bodyType !== 'none'">
+      <div class="form-section" v-if="isTextHttpBodyType(bodyType)">
         <label class="section-label">Body</label>
         <el-input
           v-model="body"
@@ -82,6 +79,84 @@
         />
       </div>
 
+      <div class="form-section" v-if="isKeyedHttpBodyType(bodyType)">
+        <div class="section-header">
+          <label class="section-label">Body 字段</label>
+          <el-button v-if="!readOnly" size="small" type="primary" link @click="addBodyItem('text')">添加字段</el-button>
+        </div>
+        <div v-for="(item, index) in bodyItems" :key="index" class="body-row">
+          <el-input
+            :model-value="item.key"
+            size="small"
+            placeholder="key"
+            :disabled="readOnly"
+            @update:model-value="updateBodyItem(index, { key: $event })"
+          />
+          <el-select
+            :model-value="item.type"
+            size="small"
+            :disabled="readOnly"
+            @change="updateBodyItem(index, $event === 'file' ? { type: 'file', file: item.file || [] } : { type: 'text', value: item.value || '' })"
+          >
+            <el-option label="文本" value="text" />
+            <el-option v-if="bodyType === 'form-data'" label="文件" value="file" />
+          </el-select>
+          <VarReferencePicker
+            v-if="item.type === 'file'"
+            :model-value="item.file"
+            :node-id="nodeId"
+            :read-only="readOnly"
+            :filter-var="isHttpFileVariable"
+            placeholder="选择文件变量"
+            @update:model-value="updateBodyItem(index, { file: $event })"
+          />
+          <el-input
+            v-else
+            :model-value="item.value"
+            size="small"
+            placeholder="value"
+            :disabled="readOnly"
+            @update:model-value="updateBodyItem(index, { value: $event })"
+          />
+          <el-button v-if="!readOnly" link @click="removeBodyItem(index)">删除</el-button>
+        </div>
+      </div>
+
+      <div class="form-section" v-if="bodyType === 'binary'">
+        <label class="section-label">二进制文件</label>
+        <VarReferencePicker
+          v-model="binaryFile"
+          :node-id="nodeId"
+          :read-only="readOnly"
+          :filter-var="isHttpFileVariable"
+          placeholder="选择文件变量"
+        />
+      </div>
+
+      <div class="form-section">
+        <label class="section-label">连接超时（秒）</label>
+        <el-input-number v-model="timeoutConnect" :min="0" size="small" :disabled="readOnly" />
+        <label class="section-label">读取超时（秒）</label>
+        <el-input-number v-model="timeoutRead" :min="0" size="small" :disabled="readOnly" />
+        <label class="section-label">写入超时（秒）</label>
+        <el-input-number v-model="timeoutWrite" :min="0" size="small" :disabled="readOnly" />
+      </div>
+      <div class="form-section inline-section">
+        <label class="section-label">验证 SSL</label>
+        <el-switch v-model="sslVerify" :disabled="readOnly" />
+      </div>
+      <div class="form-section inline-section">
+        <label class="section-label">失败重试</label>
+        <el-switch v-model="retryEnabled" :disabled="readOnly" />
+      </div>
+
+      <ErrorHandleConfig
+        :node-data="nodeData"
+        :read-only="readOnly"
+        @update:error-strategy="handleErrorStrategyUpdate"
+        @update:default-value="handleDefaultValueUpdate"
+      />
+
       <NextStep :node-id="nodeId" :node-data="nodeData" :read-only="readOnly" />
     </div>
   </div>
@@ -92,6 +167,9 @@ import { computed } from 'vue'
 import { Close } from '@element-plus/icons-vue'
 import BlockIcon from '../base/BlockIcon.vue'
 import NextStep from '../shared/NextStep.vue'
+import ErrorHandleConfig from '../shared/ErrorHandleConfig.vue'
+import VarReferencePicker from '../shared/VarReferencePicker.vue'
+import { applyHttpRequestField } from './httpRequest.js'
 import { useHttpRequestConfig } from './useHttpRequestConfig.js'
 
 const props = defineProps({
@@ -101,11 +179,19 @@ const props = defineProps({
 })
 const emit = defineEmits(['close', 'update:nodeData'])
 
-const { readOnly, method, url, headers, params, body, bodyType, authorization, timeout, sslVerify, retryConfig } = useHttpRequestConfig(props, emit)
+const {
+  readOnly, method, url, headers, params, body, bodyType, bodyItems, binaryFile,
+  isKeyedHttpBodyType, isTextHttpBodyType, isHttpFileVariable,
+  sslVerify, retryEnabled,
+  timeoutConnect, timeoutRead, timeoutWrite,
+  authorizationType, authorizationConfigType, authorizationApiKey, authorizationHeader,
+  addBodyItem, removeBodyItem, updateBodyItem,
+  handleErrorStrategyUpdate, handleDefaultValueUpdate,
+} = useHttpRequestConfig(props, emit)
 
 const nodeTitle = computed({
   get: () => props.nodeData?.title || 'HTTP 请求',
-  set: (val) => emit('update:nodeData', { ...props.nodeData, title: val })
+  set: (val) => emit('update:nodeData', applyHttpRequestField(props.nodeData, 'title', val))
 })
 </script>
 
@@ -117,5 +203,7 @@ const nodeTitle = computed({
 .close-btn { background: transparent; border: none; cursor: pointer; color: #667085; }
 .panel-body { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
 .form-section { display: flex; flex-direction: column; gap: 8px; }
+.section-header { display: flex; align-items: center; justify-content: space-between; }
 .section-label { font-size: 12px; font-weight: 600; color: #344054; }
+.body-row { display: grid; grid-template-columns: 1fr 90px minmax(140px, 1.4fr) auto; gap: 8px; align-items: center; }
 </style>

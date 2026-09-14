@@ -7,7 +7,7 @@
         <BlockIcon type="human-input" :size="20" />
         <input v-model="nodeTitle" class="title-input" placeholder="人机交互" :disabled="readOnly" />
       </div>
-      <button class="close-btn" @click="$emit('close')"><el-icon><Close /></el-icon></button>
+      <button type="button" class="close-btn" aria-label="关闭配置面板" @click="$emit('close')"><el-icon><Close /></el-icon></button>
     </div>
 
     <!-- Body 配置主体 (完全对齐 Dify 源码四大配置区块) -->
@@ -15,10 +15,15 @@
       <!-- 1. 交付通知渠道 (Delivery Methods) -->
       <div class="form-section">
         <div class="section-label">交付/通知途径 (DELIVERY METHODS)</div>
-        <el-checkbox-group v-model="deliveryMethods" :disabled="readOnly" class="checkbox-group">
-          <el-checkbox value="webapp">🤖 WebApp 弹窗与对话交互</el-checkbox>
+        <el-checkbox-group :model-value="deliveryMethods" :disabled="readOnly" class="checkbox-group" @change="onDeliveryMethodsChange">
+          <el-checkbox value="webapp" :disabled="readOnly || webAppAddDisabled">🤖 WebApp 弹窗与对话交互</el-checkbox>
           <el-checkbox value="email">✉️ Email 邮件通知交互</el-checkbox>
         </el-checkbox-group>
+        <HumanInputEmailConfig
+          v-if="deliveryMethods.includes('email')"
+          v-model="emailConfig"
+          :read-only="readOnly"
+        />
       </div>
 
       <!-- 2. 表单内容与提示词 (Form Content) -->
@@ -42,18 +47,23 @@
 
         <!-- 编辑模式 vs 预览模式 -->
         <div v-if="!isPreview" class="editor-wrapper">
-          <el-input 
-            v-model="prompt" 
-            type="textarea" 
-            :rows="5" 
-            placeholder="请输入交付给人工查看的提示词内容 (支持 Markdown 与引用变量)..." 
-            :disabled="readOnly" 
+          <HumanInputContentEditor
+            :model-value="prompt"
+            :fields="inputs"
+            :node-id="nodeId"
+            :read-only="readOnly"
+            @update:model-value="prompt = $event"
+            @update:fields="inputs = $event"
+            @rename-field="onRenameField"
+            @remove-field="onRemoveField"
           />
         </div>
-        <div v-else class="preview-box">
-          <div class="preview-title">交互预览:</div>
-          <div class="preview-content">{{ prompt || '暂无表单提示词' }}</div>
-        </div>
+        <HumanInputFormPreview
+          v-else
+          :content="prompt"
+          :fields="inputs"
+          :actions="userActions"
+        />
       </div>
 
       <!-- 3. 分支操作按钮 (User Actions) -->
@@ -66,29 +76,34 @@
         </div>
 
         <div v-if="userActions && userActions.length" class="actions-list">
-          <div v-for="(act, aIdx) in userActions" :key="aIdx" class="action-card">
-            <el-input 
-              :model-value="act.title"
-              size="small" 
-              placeholder="按钮文案 (如: 同意)" 
-              :disabled="readOnly" 
-              style="width: 120px;"
-              @update:model-value="updateUserAction(aIdx, { title: $event })"
-            />
-            <el-input 
-              :model-value="act.id"
-              size="small" 
-              placeholder="分支 ID (如: approve)" 
-              :disabled="readOnly" 
-              style="width: 110px;"
-              @update:model-value="updateUserAction(aIdx, { id: $event })"
-            />
+          <div v-for="(act, aIdx) in userActions" :key="actionDraftKey(act, aIdx)" class="action-card">
+            <div class="action-field">
+              <el-input
+                :model-value="act.title"
+                size="small"
+                placeholder="按钮文案（如：同意）"
+                :maxlength="100"
+                show-word-limit
+                :disabled="readOnly"
+                @update:model-value="updateUserAction(aIdx, { title: $event })"
+              />
+              <span v-if="!String(act.title || '').trim()" class="field-error">按钮文案不能为空</span>
+            </div>
+            <div class="action-field">
+              <el-input
+                :model-value="actionIdDisplay(act, aIdx)"
+                size="small"
+                placeholder="分支 ID（如：approve）"
+                :disabled="readOnly"
+                @update:model-value="commitActionId(act, aIdx, $event)"
+              />
+              <span v-if="actionIdError(act, aIdx)" class="field-error">{{ actionIdError(act, aIdx) }}</span>
+            </div>
             <el-select 
               :model-value="act.button_style"
               size="small" 
               placeholder="按钮风格" 
               :disabled="readOnly" 
-              style="width: 100px;"
               @change="updateUserAction(aIdx, { button_style: $event })"
             >
               <el-option 
@@ -98,15 +113,15 @@
                 :value="s.value" 
               />
             </el-select>
-            <el-button 
-              v-if="!readOnly && userActions.length > 1" 
-              type="danger" 
-              link 
-              size="small" 
-              @click="removeUserAction(aIdx)"
+            <button
+              v-if="!readOnly && userActions.length > 1"
+              type="button"
+              class="icon-btn"
+              aria-label="删除操作按钮"
+              @click="onRemoveUserAction(aIdx)"
             >
               <el-icon><Delete /></el-icon>
-            </el-button>
+            </button>
           </div>
         </div>
         <div v-else class="empty-tip">未配置操作按钮，需至少添加一个分支按钮</div>
@@ -146,7 +161,7 @@
           <div class="var-tag"><span class="var-name">__rendered_content</span> <span class="var-type">string</span></div>
           <div v-for="(inputItem, iIdx) in inputs" :key="iIdx" class="var-tag">
             <span class="var-name">{{ inputItem.output_variable_name || `input_${iIdx}` }}</span> 
-            <span class="var-type">{{ inputItem.type || 'string' }}</span>
+            <span class="var-type">{{ outputType(inputItem.type) }}</span>
           </div>
         </div>
       </div>
@@ -158,11 +173,23 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, inject } from 'vue'
 import { Close, Plus, Delete, View, DocumentCopy } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import BlockIcon from '../base/BlockIcon.vue'
 import NextStep from '../shared/NextStep.vue'
+import HumanInputEmailConfig from './HumanInputEmailConfig.vue'
+import HumanInputContentEditor from './HumanInputContentEditor.vue'
+import HumanInputFormPreview from './HumanInputFormPreview.vue'
+import {
+  applyHumanInputActionIdInput,
+  humanInputActionIdErrorMessage,
+  humanInputDraftKey,
+  pruneHumanInputDrafts,
+  removeHumanInputOutputToken,
+  renameHumanInputOutputToken,
+} from './humanInputNode.js'
+import { canAddHumanInputWebApp } from '../../model/workflowEntry.js'
 import { 
   useHumanInputConfig, 
   BUTTON_STYLES 
@@ -175,13 +202,15 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['close', 'update:nodeData'])
-
+const graph = inject('workflowGraph', null)
 const isPreview = ref(false)
+const actionIdDrafts = ref({})
 
 const { 
   readOnly, 
   prompt, 
   deliveryMethods, 
+  emailConfig,
   inputs, 
   userActions, 
   timeout, 
@@ -192,6 +221,16 @@ const {
 } = useHumanInputConfig(props, (event, val) => {
   emit(event, val)
 })
+
+const canvasNodes = computed(() => graph?.nodes?.value || graph?.getNodes?.() || [])
+const webAppAddDisabled = computed(() => !canAddHumanInputWebApp(canvasNodes.value, deliveryMethods.value))
+
+function onDeliveryMethodsChange(types) {
+  const next = Array.isArray(types) ? types : []
+  if (next.includes('webapp') && !canAddHumanInputWebApp(canvasNodes.value, deliveryMethods.value))
+    return
+  deliveryMethods.value = next
+}
 
 const nodeTitle = computed({
   get: () => props.nodeData?.title || '人机交互',
@@ -204,6 +243,67 @@ const copyContent = () => {
     ElMessage.success('已复制表单内容到剪贴板')
   }
 }
+
+function onRenameField({ oldName, newName }) {
+  prompt.value = renameHumanInputOutputToken(prompt.value, oldName, newName)
+}
+
+function onRemoveField({ name, oldName }) {
+  prompt.value = removeHumanInputOutputToken(prompt.value, name || oldName)
+}
+
+function actionDraftKey(act, index) {
+  return humanInputDraftKey(act?.id, index)
+}
+
+function actionIdDisplay(act, index) {
+  return actionIdDrafts.value[actionDraftKey(act, index)]?.display ?? act.id
+}
+
+function actionIdError(act, index) {
+  const stored = act?.id || ''
+  const draft = actionIdDrafts.value[actionDraftKey(act, index)]
+  const result = applyHumanInputActionIdInput(
+    draft?.display ?? stored,
+    userActions.value.map(item => item.id).filter((_, current) => current !== index),
+    stored,
+  )
+  return humanInputActionIdErrorMessage(result.error)
+}
+
+function commitActionId(act, index, raw) {
+  const stored = act?.id || ''
+  const others = userActions.value
+    .map(item => item.id)
+    .filter((_, current) => current !== index)
+  const result = applyHumanInputActionIdInput(raw, others, stored)
+  const key = actionDraftKey(act, index)
+  if (result.error) {
+    actionIdDrafts.value = { ...actionIdDrafts.value, [key]: { display: result.display } }
+    return
+  }
+  const next = { ...actionIdDrafts.value }
+  delete next[key]
+  actionIdDrafts.value = next
+  if (stored === result.id)
+    return
+  updateUserAction(index, { id: result.id })
+}
+
+function onRemoveUserAction(index) {
+  const remaining = userActions.value
+    .filter((_, current) => current !== index)
+    .map((item, current) => actionDraftKey(item, current))
+  actionIdDrafts.value = pruneHumanInputDrafts(actionIdDrafts.value, remaining)
+  removeUserAction(index)
+}
+
+const outputType = type => ({
+  paragraph: 'string',
+  select: 'string',
+  file: 'file',
+  'file-list': 'arrayFile',
+})[type] || 'string'
 </script>
 
 <style scoped>
@@ -226,6 +326,9 @@ const copyContent = () => {
 .header-left { display: flex; align-items: center; gap: 8px; flex: 1; }
 .title-input { font-size: 14px; font-weight: 600; color: #101828; border: none; background: transparent; }
 .close-btn { background: transparent; border: none; cursor: pointer; color: #667085; }
+.close-btn:focus-visible,
+.icon-btn:focus-visible { outline: 2px solid #155eef; outline-offset: 2px; }
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; background: transparent; border: none; cursor: pointer; color: #667085; padding: 4px; }
 
 .panel-body { 
   flex: 1; 
@@ -263,9 +366,11 @@ const copyContent = () => {
   border-radius: 6px;
   padding: 8px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
 }
+.action-field { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 3px; }
+.field-error { color: #d92d20; font-size: 10px; line-height: 1.2; }
 
 .empty-tip {
   font-size: 11px;

@@ -6,7 +6,7 @@ export const START_INPUT_TYPE = {
   select: 'select',
   number: 'number',
   checkbox: 'checkbox',
-  json: 'json-object',
+  json: 'json_object',
   file: 'file',
   fileList: 'file-list',
 }
@@ -15,7 +15,7 @@ export function normalizeStartVariableType(type) {
   const value = String(type || START_INPUT_TYPE.text).toLowerCase()
   if (value === 'single-file') return START_INPUT_TYPE.file
   if (value === 'multi-files') return START_INPUT_TYPE.fileList
-  if (value === 'json_object') return START_INPUT_TYPE.json
+  if (value === 'json-object') return START_INPUT_TYPE.json
   return value
 }
 

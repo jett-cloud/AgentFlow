@@ -17,7 +17,7 @@ from sqlalchemy.exc import DataError, SQLAlchemyError
 
 from core.db.session_factory import session_factory
 from core.tools.tool_file_manager import resolve_extension
-from core.workflow.file_reference import build_file_reference
+from core.workflow.runtime.adapters.file_reference import build_file_reference
 from graphon.file import File, FileTransferMethod, get_file_type_by_mime_type
 from models.tools import ToolFile
 

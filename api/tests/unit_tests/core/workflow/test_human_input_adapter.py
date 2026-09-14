@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel
 
-from core.workflow.human_input_adapter import (
+from core.workflow.graph.adapters.human_input_adapter import (
     DeliveryMethodType,
     EmailDeliveryConfig,
     EmailDeliveryMethod,
@@ -18,12 +18,12 @@ from core.workflow.human_input_adapter import (
 )
 from graphon.enums import BuiltinNodeTypes
 from graphon.nodes.base.variable_template_parser import VariableTemplateParser
+from graphon.runtime import VariablePool
 
 
 def test_email_delivery_config_helpers_render_and_sanitize_text() -> None:
-    variable_pool = SimpleNamespace(
-        convert_template=lambda body: SimpleNamespace(text=body.replace("{{#node.value#}}", "42"))
-    )
+    variable_pool = VariablePool()
+    variable_pool.add(["node", "value"], "42")
 
     rendered = EmailDeliveryConfig.render_body_template(
         body="Open {{#url#}} and use {{#node.value#}}",
@@ -232,27 +232,80 @@ def test_adapt_node_data_for_graph_flattens_constant_model_selector_value() -> N
 
 
 def test_adapt_node_config_for_graph_rewrites_nested_node_data() -> None:
-    normalized = adapt_node_config_for_graph(
-        {
-            "data": {
-                "type": BuiltinNodeTypes.HUMAN_INPUT,
-                "delivery_methods": [
-                    {
-                        "type": DeliveryMethodType.EMAIL,
-                        "config": {
-                            "recipients": {"whole_workspace": True, "items": [{"type": "member", "user_id": "user-1"}]},
-                            "subject": "Subject",
-                            "body": "Body",
+    original = {
+        "data": {
+            "type": BuiltinNodeTypes.HUMAN_INPUT,
+            "delivery_methods": [
+                {
+                    "type": DeliveryMethodType.EMAIL,
+                    "config": {
+                        "recipients": {
+                            "whole_workspace": True,
+                            "items": [{"type": "member", "user_id": "member-1"}],
                         },
-                    }
-                ],
-            }
+                        "subject": "Subject",
+                        "body": "Body",
+                    },
+                }
+            ],
         }
-    )
+    }
+    original_before = {
+        "data": {
+            "type": BuiltinNodeTypes.HUMAN_INPUT,
+            "delivery_methods": [
+                {
+                    "type": DeliveryMethodType.EMAIL,
+                    "config": {
+                        "recipients": {
+                            "whole_workspace": True,
+                            "items": [{"type": "member", "user_id": "member-1"}],
+                        },
+                        "subject": "Subject",
+                        "body": "Body",
+                    },
+                }
+            ],
+        }
+    }
 
-    recipients = normalized["data"]["delivery_methods"][0]["config"]["recipients"]
-    assert recipients["include_bound_group"] is True
-    assert recipients["items"][0]["reference_id"] == "user-1"
+    adapted = adapt_node_config_for_graph(original)
+
+    assert adapted["data"]["delivery_methods"][0]["config"]["recipients"] == {
+        "include_bound_group": True,
+        "items": [{"type": "member", "reference_id": "member-1"}],
+    }
+    assert original == original_before
+    assert adapt_node_config_for_graph(adapted) == adapted
+
+
+def test_adapt_node_config_for_graph_dispatches_if_else_once_at_the_shared_boundary() -> None:
+    original = {
+        "id": "branch",
+        "data": {
+            "type": BuiltinNodeTypes.IF_ELSE,
+            "cases": [
+                {
+                    "case_id": "true",
+                    "logical_operator": "and",
+                    "conditions": [
+                        {
+                            "variable_selector": ["start", "value"],
+                            "comparison_operator": "is null",
+                            "value": "",
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+
+    first = adapt_node_config_for_graph(original)
+    second = adapt_node_config_for_graph(first)
+
+    assert original["data"]["cases"][0]["conditions"][0]["comparison_operator"] == "is null"
+    assert first["data"]["cases"][0]["conditions"][0]["comparison_operator"] == "null"
+    assert second == first
 
 
 def test_adapt_human_input_node_data_for_graph_accepts_models() -> None:

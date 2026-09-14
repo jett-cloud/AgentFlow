@@ -85,12 +85,23 @@ class CandidateMutation:
 
 
 @dataclass(frozen=True)
+class WorkflowContractCheckpoint:
+    """Authoritative plan snapshot persisted independently from compaction."""
+
+    protocol_version: int
+    revision: int
+    contract_hash: str
+    contract: dict[str, object]
+
+
+@dataclass(frozen=True)
 class AgentCheckpoint:
     """Durable Agent prompt state committed under a worker fence."""
 
     compacted_until_sequence: int | None
     compacted_state: dict[str, Any] | None
     last_validation: dict[str, Any] | None
+    workflow_contract: WorkflowContractCheckpoint | None = None
 
 
 @dataclass(frozen=True)

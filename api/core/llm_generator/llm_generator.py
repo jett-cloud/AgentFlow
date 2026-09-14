@@ -390,7 +390,8 @@ class LLMGenerator:
             logger.info("Workflow instruction suggestions: failed to load knowledge bases", exc_info=True)
 
         try:
-            from core.workflow.generator.tool_catalogue import build_tool_catalogue, format_tool_catalogue
+            from services.workflow_assist.tool_catalogue_loader import build_tool_catalogue
+            from core.workflow.generator.resources.tool_catalogue import format_tool_catalogue
 
             tool_text = format_tool_catalogue(build_tool_catalogue(tenant_id))
             if tool_text:

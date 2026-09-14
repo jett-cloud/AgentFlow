@@ -2,11 +2,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.workflow.human_input_forms import (
+from core.workflow.nodes.human_input.human_input_forms import (
     load_form_dispositions_by_form_id,
     load_form_tokens_by_form_id,
 )
-from core.workflow.human_input_policy import (
+from core.workflow.nodes.human_input.human_input_policy import (
     FormDisposition,
     HumanInputSurface,
     disposition_for_surface,

@@ -49,3 +49,22 @@ test('flattenModelCatalog does not pick a default rerank model', () => {
     reranking_model: { reranking_provider_name: '', reranking_model_name: '' },
   }), false)
 })
+
+test('flattenModelCatalog keeps provider icons for model selectors', () => {
+  const catalog = flattenModelCatalog({
+    data: [{
+      provider: 'siliconflow',
+      label: { zh_Hans: '硅基流动' },
+      icon_small: { zh_Hans: '/console/api/workspaces/current/model-providers/siliconflow/icon_small/zh_Hans' },
+      models: [{ model: 'bce-embedding-base_v1', label: { en_US: 'BCE Embedding' } }],
+    }],
+  })
+
+  assert.deepEqual(catalog, [{
+    provider: 'siliconflow',
+    providerLabel: '硅基流动',
+    providerIcon: { zh_Hans: '/console/api/workspaces/current/model-providers/siliconflow/icon_small/zh_Hans' },
+    model: 'bce-embedding-base_v1',
+    label: 'BCE Embedding',
+  }])
+})

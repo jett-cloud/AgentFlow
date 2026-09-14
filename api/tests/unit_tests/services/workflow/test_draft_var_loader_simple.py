@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 import pytest
 from sqlalchemy import Engine
 
-from core.workflow.file_reference import build_file_reference
+from core.workflow.runtime.adapters.file_reference import build_file_reference
 from graphon.file import File, FileTransferMethod, FileType
 from graphon.variables.segments import ObjectSegment, StringSegment
 from graphon.variables.types import SegmentType

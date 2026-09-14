@@ -49,7 +49,7 @@ from core.app.entities.app_invoke_entities import (
 from core.app.llm.model_access import build_dify_model_access
 from core.db.session_factory import session_factory
 from core.ops.ops_trace_manager import TraceQueueManager
-from core.workflow.file_reference import build_file_reference, is_canonical_file_reference
+from core.workflow.runtime.adapters.file_reference import build_file_reference, is_canonical_file_reference
 from extensions.ext_database import db
 from models import Account, App, AppModelConfig, EndUser, Message, MessageAnnotation
 from models.agent import (

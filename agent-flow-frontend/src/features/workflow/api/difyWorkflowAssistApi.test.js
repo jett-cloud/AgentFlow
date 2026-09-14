@@ -69,6 +69,44 @@ test('turn accepts the 202 result and sends only the exact v2 body', async () =>
   ])
 })
 
+test('turn sends @ tool and dataset identities to the backend', async () => {
+  const references = [
+    { kind: 'tool', id: 'image/generate', label: '图片生成', provider: 'image', tool_name: 'generate' },
+    { kind: 'dataset', id: 'bead-colors', label: '拼豆颜色.txt' },
+  ]
+  let body
+  await withClientMethod('post', async (_path, payload) => {
+    body = payload
+    return { conversation_id: 'conv-1', run_id: 'run-1', epoch: 1, cursor: 0 }
+  }, () => workflowAssistApi.postWorkflowAssistTurn('app-1', 'conv-1', {
+    message: '通过 图片生成 和 拼豆颜色.txt 生成拼豆图片',
+    mode: 'workflow',
+    model_config: {},
+    references,
+  }))
+
+  assert.deepEqual(body.references, references)
+})
+
+test('live approval sends only the server request id, never client execution scope', async () => {
+  let body
+  const requestId = 'a'.repeat(32)
+  await withClientMethod('post', async (_path, payload) => {
+    body = payload
+    return { run_id: 'approved-run', epoch: 2 }
+  }, () => workflowAssistApi.postWorkflowAssistTurn('app-1', 'conv-1', {
+    message: 'Approve live trial',
+    mode: 'workflow',
+    model_config: {},
+    live_acceptance_request_id: requestId,
+    live_authorized: true,
+    max_executions: 100,
+  }))
+  assert.equal(body.live_acceptance_request_id, requestId)
+  assert.equal('live_authorized' in body, false)
+  assert.equal('max_executions' in body, false)
+})
+
 test('turn omits selected_node when it is not supplied', async () => {
   let body
   await withClientMethod('post', async (_path, payload) => {

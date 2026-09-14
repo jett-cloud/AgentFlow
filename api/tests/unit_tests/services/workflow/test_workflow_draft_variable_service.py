@@ -7,8 +7,8 @@ import pytest
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
-from core.workflow.system_variables import SystemVariableKey
-from core.workflow.variable_prefixes import (
+from core.workflow.runtime.variables.system_variables import SystemVariableKey
+from core.workflow.runtime.variables.variable_prefixes import (
     CONVERSATION_VARIABLE_NODE_ID,
     ENVIRONMENT_VARIABLE_NODE_ID,
     SYSTEM_VARIABLE_NODE_ID,

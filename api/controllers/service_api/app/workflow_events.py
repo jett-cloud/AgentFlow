@@ -23,7 +23,7 @@ from core.app.apps.common.workflow_response_converter import WorkflowResponseCon
 from core.app.apps.message_generator import MessageGenerator
 from core.app.apps.workflow.app_generator import WorkflowAppGenerator
 from core.app.entities.task_entities import StreamEvent
-from core.workflow.human_input_policy import HumanInputSurface
+from core.workflow.nodes.human_input.human_input_policy import HumanInputSurface
 from extensions.ext_database import db
 from models.enums import CreatorUserRole
 from models.model import App, AppMode, EndUser

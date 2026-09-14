@@ -4,9 +4,11 @@ import { useWorkflowStore } from '@/features/workflow/state/useWorkflowStore.js'
 import { isChatflowMode } from './appModes.js'
 import {
   buildAvailableVariables,
+  buildDirectChildOutputGroups,
   buildSpecialVarGroups,
   filterVarGroupsByType,
   flattenVarsForPicker,
+  selectAvailableVariableGroups,
   toValueSelectorFromPath,
 } from './availableVariables.js'
 
@@ -35,7 +37,7 @@ export {
 /**
  * composable：在 Panel 中使用，自动 inject 画布 graph 状态。
  * @param {import('vue').Ref<string>|string} nodeId
- * @param {{ hideFileVars?: boolean, filterVar?: (v: object) => boolean }} [options]
+ * @param {{ hideFileVars?: boolean, filterVar?: (v: object) => boolean, includeDirectChildren?: boolean }} [options]
  */
 export function useAvailableVariables(nodeId, options = {}) {
   const graph = inject('workflowGraph', null)
@@ -65,7 +67,17 @@ export function useAvailableVariables(nodeId, options = {}) {
       ragPipelineVariables,
     })
 
-    const groups = [...nodeGroups, ...specialGroups]
+    const includeDirectChildren = toValue(options.includeDirectChildren) || false
+    const containerNode = graph?.getNodes?.().find(node => node.id === id)
+    const directChildGroups = includeDirectChildren
+      ? buildDirectChildOutputGroups(containerNode, graph?.getNodes?.() || [])
+      : []
+    const groups = selectAvailableVariableGroups({
+      nodeGroups,
+      directChildGroups,
+      specialGroups,
+      includeDirectChildren,
+    })
     const hideFileVars = toValue(options.hideFileVars) || false
     const filterVar = toValue(options.filterVar)
     if (!hideFileVars && typeof filterVar !== 'function')

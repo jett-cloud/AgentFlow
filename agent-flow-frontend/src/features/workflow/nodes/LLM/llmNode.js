@@ -76,6 +76,16 @@ export function normalizeLLMNodeData(data = {}) {
     },
   }
 
+  if (normalized.vision.configs && typeof normalized.vision.configs === 'object') {
+    const configs = normalized.vision.configs
+    const detail = ['low', 'high', 'auto'].includes(configs.detail) ? configs.detail : 'high'
+    normalized.vision.configs = {
+      ...configs,
+      detail,
+      variable_selector: Array.isArray(configs.variable_selector) ? [...configs.variable_selector] : [],
+    }
+  }
+
   if (data.structured_output !== undefined)
     normalized.structured_output = normalizeStructuredOutput(data.structured_output)
   delete normalized.prompt
@@ -94,6 +104,14 @@ export function isLLMPromptEmpty(data = {}) {
     const content = item.edition_type === 'jinja2' ? item.jinja2_text : item.text
     return Boolean(String(content || '').trim())
   })
+}
+
+export function isLLMVisionFileVariable(variable = {}) {
+  const type = variable.type || variable.value_type
+  if (type === 'file' || type === 'arrayFile' || type === 'array[file]')
+    return true
+  const selector = variable.selector || []
+  return selector[0] === 'sys' && selector[1] === 'files'
 }
 
 export function hasInvalidLLMJinjaMapping(data = {}) {

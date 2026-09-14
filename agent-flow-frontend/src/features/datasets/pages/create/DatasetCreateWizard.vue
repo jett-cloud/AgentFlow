@@ -83,14 +83,37 @@
             v-model="embeddingKey"
             filterable
             placeholder="选择 Embedding 模型"
+            class="dataset-model-selector"
+            popper-class="dataset-model-select-popper"
             style="width: 100%"
           >
+            <template v-if="selectedEmbeddingModel" #prefix>
+              <ModelIcon
+                :provider="selectedEmbeddingModel.provider"
+                :model-name="selectedEmbeddingModel.model"
+                :icon="selectedEmbeddingModel.providerIcon"
+                size="sm"
+              />
+            </template>
             <el-option
               v-for="m in embeddingModels"
               :key="`${m.provider}/${m.model}`"
               :label="`${m.providerLabel} / ${m.label}`"
               :value="`${m.provider}::${m.model}`"
-            />
+            >
+              <div class="dataset-model-option">
+                <ModelIcon
+                  :provider="m.provider"
+                  :model-name="m.model"
+                  :icon="m.providerIcon"
+                  size="sm"
+                />
+                <div class="dataset-model-copy">
+                  <span class="dataset-model-label">{{ m.label }}</span>
+                  <span class="dataset-model-id">{{ m.providerLabel }} · {{ m.model }}</span>
+                </div>
+              </div>
+            </el-option>
           </el-select>
           <p v-if="!embeddingModels.length" class="hint">
             未检测到 Embedding 模型，请先在
@@ -241,6 +264,7 @@ import {
 } from '@/features/datasets/model/createDocumentPayload.js'
 import { flattenModelCatalog, isRerankConfigValid, parseRerankKey } from '@/features/datasets/model/retrievalModel.js'
 import { useDatasetStore } from '@/features/datasets/state/useDatasetStore.js'
+import ModelIcon from '@/features/workflow/nodes/base/ModelIcon.vue'
 import NotionSourcePanel from './sources/NotionSourcePanel.vue'
 import WebsiteSourcePanel from './sources/WebsiteSourcePanel.vue'
 
@@ -296,6 +320,9 @@ let pollTimer = null
 
 const isAddMode = computed(() => Boolean(props.datasetId || route.params.datasetId))
 const resolvedDatasetIdForSource = computed(() => props.datasetId || route.params.datasetId || '')
+const selectedEmbeddingModel = computed(() => (
+  embeddingModels.value.find(model => `${model.provider}::${model.model}` === embeddingKey.value) || null
+))
 
 const canGoStep2 = computed(() => {
   if (dataSourceType.value === 'upload_file')
@@ -710,6 +737,32 @@ onBeforeUnmount(stopPoll)
 .form {
   max-width: 560px;
 }
+.dataset-model-option {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+.dataset-model-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+.dataset-model-label,
+.dataset-model-id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dataset-model-label {
+  color: #101828;
+  font-size: 13px;
+}
+.dataset-model-id {
+  color: #98a2b3;
+  font-size: 11px;
+}
 .preview-block {
   margin-top: 20px;
   padding-top: 16px;
@@ -756,5 +809,21 @@ onBeforeUnmount(stopPoll)
   justify-content: flex-end;
   gap: 8px;
   margin-top: 20px;
+}
+</style>
+
+<style>
+.dataset-model-selector .el-select__prefix,
+.dataset-model-selector .el-select__selection .el-select__selected-item {
+  display: inline-flex;
+  align-items: center;
+}
+.dataset-model-selector .el-select__prefix {
+  margin-right: 4px;
+}
+.dataset-model-select-popper .el-select-dropdown__item {
+  height: auto;
+  padding: 8px 12px;
+  line-height: 1.3;
 }
 </style>

@@ -48,6 +48,7 @@ export function isValidEndOutputName(name) {
 export function normalizeEndNodeData(data = {}) {
   return {
     ...data,
+    type: 'end',
     outputs: Array.isArray(data.outputs)
       ? data.outputs.map((output) => {
           const normalized = {

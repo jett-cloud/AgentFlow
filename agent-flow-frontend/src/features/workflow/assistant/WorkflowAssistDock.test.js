@@ -46,6 +46,9 @@ test('canonical Dock exposes explicit stop, detached close, and authoritative ap
   assert.match(dock, /stopActiveTurn/)
   assert.match(dock, /detachActiveTurn/)
   assert.match(dock, /workflowAssistApplyPresentation/)
+  assert.match(dock, /workflowContractReportPresentation/)
+  assert.match(dock, /contractUi\.issues/)
+  assert.match(dock, /copy\.contractValidationTitle/)
   assert.match(dock, /applyWorkflowAssistCandidate/)
   assert.match(dock, /applying/)
   assert.match(dock, /:aria-busy="applying"/)
@@ -55,10 +58,26 @@ test('Apply visibility is independent from its in-flight disabled state in the r
   const dock = source('src/features/workflow/assistant/WorkflowAssistDock.vue')
 
   assert.match(dock, /v-if="applyUi\.visible"/)
-  assert.match(dock, /:disabled="applyUi\.disabled"/)
-  assert.match(dock, /:disabled="applyUi\.disabled"[\s\S]{0,120}:aria-busy="applying"/)
+  assert.match(dock, /:disabled="applyUi\.disabled \|\| recoveryState !== 'ready'"/)
+  assert.match(dock, /:disabled="applyUi\.disabled[^\"]*"[\s\S]{0,120}:aria-busy="applying"/)
   assert.match(dock, /applying \? copy\.applying : copy\.apply/)
   assert.doesNotMatch(dock, /v-if="canApply"/)
+})
+
+test('history recovery visibly blocks composer and clarification inputs without showing a new-chat placeholder', () => {
+  const dock = source('src/features/workflow/assistant/WorkflowAssistDock.vue')
+  const list = source('src/features/workflow/assistant/AssistMessageList.vue')
+  assert.match(dock, /const recoveryState = ref\('loading'\)/)
+  assert.match(dock, /:disabled="applying \|\| recoveryState !== 'ready'"/)
+  assert.match(dock, /copy\.restoringHistory/)
+  assert.match(dock, /copy\.historyRecoveryFailed/)
+  assert.match(dock, /@click="retryRecovery"/)
+  assert.match(list, /!messages\.length && !disabled/)
+  assert.match(list, /:disabled="disabled \|\| group\.message/)
+  assert.match(dock, /recoveryState === 'auth_required'/)
+  assert.match(dock, /copy\.authenticationRequired/)
+  assert.match(dock, /@click="loginToRestore"/)
+  assert.match(dock, /#\/login\?redirect=/)
 })
 
 test('the real Dock SFC owns a distinct deduplicated Run and Apply status live region', () => {
@@ -250,7 +269,7 @@ test('retryable failures expose Retry this step and call the retry API', () => {
 
   assert.match(dock, /postWorkflowAssistRunRetry/)
   assert.match(dock, /retryFailedStep/)
-  assert.match(dock, /:retryable="session\.retryable"/)
+  assert.match(dock, /:retryable="session\.retryable && recoveryState === 'ready'"/)
   assert.match(list, /copy\.retryThisStep/)
   assert.match(list, /v-if="retryable"/)
   assert.match(controller, /failed_step_id/)

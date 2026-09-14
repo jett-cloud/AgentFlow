@@ -18,7 +18,7 @@
     @input="$emit('update:modelValue', $event.target.value)"
   >
   <textarea
-    v-else-if="normalizedType === 'paragraph' || normalizedType === 'json-object'"
+    v-else-if="normalizedType === 'paragraph' || normalizedType === 'json_object'"
     :value="modelValue ?? ''"
     rows="3"
     :name="variable.variable"

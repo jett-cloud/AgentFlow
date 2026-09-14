@@ -5,6 +5,7 @@
  * @param {{ nodes?: Array, edges?: Array }} graph
  * @param {{
  *   isChatMode?: boolean,
+ *   isPipelineFlow?: boolean,
  *   environmentVariables?: Array,
  *   conversationVariables?: Array,
  *   ragPipelineVariables?: Array,
@@ -13,9 +14,11 @@
  */
 import {
   buildAvailableVariables,
+  buildDirectChildOutputGroups,
   buildSpecialVarGroups,
   collectUsedSelectors,
   isSelectorAvailable,
+  resolveAvailableVariable,
 } from './availableVariables.js'
 import { listOperatorRequiresConditionValue } from '../nodes/list-operator/listOperator.js'
 import {
@@ -23,26 +26,136 @@ import {
   CODE_OUTPUT_TYPES,
   isValidCodeVariableName,
 } from '../nodes/code/codeNode.js'
-import { isValidTemplateVariableName } from '../nodes/template-transform/templateTransform.js'
-import { isLoopConditionComplete } from '../nodes/loop/loopNode.js'
+import { isValidTemplateVariableName, isValidTemplateVariableSelector } from '../nodes/template-transform/templateTransform.js'
+import {
+  canonicalizeLoopVarType,
+  isLoopConditionComplete,
+  isLoopConstantValueValid,
+  isLoopValueType,
+  isLoopVariableType,
+  isValidLoopVariableLabel,
+} from '../nodes/loop/loopNode.js'
 import { isIfElseConditionComplete } from '../nodes/if-else/ifElseNode.js'
-import { isHumanInputDeliveryValid } from '../nodes/human-input/humanInputNode.js'
+import {
+  HUMAN_INPUT_BUTTON_STYLES,
+  getHumanInputFieldValidationErrors,
+  isHumanInputActionIdValid,
+  isHumanInputDeliveryValid,
+} from '../nodes/human-input/humanInputNode.js'
 import { hasInvalidLLMJinjaMapping, isLLMPromptEmpty } from '../nodes/llm/llmNode.js'
 import { hasInvalidParameterDefinitions } from '../nodes/parameter-extractor/parameterExtractorNode.js'
 import {
   isKnowledgeMetadataValid,
   isKnowledgeMultipleConfigValid,
+  isKnowledgeRetrievalInputConfigured,
 } from '../nodes/knowledge-retrieval/knowledgeRetrievalNode.js'
 import { isKnowledgeRetrievalSettingValid } from '../nodes/knowledge-base/knowledgeBaseNode.js'
 import { getDataSourceValidationErrors } from '../nodes/data-source/dataSourceNode.js'
 import { getEndValidationErrors } from '../nodes/end/endNode.js'
 import { getAnswerValidationErrors } from '../nodes/er/answerNode.js'
 import { getLoopEndValidationErrors } from '../nodes/loop-end/loopEndNode.js'
+import { getStartNodeValidationErrors } from '../nodes/t/startNode.js'
+import {
+  ITERATION_ERROR_HANDLE_MODES,
+  isOfficialIterationArrayType,
+} from '../nodes/iteration/iterationNode.js'
+import {
+  isFilledNonFileToolParam,
+  isGraphonConfigurationValue,
+  isLlmToolParam,
+  isToolFileParam,
+  isValidToolParameterEnvelope,
+} from './toolParamInputs.js'
+
+function collectToolChecklistIssues(node, title) {
+  const data = node.data || {}
+  const providerId = String(data.provider_id || '').trim()
+  const toolName = String(data.tool_name || data.toolName || '').trim()
+  if (!providerId || !toolName) {
+    return [{
+      id: `tool-${node.id}`,
+      level: 'error',
+      message: `工具节点「${title}」未选择工具`,
+      nodeId: node.id,
+      title,
+    }]
+  }
+
+  const issues = []
+  const params = data.tool_parameters && typeof data.tool_parameters === 'object' && !Array.isArray(data.tool_parameters)
+    ? data.tool_parameters
+    : {}
+  const configs = data.tool_configurations && typeof data.tool_configurations === 'object' && !Array.isArray(data.tool_configurations)
+    ? data.tool_configurations
+    : {}
+
+  for (const [name, raw] of Object.entries(params)) {
+    if (!isValidToolParameterEnvelope(raw)) {
+      issues.push({
+        id: `tool-parameter-${node.id}-${name}`,
+        level: 'error',
+        message: `工具节点「${title}」参数 ${name} 的输入类型无效`,
+        nodeId: node.id,
+        title,
+      })
+    }
+  }
+  for (const [name, value] of Object.entries(configs)) {
+    if (!isGraphonConfigurationValue(value)) {
+      issues.push({
+        id: `tool-configuration-${node.id}-${name}`,
+        level: 'error',
+        message: `工具节点「${title}」静态配置 ${name} 的值无效`,
+        nodeId: node.id,
+        title,
+      })
+    }
+  }
+
+  const schemas = Array.isArray(data.parameters) ? data.parameters : null
+  if (!schemas)
+    return issues
+
+  for (const param of schemas) {
+    const name = param?.name
+    if (!name || !param.required || isToolFileParam(param))
+      continue
+    if (isLlmToolParam(param)) {
+      const issueId = `tool-parameter-${node.id}-${name}`
+      if (issues.some(item => item.id === issueId) || isFilledNonFileToolParam(params[name]))
+        continue
+      issues.push({
+        id: issueId,
+        level: 'error',
+        message: `工具节点「${title}」缺少必填参数 ${name}`,
+        nodeId: node.id,
+        title,
+      })
+      continue
+    }
+    const issueId = `tool-configuration-${node.id}-${name}`
+    if (issues.some(item => item.id === issueId))
+      continue
+    if (Object.prototype.hasOwnProperty.call(configs, name) && isGraphonConfigurationValue(configs[name]))
+      continue
+    if (isFilledNonFileToolParam(params[name]))
+      continue
+    issues.push({
+      id: issueId,
+      level: 'error',
+      message: `工具节点「${title}」缺少必填配置 ${name}`,
+      nodeId: node.id,
+      title,
+    })
+  }
+  return issues
+}
 
 export function buildWorkflowChecklist(graph = {}, options = {}) {
   const nodes = Array.isArray(graph.nodes) ? graph.nodes : []
   const edges = Array.isArray(graph.edges) ? graph.edges : []
   const isChatMode = !!options.isChatMode
+  const isPipelineFlow = !!options.isPipelineFlow
   const environmentVariables = options.environmentVariables || []
   const conversationVariables = options.conversationVariables || []
   const ragPipelineVariables = options.ragPipelineVariables || []
@@ -76,17 +189,21 @@ export function buildWorkflowChecklist(graph = {}, options = {}) {
     issues.push({ id: 'multi-start', level: 'error', message: '只能有一个开始节点' })
   }
 
-  const endLike = nodes.filter(node => ['end', 'answer'].includes(node.data?.type || node.type))
+  const endNodes = nodes.filter(node => (node.data?.type || node.type) === 'end')
   const answerNodes = nodes.filter(node => (node.data?.type || node.type) === 'answer')
-  if (isChatMode && answerNodes.length === 0) {
+  if (!isPipelineFlow && isChatMode && answerNodes.length === 0) {
     issues.push({
       id: 'answer-required',
       level: 'error',
       message: 'Chatflow 至少需要一个直接回复节点',
     })
   }
-  else if (endLike.length === 0) {
-    issues.push({ id: 'missing-end', level: 'warning', message: '建议添加结束节点或直接回复节点' })
+  if (!isPipelineFlow && !isChatMode && endNodes.length === 0) {
+    issues.push({
+      id: 'end-required',
+      level: 'error',
+      message: 'Workflow 至少需要一个结束节点',
+    })
   }
 
   const nodeIds = new Set(nodes.map(node => node.id))
@@ -124,10 +241,22 @@ export function buildWorkflowChecklist(graph = {}, options = {}) {
   for (const node of nodes) {
     const type = node.data?.type || node.type
     const title = node.data?.title || node.id
+    if (type === 'start') {
+      const errors = getStartNodeValidationErrors(node.data)
+      if (errors.length) {
+        issues.push({
+          id: `start-config-${node.id}`,
+          level: 'error',
+          message: `开始节点「${title}」配置无效：${errors.join('；')}`,
+          nodeId: node.id,
+          title,
+        })
+      }
+    }
     if (modelNodeTypes.has(type)) {
       const model = node.data?.model || {}
-      const modelName = model.name || model.model
-      if (!model.provider || !modelName) {
+      const modelName = String(model.name || model.model || '').trim()
+      if (!String(model.provider || '').trim() || !modelName) {
         issues.push({
           id: `model-config-${node.id}`,
           level: 'error',
@@ -146,20 +275,25 @@ export function buildWorkflowChecklist(graph = {}, options = {}) {
         title,
       })
     }
+    if (type === 'http-request' && node.data?.authorization?.type === 'api-key') {
+      const config = node.data.authorization.config
+      if (!config || !String(config.api_key || '').trim()) {
+        issues.push({
+          id: `http-auth-${node.id}`,
+          level: 'error',
+          message: `HTTP 节点「${title}」的 API Key 未填写`,
+          nodeId: node.id,
+          title,
+        })
+      }
+    }
     if (type === 'http-request' && node.data?.body?.type === 'binary') {
       const data = Array.isArray(node.data.body.data) ? node.data.body.data : []
       if (!data.some(item => item?.type === 'file' && Array.isArray(item.file) && item.file.length))
         issues.push({ id: `http-binary-${node.id}`, level: 'error', message: `HTTP 节点「${title}」的二进制请求体未选择文件`, nodeId: node.id, title })
     }
-    if (type === 'tool' && (!node.data?.provider_id || !(node.data?.tool_name || node.data?.toolName))) {
-      issues.push({
-        id: `tool-${node.id}`,
-        level: 'error',
-        message: `工具节点「${title}」未选择工具`,
-        nodeId: node.id,
-        title,
-      })
-    }
+    if (type === 'tool')
+      issues.push(...collectToolChecklistIssues(node, title))
     if (type === 'knowledge-retrieval' && !(node.data?.dataset_ids || []).length && !node.data?.dataset_id) {
       issues.push({
         id: `kr-${node.id}`,
@@ -192,6 +326,15 @@ export function buildWorkflowChecklist(graph = {}, options = {}) {
           title,
         })
       }
+      if (outgoing.has(node.id)) {
+        issues.push({
+          id: `end-outgoing-${node.id}`,
+          level: 'error',
+          message: `结束节点「${title}」不能连接下游节点`,
+          nodeId: node.id,
+          title,
+        })
+      }
       if (isChatMode) {
         issues.push({
           id: `end-mode-${node.id}`,
@@ -201,6 +344,15 @@ export function buildWorkflowChecklist(graph = {}, options = {}) {
           title,
         })
       }
+    }
+    if (type === 'knowledge-retrieval' && !isKnowledgeRetrievalInputConfigured(node.data)) {
+      issues.push({
+        id: `kr-input-${node.id}`,
+        level: 'error',
+        message: `知识检索「${title}」需要配置查询变量或查询附件`,
+        nodeId: node.id,
+        title,
+      })
     }
     if (type === 'knowledge-retrieval' && node.data?.retrieval_mode === 'single') {
       const model = node.data?.single_retrieval_config?.model || {}
@@ -483,20 +635,48 @@ export function buildWorkflowChecklist(graph = {}, options = {}) {
     if (type === 'human-input') {
       const deliveries = Array.isArray(node.data?.delivery_methods) ? node.data.delivery_methods : []
       const actions = Array.isArray(node.data?.user_actions) ? node.data.user_actions : []
-      if (!deliveries.length || !deliveries.some(method => method?.enabled))
+      const inputs = Array.isArray(node.data?.inputs) ? node.data.inputs : []
+      const enabledDeliveries = deliveries.filter(method => method?.enabled)
+      if (!enabledDeliveries.length || enabledDeliveries.some(method => !['webapp', 'email'].includes(method?.type)))
         issues.push({ id: `human-delivery-${node.id}`, level: 'error', message: `人工介入「${title}」未启用交付方式`, nodeId: node.id, title })
-      if (deliveries.some(method => !isHumanInputDeliveryValid(method)))
+      if (enabledDeliveries.some(method => !isHumanInputDeliveryValid(method)))
         issues.push({ id: `human-email-${node.id}`, level: 'error', message: `人工介入「${title}」的邮件配置不完整`, nodeId: node.id, title })
-      const actionIds = actions.map(action => String(action?.id || '').trim())
-      if (!actions.length || actions.some(action => !String(action?.id || '').trim() || !String(action?.title || '').trim()) || new Set(actionIds).size !== actionIds.length)
+      const actionIds = actions.map(action => String(action?.id || ''))
+      if (!actions.length || actions.some(action => (
+        !isHumanInputActionIdValid(action?.id)
+        || !String(action?.title || '').trim()
+        || String(action?.title || '').length > 100
+        || !HUMAN_INPUT_BUTTON_STYLES.includes(action?.button_style)
+      )) || new Set(actionIds).size !== actionIds.length)
         issues.push({ id: `human-actions-${node.id}`, level: 'error', message: `人工介入「${title}」的操作按钮配置无效`, nodeId: node.id, title })
+      const fieldErrors = getHumanInputFieldValidationErrors(inputs)
+      if (fieldErrors.some(item => item.includes('duplicate')))
+        issues.push({ id: `human-input-name-${node.id}`, level: 'error', message: `人工介入「${title}」包含重复的输出变量名`, nodeId: node.id, title })
+      if (fieldErrors.length)
+        issues.push({ id: `human-input-fields-${node.id}`, level: 'error', message: `人工介入「${title}」的输入字段配置无效`, nodeId: node.id, title })
       const timeout = Number(node.data?.timeout)
-      if (!Number.isFinite(timeout) || timeout <= 0 || !['hour', 'day'].includes(node.data?.timeout_unit))
+      if (!Number.isInteger(timeout) || timeout <= 0 || !['hour', 'day'].includes(node.data?.timeout_unit))
         issues.push({ id: `human-timeout-${node.id}`, level: 'error', message: `人工介入「${title}」的超时配置无效`, nodeId: node.id, title })
+    }
+    if (type === 'document-extractor') {
+      const selector = node.data?.variable_selector
+      if (Array.isArray(selector) && selector.length === 2) {
+        const start = nodes.find(item => item.id === selector[0] && item.data?.type === 'start')
+        const variable = start?.data?.variables?.find(item => item?.variable === selector[1])
+        if (variable && !['file', 'file-list'].includes(variable.type)) {
+          issues.push({
+            id: `start-extractor-type-${node.id}`,
+            level: 'error',
+            message: `文档提取「${title}」引用了非文件输入 ${selector.join('.')}（${variable.type}）`,
+            nodeId: node.id,
+            title,
+          })
+        }
+      }
     }
     if (type === 'template-transform') {
       const templateVariables = Array.isArray(node.data?.variables) ? node.data.variables : []
-      const variableNames = templateVariables.map(variable => String(variable?.variable || '').trim())
+      const variableNames = templateVariables.map(variable => variable?.variable)
       if (!(String(node.data?.template || '').trim())) {
         issues.push({
           id: `template-${node.id}`,
@@ -524,7 +704,7 @@ export function buildWorkflowChecklist(graph = {}, options = {}) {
           title,
         })
       }
-      if (templateVariables.some(variable => !Array.isArray(variable?.value_selector) || !variable.value_selector.length)) {
+      if (templateVariables.some(variable => !isValidTemplateVariableSelector(variable?.value_selector))) {
         issues.push({
           id: `template-variable-value-${node.id}`,
           level: 'error',
@@ -550,8 +730,39 @@ export function buildWorkflowChecklist(graph = {}, options = {}) {
       const selector = node.data?.iterator_selector
       if (!Array.isArray(selector) || !selector.length)
         issues.push({ id: `iteration-variable-${node.id}`, level: 'error', message: `迭代节点「${title}」未选择数组输入`, nodeId: node.id, title })
-      if (node.data?.iterator_input_type && node.data.iterator_input_type !== 'array')
-        issues.push({ id: `iteration-input-type-${node.id}`, level: 'error', message: `迭代节点「${title}」输入必须是数组`, nodeId: node.id, title })
+      else {
+        const iteratorGroups = [
+          ...buildAvailableVariables({
+            nodeId: node.id,
+            nodes,
+            edges,
+            isChatMode,
+            ragPipelineVariables,
+          }),
+          ...buildSpecialVarGroups({
+            isChatMode,
+            environmentVariables,
+            conversationVariables,
+            ragPipelineVariables,
+          }),
+        ]
+        const iteratorVar = resolveAvailableVariable(selector, iteratorGroups)
+        const inputType = iteratorVar?.type || node.data?.iterator_input_type
+        if (inputType && !isOfficialIterationArrayType(inputType))
+          issues.push({ id: `iteration-input-type-${node.id}`, level: 'error', message: `迭代节点「${title}」输入必须是数组`, nodeId: node.id, title })
+      }
+      if (node.data?.error_handle_mode && !ITERATION_ERROR_HANDLE_MODES.includes(node.data.error_handle_mode))
+        issues.push({ id: `iteration-error-mode-${node.id}`, level: 'error', message: `迭代节点「${title}」容错策略无效`, nodeId: node.id, title })
+      if (!Array.isArray(node.data?.output_selector) || node.data.output_selector.length < 2)
+        issues.push({ id: `iteration-output-${node.id}`, level: 'error', message: `迭代节点「${title}」未选择子节点输出`, nodeId: node.id, title })
+      else {
+        const outputSourceId = node.data.output_selector[0]
+        const outputSource = nodes.find(candidate => candidate.id === outputSourceId)
+        const parentId = outputSource?.parentNode || outputSource?.parentId
+        const sourceType = outputSource?.data?.type || outputSource?.type
+        if (!outputSource || parentId !== node.id || sourceType === 'iteration-start')
+          issues.push({ id: `iteration-output-scope-${node.id}`, level: 'error', message: `迭代节点「${title}」输出必须来自当前容器的直接子节点`, nodeId: node.id, title })
+      }
       const parallel = Number(node.data?.parallel_nums ?? 10)
       if (!Number.isInteger(parallel) || parallel < 1 || parallel > 10)
         issues.push({ id: `iteration-parallel-${node.id}`, level: 'error', message: `迭代节点「${title}」并发数必须为 1 到 10`, nodeId: node.id, title })
@@ -560,8 +771,47 @@ export function buildWorkflowChecklist(graph = {}, options = {}) {
       const count = Number(node.data?.loop_count)
       if (!Number.isInteger(count) || count < 1 || count > 100)
         issues.push({ id: `loop-count-${node.id}`, level: 'error', message: `循环节点「${title}」的最大次数必须为 1 到 100`, nodeId: node.id, title })
-      if ((node.data?.loop_variables || []).some(variable => !String(variable?.label || '').trim()))
+      const loopVariables = node.data?.loop_variables || []
+      const labels = loopVariables.map(variable => String(variable?.label || ''))
+      if (labels.some(label => !label.trim()) || labels.some(label => label.trim() && !isValidLoopVariableLabel(label)))
         issues.push({ id: `loop-variable-${node.id}`, level: 'error', message: `循环节点「${title}」包含未命名循环变量`, nodeId: node.id, title })
+      const trimmedLabels = labels.map(label => label.trim()).filter(Boolean)
+      if (trimmedLabels.length !== new Set(trimmedLabels).size)
+        issues.push({ id: `loop-variable-dup-${node.id}`, level: 'error', message: `循环节点「${title}」包含重复循环变量名`, nodeId: node.id, title })
+      if (loopVariables.some(variable => !isLoopVariableType(variable.var_type)))
+        issues.push({ id: `loop-variable-var-type-${node.id}`, level: 'error', message: `循环节点「${title}」包含不支持的循环变量类型`, nodeId: node.id, title })
+      if (loopVariables.some(variable => variable.value_type != null && variable.value_type !== '' && !isLoopValueType(variable.value_type)))
+        issues.push({ id: `loop-variable-value-type-${node.id}`, level: 'error', message: `循环节点「${title}」包含非法的循环变量值来源`, nodeId: node.id, title })
+      if (loopVariables.some((variable) => {
+        const valueType = isLoopValueType(variable.value_type) ? variable.value_type : (variable.value_type == null || variable.value_type === '' ? 'constant' : '')
+        return valueType === 'constant' && isLoopVariableType(variable.var_type) && !isLoopConstantValueValid(variable.var_type, variable.value)
+      }))
+        issues.push({ id: `loop-variable-constant-${node.id}`, level: 'error', message: `循环节点「${title}」包含无法按类型解析的循环常量`, nodeId: node.id, title })
+      if (loopVariables.some(variable => variable.value_type === 'variable'
+        && (!Array.isArray(variable.value) || variable.value.length < 2 || variable.value.some(part => typeof part !== 'string' || !part.trim()))))
+        issues.push({ id: `loop-variable-value-${node.id}`, level: 'error', message: `循环节点「${title}」包含未选择来源的循环变量`, nodeId: node.id, title })
+      const loopGroups = [
+        ...buildAvailableVariables({
+          nodeId: node.id,
+          nodes,
+          edges,
+          isChatMode,
+          ragPipelineVariables,
+        }),
+        ...buildSpecialVarGroups({
+          isChatMode,
+          environmentVariables,
+          conversationVariables,
+          ragPipelineVariables,
+        }),
+      ]
+      if (loopVariables.some((variable) => {
+        if (variable.value_type !== 'variable' || !Array.isArray(variable.value) || variable.value.length < 2)
+          return false
+        const source = resolveAvailableVariable(variable.value, loopGroups)
+        return source && canonicalizeLoopVarType(source.type) !== canonicalizeLoopVarType(variable.var_type)
+      }))
+        issues.push({ id: `loop-variable-type-${node.id}`, level: 'error', message: `循环节点「${title}」循环变量类型与来源不一致`, nodeId: node.id, title })
       if ((node.data?.break_conditions || []).some(condition => !isLoopConditionComplete(condition)))
         issues.push({ id: `loop-condition-${node.id}`, level: 'error', message: `循环节点「${title}」包含不完整的退出条件`, nodeId: node.id, title })
     }
@@ -666,6 +916,7 @@ export function buildWorkflowChecklist(graph = {}, options = {}) {
 
   // Contrasts Dify checklist invalidVariable: node-output refs must be upstream-available.
   // Special prefixes sys/env/conversation/rag are skipped (same as Dify isSpecialVar).
+  // Loop break_conditions / iteration output_selector may also read direct children.
   const skipTypes = new Set([
     'start', 'note', 'custom-note', 'iteration-start', 'loop-start', 'start-placeholder',
   ])
@@ -692,7 +943,33 @@ export function buildWorkflowChecklist(graph = {}, options = {}) {
         ragPipelineVariables,
       }),
     ]
-    const invalid = used.find(selector => !isSelectorAvailable(selector, availableGroups))
+    // Iteration output_selector and loop break_conditions run after children,
+    // so they may legally read direct-child outputs (e.g. human-input __action_id).
+    const descendantGroups = (type === 'iteration' || type === 'loop')
+      ? buildDirectChildOutputGroups(node, nodes)
+      : []
+    const outputSelector = Array.isArray(node.data?.output_selector)
+      ? node.data.output_selector.join('.')
+      : ''
+    const loopBreakKeys = new Set(
+      type === 'loop'
+        ? (node.data?.break_conditions || [])
+          .map(condition => (
+            Array.isArray(condition?.variable_selector)
+              ? condition.variable_selector.join('.')
+              : ''
+          ))
+          .filter(Boolean)
+        : [],
+    )
+    const invalid = used.find((selector) => {
+      const key = selector.join('.')
+      if (type === 'iteration' && key === outputSelector)
+        return !isSelectorAvailable(selector, descendantGroups)
+      if (loopBreakKeys.has(key))
+        return !isSelectorAvailable(selector, [...availableGroups, ...descendantGroups])
+      return !isSelectorAvailable(selector, availableGroups)
+    })
     if (invalid) {
       issues.push({
         id: `invalid-var-${node.id}`,

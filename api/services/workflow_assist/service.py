@@ -4,24 +4,27 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from sqlalchemy.orm import Session, sessionmaker
 
 from core.db.session_factory import session_factory
-from core.workflow.generator.knowledge_catalogue import build_knowledge_catalogue, installed_dataset_keys
-from core.workflow.generator.tool_catalogue import build_tool_catalogue, installed_tool_keys
+from core.workflow.generator.resources.knowledge_catalogue import installed_dataset_keys
+from core.workflow.generator.resources.tool_catalogue import installed_tool_keys
 from models import Account, App
 from models.workflow_assist import WorkflowAssistMode, WorkflowAssistRun, WorkflowAssistRunStatus
 from services.workflow_assist.apply import apply_draft
 from services.workflow_assist.conversations import WorkflowAssistConversationService
 from services.workflow_assist.hydrate import hydrate_agent_bindings
 from services.workflow_assist.knowledge_catalogue import list_assist_knowledge_catalogue_as_dict
+from services.workflow_assist.knowledge_catalogue_loader import build_knowledge_catalogue
 from services.workflow_assist.run_coordinator import RunCoordinator
 from services.workflow_assist.run_events import RunSummary, WorkflowAssistRunEventService
 from services.workflow_assist.run_types import DispatchFailureFence, RunOwner, UserAbortFence
 from services.workflow_assist.tool_catalogue import list_assist_tool_catalogue_as_dict
+from services.workflow_assist.tool_catalogue_loader import build_tool_catalogue
 from services.workflow_assist.turn_references import (
     UnknownTurnReferenceError,
     bind_turn_references,
@@ -66,6 +69,7 @@ class WorkflowAssistService:
         model_config: dict[str, Any],
         selected_node: str | None = None,
         references: list[dict[str, Any]] | None = None,
+        live_acceptance_request_id: str | None = None,
     ) -> WorkflowAssistRun:
         """Commit a durable turn before dispatching its worker task."""
         try:
@@ -101,6 +105,7 @@ class WorkflowAssistService:
                 model_config=model_config,
                 selected_node=selected_node,
                 references=bound_references,
+                live_acceptance_request_id=live_acceptance_request_id,
             )
         except (ValueError, UnknownTurnReferenceError) as exc:
             raise WorkflowAssistInvalidTurnError(str(exc)) from exc
@@ -179,7 +184,12 @@ class WorkflowAssistService:
         account: Account,
         conversation_id: str,
     ) -> Any:
-        """Lock Conversation then draft Workflow and freeze its canonical hash."""
+        """Lock Conversation then draft Workflow and freeze its canonical hash.
+
+        A new conversation has no candidate of its own. Copy the current draft
+        graph so ``read_graph`` sees the canvas the previous chat applied,
+        without overwriting an in-progress candidate on this conversation.
+        """
         conversation = (
             WorkflowAssistConversationService(session)
             .get(
@@ -196,6 +206,11 @@ class WorkflowAssistService:
         if draft is None:
             raise WorkflowAssistInvalidTurnError("Workflow Assist requires an initialized workflow draft")
         conversation.draft_hash = draft.unique_hash
+        if not isinstance(conversation.candidate_graph, dict):
+            graph = getattr(draft, "graph_dict", None)
+            conversation.candidate_graph = deepcopy(graph) if isinstance(graph, dict) else {"nodes": [], "edges": []}
+            if conversation.candidate_base_hash is None:
+                conversation.candidate_base_hash = draft.unique_hash
         session.flush()
         return draft
 
@@ -293,18 +308,43 @@ class WorkflowAssistService:
         *,
         graph: dict[str, Any],
         mode: Literal["local", "rebuild"],
+        generation_mode: Literal["workflow", "advanced-chat"],
         base_graph: dict[str, Any] | None,
         mutable_node_ids: list[str],
         planned_new_ids: list[str],
         intent_flags: dict[str, bool],
+        app_model: App | None = None,
     ) -> ValidationResult:
+        validation_context = None
+        if app_model is not None:
+            from core.db.session_factory import session_factory
+            from services.workflow_assist.validation_context import build_validation_context
+
+            try:
+                with session_factory.create_session() as session:
+                    draft = WorkflowService().get_draft_workflow(app_model=app_model, session=session)
+                    validation_context = build_validation_context(
+                        tenant_id=str(app_model.tenant_id),
+                        graph=graph,
+                        draft=draft,
+                    )
+            except Exception:
+                return {
+                    "ok": False,
+                    "errors": [
+                        {"code": "CAPABILITY_UNAVAILABLE", "detail": "Unable to load tenant validation resources"}
+                    ],
+                    "warnings": [],
+                }
         return validate_graph(
             graph=graph,
             mode=mode,
+            generation_mode=generation_mode,
             base_graph=base_graph,
             mutable_node_ids=set(mutable_node_ids),
             planned_new_ids=set(planned_new_ids),
             intent_flags=intent_flags,
+            validation_context=validation_context,
         )
 
     @staticmethod

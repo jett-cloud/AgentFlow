@@ -7,7 +7,7 @@
         <BlockIcon type="iteration" :size="20" />
         <input v-model="nodeTitle" class="title-input" placeholder="迭代 (Iteration)" :disabled="readOnly" />
       </div>
-      <button class="close-btn" @click="$emit('close')"><el-icon><Close /></el-icon></button>
+      <button type="button" class="close-btn" aria-label="关闭迭代配置面板" @click="$emit('close')"><el-icon><Close /></el-icon></button>
     </div>
 
     <!-- Body 面板主体 -->
@@ -17,14 +17,31 @@
         <div class="section-header">
           <label class="section-label">迭代输入数组 (INPUT ARRAY)</label>
         </div>
-        <el-input 
-          :model-value="formatSelectorStr(iteratorSelector)" 
-          placeholder="选择或输入数组路径 (如: sys.files 或 start.items)" 
-          size="small" 
-          :disabled="readOnly"
-          @input="(val) => iteratorSelector = val"
+        <VarReferencePicker
+          :model-value="iteratorSelector"
+          :node-id="nodeId"
+          :read-only="readOnly"
+          :filter-var="isIterationArrayVariable"
+          placeholder="选择数组变量"
+          @change="changeIterator"
         />
         <span class="tip-text">节点将针对该数组中的每一个元素依次进行循环迭代处理。</span>
+      </div>
+
+      <div class="form-section">
+        <label class="section-label">迭代输出 (OUTPUT)</label>
+        <VarReferencePicker
+          :model-value="outputSelector"
+          :node-id="nodeId"
+          :read-only="readOnly"
+          include-direct-children
+          placeholder="选择容器内子节点输出"
+          @change="changeOutput"
+        />
+        <div class="output-options">
+          <span class="derived-type">聚合类型：{{ outputType }}</span>
+          <el-checkbox v-model="flattenOutput" :disabled="readOnly">扁平化嵌套数组</el-checkbox>
+        </div>
       </div>
 
       <!-- 2. 并行控制 (Parallel Execution) -->
@@ -61,8 +78,8 @@
       <div class="form-section output-vars-section">
         <label class="section-label">输出变量 (OUTPUT VARIABLES)</label>
         <div class="var-tag">
-          <span class="var-name">result</span> 
-          <span class="var-type">Array[Object/String]</span>
+          <span class="var-name">output</span>
+          <span class="var-type">{{ outputType }}</span>
         </div>
         <span class="tip-text">整个迭代循环完成后生成的聚合结果数组。</span>
       </div>
@@ -78,7 +95,9 @@ import { computed } from 'vue'
 import { Close } from '@element-plus/icons-vue'
 import BlockIcon from '../base/BlockIcon.vue'
 import NextStep from '../shared/NextStep.vue'
+import VarReferencePicker from '../shared/VarReferencePicker.vue'
 import { useIterationConfig } from './useIterationConfig.js'
+import { isIterationArrayVariable } from './iterationNode.js'
 
 const props = defineProps({
   nodeId: { type: String, required: true },
@@ -91,9 +110,14 @@ const emit = defineEmits(['close', 'update:nodeData'])
 const { 
   readOnly, 
   iteratorSelector, 
+  outputSelector,
+  outputType,
+  changeIterator,
+  changeOutput,
   isParallel, 
   parallelNums, 
-  errorStrategy 
+  errorStrategy,
+  flattenOutput,
 } = useIterationConfig(props, (event, val) => {
   emit(event, val)
 })
@@ -103,11 +127,6 @@ const nodeTitle = computed({
   set: (val) => emit('update:nodeData', { ...props.nodeData, title: val })
 })
 
-const formatSelectorStr = (sel) => {
-  if (!sel) return ''
-  if (Array.isArray(sel)) return sel.join('.')
-  return String(sel)
-}
 </script>
 
 <style scoped>
@@ -131,6 +150,8 @@ const formatSelectorStr = (sel) => {
 .header-left { display: flex; align-items: center; gap: 8px; flex: 1; }
 .title-input { font-size: 14px; font-weight: 600; color: #101828; border: none; background: transparent; }
 .close-btn { background: transparent; border: none; cursor: pointer; color: #667085; }
+.close-btn:focus-visible { outline: 2px solid #155eef; outline-offset: 2px; }
+.derived-type { font-size: 12px; color: #344054; font-family: ui-monospace, monospace; }
 
 .panel-body { 
   flex: 1; 
@@ -156,6 +177,7 @@ const formatSelectorStr = (sel) => {
   border: 1px solid #e2e8f0;
 }
 .parallel-text { font-size: 12px; color: #344054; }
+.output-options { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
 
 .output-vars-section {
   background: #f8fafc;

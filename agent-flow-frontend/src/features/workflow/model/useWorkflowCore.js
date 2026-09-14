@@ -213,6 +213,13 @@ export function useWorkflowCore(options = {}) {
       edges: getEdges.value,
     })
     nextData._connectedSourceHandleIds = edgeUpdate.connectedSourceHandleIds
+    if (edgeUpdate.remappedEdges?.length) {
+      for (const mapped of edgeUpdate.remappedEdges) {
+        const edge = getEdges.value.find(item => item.id === mapped.id)
+        if (edge)
+          edge.sourceHandle = mapped.sourceHandle
+      }
+    }
     if (edgeUpdate.removedEdgeIds.length) {
       removeEdges(edgeUpdate.removedEdgeIds)
       for (const targetId of edgeUpdate.affectedTargetIds) {

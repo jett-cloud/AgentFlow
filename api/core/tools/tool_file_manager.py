@@ -15,7 +15,7 @@ from sqlalchemy import select
 from configs import dify_config
 from core.db.session_factory import session_factory
 from core.file import remote_fetcher
-from core.workflow.file_reference import build_file_reference
+from core.workflow.runtime.adapters.file_reference import build_file_reference
 from extensions.ext_storage import storage
 from graphon.file import File, FileTransferMethod, get_file_type_by_mime_type
 from models.model import MessageFile

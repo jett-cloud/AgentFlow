@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from sqlalchemy import select
 
@@ -21,6 +22,10 @@ class WorkflowAgentBindingBundle:
     binding: WorkflowAgentNodeBinding
     agent: Agent
     snapshot: AgentConfigSnapshot
+
+
+class AgentBindingResolver(Protocol):
+    def resolve(self, *, tenant_id: str, app_id: str, workflow_id: str, node_id: str) -> WorkflowAgentBindingBundle: ...
 
 
 class WorkflowAgentBindingResolver:

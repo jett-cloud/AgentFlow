@@ -112,8 +112,16 @@ def _coerce_reference(item: object) -> dict[str, Any] | None:
 
 
 def _split_tool_id(item_id: str) -> tuple[str, str]:
-    provider, separator, tool_name = item_id.partition("/")
-    if not separator or not provider or not tool_name:
+    """Split ``provider/tool`` on the last slash.
+
+    Plugin providers are ``org/plugin/provider`` (two slashes already).
+    ``partition("/")`` would treat ``ghy/doubao-image/doubao-image/image_generate``
+    as provider ``ghy``, which then fails catalogue membership.
+    """
+    if "/" not in item_id:
+        return "", ""
+    provider, tool_name = item_id.rsplit("/", 1)
+    if not provider or not tool_name:
         return "", ""
     return provider, tool_name
 

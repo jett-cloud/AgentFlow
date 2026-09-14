@@ -3,7 +3,7 @@
     class="workflow-assist-dock"
     :style="dockStyle"
     :aria-label="copy.title"
-    :aria-busy="applying"
+    :aria-busy="applying || recoveryState === 'loading'"
   >
     <div
       class="dock-resize-handle"
@@ -96,11 +96,18 @@
       <p v-if="!historyLoading && !conversations.length">{{ copy.noConversations }}</p>
     </section>
 
+    <div v-if="recoveryState !== 'ready'" class="recovery-notice" role="status" aria-live="polite">
+      <p>{{ recoveryState === 'loading' ? copy.restoringHistory : recoveryState === 'auth_required' ? copy.authenticationRequired : copy.historyRecoveryFailed }}</p>
+      <button v-if="recoveryState === 'error'" type="button" @click="retryRecovery">{{ copy.retryHistory }}</button>
+      <button v-if="recoveryState === 'auth_required'" type="button" @click="loginToRestore">{{ copy.signInAgain }}</button>
+    </div>
+
     <AssistMessageList
       :messages="messages"
       :errors="session.errors"
       :warnings="session.warnings"
-      :retryable="session.retryable"
+      :retryable="session.retryable && recoveryState === 'ready'"
+      :disabled="recoveryState !== 'ready'"
       :language="language"
       @answer-clarification="answerClarification"
       @retry="assistController.retryFailedStep"
@@ -108,11 +115,29 @@
     />
 
     <p v-if="candidateStale" class="apply-notice">{{ copy.staleApplyNotice }}</p>
+    <section
+      v-if="contractUi.visible"
+      class="contract-report-card"
+      :class="`is-${contractUi.level}`"
+      :aria-label="copy.contractValidationTitle"
+    >
+      <div class="contract-report-header">
+        <strong>{{ copy.contractValidationTitle }}</strong>
+        <span>{{ contractLevelCopy }}</span>
+      </div>
+      <p>{{ contractSummaryCopy }}</p>
+      <ul v-if="contractUi.issues.length">
+        <li v-for="check in contractUi.issues" :key="check.id">
+          <strong>{{ contractCategoryCopy(check.category) }}:</strong>
+          {{ check.detail }}
+        </li>
+      </ul>
+    </section>
     <section v-if="applyUi.visible" class="apply-card" role="group" :aria-label="copy.applyReady">
       <p>{{ applying ? copy.applying : copy.applyReady }}</p>
       <button
         type="button"
-        :disabled="applyUi.disabled"
+        :disabled="applyUi.disabled || recoveryState !== 'ready'"
         :aria-busy="applying"
         @click="apply"
       >
@@ -126,7 +151,7 @@
 
     <AssistComposer
       ref="composerRef"
-      :disabled="applying"
+      :disabled="applying || recoveryState !== 'ready'"
       :running="session.phase === AssistPhase.running"
       :awaiting-clarification="session.phase === AssistPhase.waiting_user"
       :language="language"
@@ -149,6 +174,7 @@ import {
   deleteWorkflowAssistConversation,
   patchWorkflowAssistConversationTitle,
   getWorkflowAssistCandidate,
+  getWorkflowAssistConversation,
   getWorkflowAssistConversations,
   getWorkflowAssistRuns,
   getWorkflowAssistTimeline,
@@ -161,7 +187,7 @@ import {
 import { useWorkflowAssistStore } from '@/stores/useWorkflowAssistStore.js'
 import { AssistPhase, createAssistSession, reduceAssist } from './assistStateMachine.js'
 import { assistErrorsFromAxios } from './assistErrors.js'
-import { assistCopy, detectAssistLanguage, detectRecoveredAssistLanguage } from './assistLanguage.js'
+import { assistCopy, detectRecoveredAssistLanguage, formatAssistCopy } from './assistLanguage.js'
 import { insertSelectedNodeMentions } from './assistMentions.js'
 import { formatAssistConversationTimestamp } from './assistConversationHistory.js'
 import { createAssistStatusAnnouncement } from './assistLiveAnnouncement.js'
@@ -174,6 +200,7 @@ import {
   nextConversationIdAfterDelete,
   normalizeConversationTitle,
   workflowAssistApplyPresentation,
+  workflowContractReportPresentation,
 } from './workflowAssistUx.js'
 
 const RUN_STATUS_COPY_KEYS = Object.freeze({
@@ -213,6 +240,7 @@ const conversations = ref([])
 const candidate = ref(null)
 const historyOpen = ref(false)
 const historyLoading = ref(false)
+const recoveryState = ref('loading')
 const deletingConversationId = ref('')
 const renamingConversationId = ref('')
 const renameDraft = ref('')
@@ -231,6 +259,12 @@ const candidateStale = computed(() => {
   const currentHash = props.serverDraftHash
   return Boolean(baseHash && currentHash && baseHash !== currentHash)
 })
+const contractUi = computed(() => workflowContractReportPresentation(candidate.value))
+const contractLevelCopy = computed(() => copy.value.contractValidationLevels[contractUi.value.level])
+const contractSummaryCopy = computed(() => formatAssistCopy(copy.value.contractValidationSummary, contractUi.value.summary))
+function contractCategoryCopy(category) {
+  return copy.value.contractValidationCategories[category] || copy.value.contractValidationCategories.requirement
+}
 const applyUi = computed(() => {
   const presentation = workflowAssistApplyPresentation(
     candidate.value,
@@ -349,7 +383,7 @@ const assistController = useWorkflowAssistController({
   language,
   hasSelectedModel: () => assistStore.hasSelectedModel,
   onModelRequired(nextInstruction) {
-    language.value = detectAssistLanguage(nextInstruction)
+    language.value = detectRecoveredAssistLanguage([...messages.value, { role: 'user', text: nextInstruction }])
     session.value = {
       ...session.value,
       errors: [{ detail: copy.value.modelRequired }],
@@ -357,7 +391,7 @@ const assistController = useWorkflowAssistController({
   },
   syncDraftIfDirty: () => props.syncDraftIfDirty(),
   async prepareInstruction(nextInstruction, isCurrent) {
-    language.value = detectAssistLanguage(nextInstruction)
+    language.value = detectRecoveredAssistLanguage([...messages.value, { role: 'user', text: nextInstruction }])
     applyNotice.value = ''
     if (conversationId.value)
       return { accepted: isCurrent(), conversationId: conversationId.value }
@@ -369,6 +403,7 @@ const assistController = useWorkflowAssistController({
   },
   buildPayload: turn => ({
     message: turn.message,
+    ...(turn.live_acceptance_request_id ? { live_acceptance_request_id: turn.live_acceptance_request_id } : {}),
     mode: props.appMode,
     model_config: assistStore.selectedModel,
     ...(session.value.targetNodeIds[0] ? { selected_node: session.value.targetNodeIds[0] } : {}),
@@ -411,6 +446,7 @@ const assistController = useWorkflowAssistController({
     assistStore.advanceAppCursor(props.appId, sequence)
   },
   loadConversations,
+  loadConversation: id => getWorkflowAssistConversation(props.appId, id),
   loadTimeline: (id, params) => getWorkflowAssistTimeline(props.appId, id, params),
   loadCandidate: id => getWorkflowAssistCandidate(props.appId, id),
   loadRunSummaries: (id, params) => getWorkflowAssistRuns(props.appId, id, params),
@@ -429,6 +465,9 @@ const assistController = useWorkflowAssistController({
   },
   onTimelineRecovered({ messages: recoveredMessages }) {
     language.value = detectRecoveredAssistLanguage(recoveredMessages)
+  },
+  onRecoveryState(next) {
+    recoveryState.value = next
   },
   selectConversation: selectConversationRecord,
   newConversation: createConversationRecord,
@@ -639,11 +678,26 @@ function resizeDockByKeyboard(event) {
 
 defineExpose({ addTargetNodes })
 
+async function restoreSession() {
+  const mounted = await assistController.mountRecoverableSession()
+  if (!mounted && recoveryState.value === 'ready' && !conversations.value.length && !conversationId.value)
+    await newConversation()
+}
+
+function retryRecovery() {
+  return conversationId.value
+    ? assistController.selectConversation(conversationId.value)
+    : restoreSession()
+}
+
+function loginToRestore() {
+  const returnPath = window.location.hash.replace(/^#/, '') || '/'
+  window.location.hash = `#/login?redirect=${encodeURIComponent(returnPath)}`
+}
+
 onMounted(async () => {
   assistStore.hydrateAppCoordination(props.appId)
-  const mounted = await assistController.mountRecoverableSession()
-  if (!mounted && !conversations.value.length)
-    await newConversation()
+  await restoreSession()
 })
 
 onBeforeUnmount(() => {
@@ -654,6 +708,12 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.recovery-notice {
+  padding: 8px 16px;
+  color: #344054;
+  background: #f2f4f7;
+}
+
 .workflow-assist-dock {
   position: relative;
   display: flex;
@@ -815,10 +875,47 @@ onBeforeUnmount(() => {
 }
 
 .apply-card,
-.apply-notice {
+.apply-notice,
+.contract-report-card {
   margin: 0 12px 10px;
   padding: 10px 12px;
   border-radius: 10px;
+}
+
+.contract-report-card {
+  border: 1px solid #d0d5dd;
+  color: #344054;
+  background: #f9fafb;
+  font-size: 12px;
+}
+
+.contract-report-card.is-blocked {
+  border-color: #fda29b;
+  background: #fef3f2;
+}
+
+.contract-report-card.is-partially_verified {
+  border-color: #fec84b;
+  background: #fffaeb;
+}
+
+.contract-report-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.contract-report-card p {
+  margin: 6px 0 0;
+}
+
+.contract-report-card ul {
+  display: grid;
+  gap: 4px;
+  max-height: 112px;
+  overflow-y: auto;
+  margin: 8px 0 0;
+  padding-left: 18px;
 }
 
 .apply-card {

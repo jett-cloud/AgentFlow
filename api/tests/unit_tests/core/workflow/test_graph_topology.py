@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from core.workflow.graph_topology import WorkflowGraphTopology
+from core.workflow.graph.topology import WorkflowGraphTopology
 
 _GRAPH = {
     "nodes": [

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from core.app.file_access import FileAccessControllerProtocol
-from core.workflow.file_reference import build_file_reference, parse_file_reference
+from core.workflow.runtime.adapters.file_reference import build_file_reference, parse_file_reference
 from graphon.file import File, FileTransferMethod
 from models import ToolFile, UploadFile
 

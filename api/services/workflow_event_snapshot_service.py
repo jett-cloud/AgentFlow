@@ -23,10 +23,10 @@ from core.app.entities.task_entities import (
     WorkflowStartStreamResponse,
 )
 from core.app.layers.pause_state_persist_layer import WorkflowResumptionContext
-from core.workflow.human_input_forms import (
+from core.workflow.nodes.human_input.human_input_forms import (
     load_form_dispositions_by_form_id,
 )
-from core.workflow.human_input_policy import (
+from core.workflow.nodes.human_input.human_input_policy import (
     FormDisposition,
     HumanInputSurface,
     enrich_human_input_pause_reasons,

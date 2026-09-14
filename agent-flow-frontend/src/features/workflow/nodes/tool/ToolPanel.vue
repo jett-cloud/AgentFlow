@@ -1,4 +1,3 @@
-<!-- src/views/copilot/components/workflow/panel/tool/ToolPanel.vue -->
 <template>
   <div class="tool-panel">
     <div class="panel-header">
@@ -6,7 +5,7 @@
         <BlockIcon type="tool" :size="20" :tool-icon="panelToolIcon" />
         <input v-model="nodeTitle" class="title-input" placeholder="工具调用" :disabled="readOnly" />
       </div>
-      <button class="close-btn" @click="$emit('close')"><el-icon><Close /></el-icon></button>
+      <button type="button" class="close-btn" aria-label="关闭工具节点设置" @click="$emit('close')"><el-icon><Close /></el-icon></button>
     </div>
 
     <div class="panel-body">
@@ -41,23 +40,74 @@
         </p>
       </div>
 
-      <div v-if="selectedToolMeta?.parameters?.length" class="form-section">
+      <div v-if="parameterSchemas.length" class="form-section">
         <label class="section-label">工具参数</label>
         <div class="params-list">
           <label
-            v-for="param in selectedToolMeta.parameters"
+            v-for="param in parameterSchemas"
             :key="param.name"
             class="param-row stacked"
           >
-            <span>{{ param.label?.zh_Hans || param.label?.en_US || param.label || param.name }}</span>
+            <span>
+              {{ paramLabel(param) }}
+              <em v-if="param.required" class="required">*</em>
+            </span>
+            <p v-if="paramDescription(param)" class="param-desc">{{ paramDescription(param) }}</p>
             <PromptVariableTextarea
+              v-if="paramKind(param) === 'llm' || paramKind(param) === 'secret'"
               :model-value="parameterDisplayValue(param.name)"
               :node-id="nodeId"
               :rows="2"
               :disabled="readOnly"
               :read-only="readOnly"
-              :placeholder="param.human_description?.zh_Hans || param.human_description?.en_US || param.name"
+              :placeholder="paramKind(param) === 'secret' ? paramLabel(param) : paramPlaceholder(param)"
               @update:model-value="setParameter(param.name, $event)"
+            />
+            <VarReferencePicker
+              v-else-if="paramKind(param) === 'file'"
+              :model-value="fileSelector(param.name)"
+              :node-id="nodeId"
+              :read-only="readOnly"
+              :filter-var="isToolFileVariable"
+              placeholder="选择文件变量"
+              @update:model-value="setParameterEnvelope(param.name, { type: 'variable', value: $event || [] })"
+            />
+            <el-switch
+              v-else-if="paramKind(param) === 'boolean'"
+              :model-value="Boolean(parameterValue(param.name))"
+              :disabled="readOnly"
+              @change="setParameterEnvelope(param.name, { type: 'constant', value: $event })"
+            />
+            <el-input-number
+              v-else-if="paramKind(param) === 'number'"
+              :model-value="Number(parameterValue(param.name) || 0)"
+              class="w-full"
+              size="small"
+              :disabled="readOnly"
+              @change="setParameterEnvelope(param.name, { type: 'constant', value: $event })"
+            />
+            <el-select
+              v-else-if="paramKind(param) === 'select'"
+              :model-value="parameterValue(param.name)"
+              class="w-full"
+              size="small"
+              :disabled="readOnly"
+              @change="setParameterEnvelope(param.name, { type: 'constant', value: $event })"
+            >
+              <el-option
+                v-for="option in paramOptions(param)"
+                :key="String(option.value)"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+            <el-input
+              v-else
+              :model-value="parameterDisplayValue(param.name)"
+              size="small"
+              :disabled="readOnly"
+              :placeholder="paramPlaceholder(param)"
+              @update:model-value="setParameterEnvelope(param.name, { type: 'constant', value: $event })"
             />
           </label>
         </div>
@@ -93,6 +143,18 @@
         </p>
       </div>
 
+      <RetryConfig
+        :node-data="nodeData"
+        :read-only="readOnly"
+        @update:retry-config="handleRetryConfigUpdate"
+      />
+      <ErrorHandleConfig
+        :node-data="nodeData"
+        :read-only="readOnly"
+        @update:error-strategy="handleErrorStrategyUpdate"
+        @update:default-value="handleDefaultValueUpdate"
+      />
+
       <NextStep :node-id="nodeId" :node-data="nodeData" :read-only="readOnly" />
     </div>
     <BuiltinToolCredentialDialog
@@ -111,8 +173,12 @@ import { Close } from '@element-plus/icons-vue'
 import BlockIcon from '../base/BlockIcon.vue'
 import NextStep from '../shared/NextStep.vue'
 import PromptVariableTextarea from '../shared/PromptVariableTextarea.vue'
+import VarReferencePicker from '../shared/VarReferencePicker.vue'
+import RetryConfig from '../shared/RetryConfig.vue'
+import ErrorHandleConfig from '../shared/ErrorHandleConfig.vue'
 import BuiltinToolCredentialDialog from './BuiltinToolCredentialDialog.vue'
 import { useToolConfig } from './useToolConfig.js'
+import { getToolParamEditorKind, isSecretToolParam, isToolFileVariable } from '../../model/toolParamInputs.js'
 import { useToolStore } from '@/features/integrations/state/useToolStore.js'
 import { groupSelectableTools } from '@/features/integrations/state/toolCatalog.js'
 import {
@@ -131,12 +197,17 @@ const toolStore = useToolStore()
 const {
   readOnly,
   providerId,
-  providerType,
+  catalogueProviderType,
   toolName,
   credentialId,
   applyToolSelection,
   setParameter,
+  setParameterEnvelope,
   parameterDisplayValue,
+  parameterValue,
+  handleRetryConfigUpdate,
+  handleErrorStrategyUpdate,
+  handleDefaultValueUpdate,
 } = useToolConfig(props, emit)
 
 const panelToolIcon = computed(() => {
@@ -157,7 +228,7 @@ const credentialDialogOpen = ref(false)
 
 const supportsCredentials = computed(() => {
   if (!providerId.value) return false
-  return (providerType.value || 'builtin') === 'builtin'
+  return catalogueProviderType.value === 'builtin'
 })
 
 onMounted(() => {
@@ -165,7 +236,7 @@ onMounted(() => {
 })
 
 watch(
-  [providerId, providerType],
+  [providerId, catalogueProviderType],
   () => {
     loadCredentials()
   },
@@ -205,16 +276,64 @@ const nodeTitle = computed({
 
 const selectedKey = computed(() => {
   if (!providerId.value || !toolName.value) return ''
-  return `${providerType.value}::${providerId.value}::${toolName.value}`
+  return `${catalogueProviderType.value}::${providerId.value}::${toolName.value}`
 })
 
 const selectedToolMeta = computed(() =>
-  toolStore.findTool({ provider_type: providerType.value, provider_id: providerId.value, tool_name: toolName.value }),
+  toolStore.findTool({
+    provider_type: props.nodeData?.provider_type,
+    provider_id: providerId.value,
+    tool_name: toolName.value,
+  }),
+)
+
+const parameterSchemas = computed(() =>
+  selectedToolMeta.value?.parameters?.length
+    ? selectedToolMeta.value.parameters
+    : (Array.isArray(props.nodeData?.parameters) ? props.nodeData.parameters : []),
 )
 
 const groupedOptions = computed(() => {
   return groupSelectableTools(toolStore.allTools)
 })
+
+function paramKind(param) {
+  return getToolParamEditorKind(param)
+}
+
+function paramLabel(param) {
+  return param.label?.zh_Hans || param.label?.en_US || param.label || param.name
+}
+
+function paramDescription(param) {
+  return param.human_description?.zh_Hans
+    || param.human_description?.en_US
+    || param.llm_description
+    || ''
+}
+
+function paramPlaceholder(param) {
+  if (isSecretToolParam(param))
+    return paramLabel(param)
+  return paramDescription(param) || param.name
+}
+
+function paramOptions(param) {
+  return (param.options || []).map((option) => {
+    if (option && typeof option === 'object') {
+      return {
+        value: option.value,
+        label: option.label?.zh_Hans || option.label?.en_US || option.label || option.value,
+      }
+    }
+    return { value: option, label: String(option) }
+  })
+}
+
+function fileSelector(name) {
+  const value = parameterValue(name)
+  return Array.isArray(value) ? value : []
+}
 
 function onSelectTool(key) {
   const parts = String(key).split('::')
@@ -237,6 +356,8 @@ function onSelectTool(key) {
 .section-label { font-size: 12px; font-weight: 600; color: #344054; }
 .params-list { display: flex; flex-direction: column; gap: 10px; }
 .param-row { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #475467; }
+.param-desc { margin: 0; font-size: 11px; color: #667085; }
+.required { color: #d92d20; font-style: normal; }
 .hint { margin: 0; font-size: 12px; color: #667085; }
 .hint.error { color: #b42318; }
 .hint a { color: #155eef; text-decoration: none; }

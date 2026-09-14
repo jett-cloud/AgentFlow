@@ -11,9 +11,7 @@ from core.plugin.impl.exc import PluginLLMPollingUnsupportedError
 from core.plugin.impl.model import PluginModelClient
 from core.plugin.impl.model_runtime import PluginModelRuntime
 from core.plugin.plugin_service import PluginService
-from core.workflow import node_runtime
-from core.workflow.file_reference import parse_file_reference
-from core.workflow.human_input_adapter import (
+from core.workflow.graph.adapters.human_input_adapter import (
     DeliveryMethodType,
     EmailDeliveryConfig,
     EmailDeliveryMethod,
@@ -21,23 +19,25 @@ from core.workflow.human_input_adapter import (
     WebAppDeliveryMethod,
     _WebAppDeliveryConfig,
 )
-from core.workflow.node_runtime import (
+from core.workflow.nodes.human_input.entities import FileInputConfig, FileListInputConfig, HumanInputNodeData
+from core.workflow.runtime.adapters import files as file_runtime
+from core.workflow.runtime.adapters import human_input as human_input_runtime
+from core.workflow.runtime.adapters import llm as llm_runtime
+from core.workflow.runtime.adapters import tools as tool_runtime
+from core.workflow.runtime.adapters.context import resolve_dify_run_context
+from core.workflow.runtime.adapters.file_reference import parse_file_reference
+from core.workflow.runtime.adapters.files import (
     DifyFileReferenceFactory,
-    DifyHumanInputNodeRuntime,
-    DifyPreparedLLM,
-    DifyPreparedPollingLLM,
-    DifyPromptMessageSerializer,
     DifyRetrieverAttachmentLoader,
     DifyToolFileManager,
-    DifyToolNodeRuntime,
-    apply_dify_debug_email_recipient,
     build_dify_llm_file_saver,
-    resolve_dify_run_context,
 )
-from core.workflow.nodes.human_input.entities import FileInputConfig, FileListInputConfig, HumanInputNodeData
+from core.workflow.runtime.adapters.human_input import DifyHumanInputNodeRuntime, apply_dify_debug_email_recipient
+from core.workflow.runtime.adapters.llm import DifyPreparedLLM, DifyPreparedPollingLLM, DifyPromptMessageSerializer
+from core.workflow.runtime.adapters.tools import DifyToolNodeRuntime
 from graphon.file import File, FileTransferMethod, FileType
 from graphon.model_runtime.entities.common_entities import I18nObject
-from graphon.model_runtime.entities.llm_entities import LLMPollingResult, LLMPollingStatus
+from graphon.model_runtime.entities.llm_entities import LLMPollingResult, LLMPollingStatus, LLMUsage
 from graphon.model_runtime.entities.message_entities import AssistantPromptMessage
 from graphon.model_runtime.entities.model_entities import AIModelEntity, FetchFrom, ModelFeature, ModelType
 from graphon.model_runtime.model_providers.base.large_language_model import LargeLanguageModel
@@ -153,7 +153,7 @@ def test_apply_dify_debug_email_recipient_noops_when_override_is_not_needed(
 
 def test_dify_file_reference_factory_passes_tenant_id(monkeypatch: pytest.MonkeyPatch) -> None:
     build_from_mapping = MagicMock(return_value=sentinel.file)
-    monkeypatch.setattr(node_runtime.file_factory, "build_from_mapping", build_from_mapping)
+    monkeypatch.setattr(file_runtime.file_factory, "build_from_mapping", build_from_mapping)
 
     factory = DifyFileReferenceFactory(_build_run_context())
 
@@ -163,7 +163,7 @@ def test_dify_file_reference_factory_passes_tenant_id(monkeypatch: pytest.Monkey
     build_from_mapping.assert_called_once_with(
         mapping={"id": "upload-file"},
         tenant_id="tenant-id",
-        access_controller=node_runtime._file_access_controller,
+        access_controller=file_runtime._file_access_controller,
     )
 
 
@@ -214,7 +214,7 @@ def test_dify_prepared_llm_delegates_structured_output_helper(monkeypatch: pytes
     model_instance = _ModelInstanceStub(model_schema=_build_model_schema())
     prepared = DifyPreparedLLM(model_instance)
     invoke_structured = MagicMock(return_value=sentinel.structured)
-    monkeypatch.setattr(node_runtime, "invoke_llm_with_structured_output", invoke_structured)
+    monkeypatch.setattr(llm_runtime, "invoke_llm_with_structured_output", invoke_structured)
 
     result = prepared.invoke_llm_with_structured_output(
         prompt_messages=[],
@@ -301,11 +301,11 @@ def test_dify_prepared_polling_llm_delegates_to_plugin_runtime() -> None:
 
 
 def test_dify_prepared_polling_llm_raise_exception_when_polling_is_unsupported() -> None:
-    llm_result = node_runtime.LLMResult(
+    llm_result = llm_runtime.LLMResult(
         model="gpt-4o-mini",
         prompt_messages=[],
         message=AssistantPromptMessage(content="sync-result"),
-        usage=node_runtime.LLMUsage.empty_usage(),
+        usage=LLMUsage.empty_usage(),
     )
     plugin_runtime = PluginModelRuntime(
         tenant_id="tenant-id",
@@ -334,7 +334,7 @@ def test_dify_prepared_polling_llm_raise_exception_when_polling_is_unsupported()
 
 def test_dify_prompt_message_serializer_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
     serialize = MagicMock(return_value={"prompt": "value"})
-    monkeypatch.setattr(node_runtime.PromptMessageUtil, "prompt_messages_to_prompt_for_saving", serialize)
+    monkeypatch.setattr(llm_runtime.PromptMessageUtil, "prompt_messages_to_prompt_for_saving", serialize)
 
     result = DifyPromptMessageSerializer().serialize(
         model_mode="chat",
@@ -369,8 +369,8 @@ def test_dify_retriever_attachment_loader_builds_graph_files(monkeypatch: pytest
             return False
 
     build_from_mapping = MagicMock(return_value=sentinel.file)
-    monkeypatch.setattr(node_runtime, "db", SimpleNamespace(engine=object()))
-    monkeypatch.setattr(node_runtime, "Session", MagicMock(return_value=_SessionContext()))
+    monkeypatch.setattr(file_runtime, "db", SimpleNamespace(engine=object()))
+    monkeypatch.setattr(file_runtime, "Session", MagicMock(return_value=_SessionContext()))
     loader = DifyRetrieverAttachmentLoader(
         file_reference_factory=SimpleNamespace(build_from_mapping=build_from_mapping)
     )
@@ -418,8 +418,8 @@ def test_dify_retriever_attachment_loader_grants_upload_files_for_allowed_segmen
     upload_session.__exit__.return_value = False
     upload_session.scalar.return_value = upload_file
 
-    monkeypatch.setattr(node_runtime, "db", SimpleNamespace(engine=object()))
-    monkeypatch.setattr(node_runtime, "Session", MagicMock(return_value=_AttachmentSessionContext()))
+    monkeypatch.setattr(file_runtime, "db", SimpleNamespace(engine=object()))
+    monkeypatch.setattr(file_runtime, "Session", MagicMock(return_value=_AttachmentSessionContext()))
     monkeypatch.setattr(file_builders, "session_factory", SimpleNamespace(create_session=lambda: upload_session))
 
     loader = DifyRetrieverAttachmentLoader(file_reference_factory=DifyFileReferenceFactory(_build_run_context()))
@@ -446,7 +446,7 @@ def test_dify_retriever_attachment_loader_skips_ungranted_segment_for_end_user(
 ) -> None:
     build_from_mapping = MagicMock()
     session_factory = MagicMock()
-    monkeypatch.setattr(node_runtime, "Session", session_factory)
+    monkeypatch.setattr(file_runtime, "Session", session_factory)
     loader = DifyRetrieverAttachmentLoader(
         file_reference_factory=SimpleNamespace(build_from_mapping=build_from_mapping)
     )
@@ -472,7 +472,7 @@ def test_dify_retriever_attachment_loader_skips_segment_rejected_by_checker(
     build_from_mapping = MagicMock()
     session_factory = MagicMock()
     segment_access_checker = MagicMock(return_value=False)
-    monkeypatch.setattr(node_runtime, "Session", session_factory)
+    monkeypatch.setattr(file_runtime, "Session", session_factory)
     loader = DifyRetrieverAttachmentLoader(
         file_reference_factory=SimpleNamespace(build_from_mapping=build_from_mapping),
         segment_access_checker=segment_access_checker,
@@ -497,7 +497,7 @@ def test_dify_retriever_attachment_loader_skips_segment_rejected_by_checker(
 def test_dify_tool_file_manager_resolves_conversation_id_for_tool_files(monkeypatch: pytest.MonkeyPatch) -> None:
     create_file_by_raw = MagicMock(return_value=SimpleNamespace(id="tool-file-id"))
     manager_instance = SimpleNamespace(create_file_by_raw=create_file_by_raw)
-    monkeypatch.setattr(node_runtime, "ToolFileManager", MagicMock(return_value=manager_instance))
+    monkeypatch.setattr(file_runtime, "ToolFileManager", MagicMock(return_value=manager_instance))
     conversation_id_getter = MagicMock(return_value="conversation-id")
 
     manager = DifyToolFileManager(
@@ -532,7 +532,7 @@ def test_dify_tool_file_manager_resolves_conversation_id_for_tool_files(monkeypa
 def test_dify_tool_file_manager_delegates_file_generator_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
     get_file_generator = MagicMock(return_value=sentinel.generator)
     monkeypatch.setattr(
-        node_runtime,
+        file_runtime,
         "ToolFileManager",
         MagicMock(return_value=SimpleNamespace(get_file_generator_by_tool_file_id=get_file_generator)),
     )
@@ -547,16 +547,16 @@ def test_dify_tool_node_runtime_injects_outer_workflow_run_id_for_workflow_tools
 ) -> None:
     runtime_tool = SimpleNamespace(runtime=SimpleNamespace(runtime_parameters={}))
     get_runtime = MagicMock(return_value=runtime_tool)
-    monkeypatch.setattr(node_runtime.ToolManager, "get_workflow_tool_runtime", get_runtime)
+    monkeypatch.setattr(tool_runtime.ToolManager, "get_workflow_tool_runtime", get_runtime)
     monkeypatch.setattr(
-        node_runtime,
+        tool_runtime,
         "get_system_text",
         lambda _pool, key: (
-            "outer-workflow-run-id" if key == node_runtime.SystemVariableKey.WORKFLOW_EXECUTION_ID else None
+            "outer-workflow-run-id" if key == tool_runtime.SystemVariableKey.WORKFLOW_EXECUTION_ID else None
         ),
     )
 
-    runtime = node_runtime.DifyToolNodeRuntime(_build_run_context())
+    runtime = tool_runtime.DifyToolNodeRuntime(_build_run_context())
     node_data = ToolNodeData(
         title="Workflow Tool Node",
         desc=None,
@@ -590,18 +590,18 @@ def test_dify_tool_node_runtime_stores_trace_session_id_for_workflow_tools(
 ) -> None:
     runtime_tool = SimpleNamespace(runtime=SimpleNamespace(runtime_parameters={}))
     get_runtime = MagicMock(return_value=runtime_tool)
-    monkeypatch.setattr(node_runtime.ToolManager, "get_workflow_tool_runtime", get_runtime)
+    monkeypatch.setattr(tool_runtime.ToolManager, "get_workflow_tool_runtime", get_runtime)
     monkeypatch.setattr(
-        node_runtime,
+        tool_runtime,
         "get_system_text",
         lambda _pool, key: (
-            "outer-workflow-run-id" if key == node_runtime.SystemVariableKey.WORKFLOW_EXECUTION_ID else None
+            "outer-workflow-run-id" if key == tool_runtime.SystemVariableKey.WORKFLOW_EXECUTION_ID else None
         ),
     )
 
     run_context = _build_run_context()
     run_context[DIFY_RUN_CONTEXT_KEY].trace_session_id = "session-1"
-    runtime = node_runtime.DifyToolNodeRuntime(run_context)
+    runtime = tool_runtime.DifyToolNodeRuntime(run_context)
     node_data = ToolNodeData(
         title="Workflow Tool Node",
         desc=None,
@@ -630,10 +630,10 @@ def test_dify_tool_node_runtime_does_not_inject_outer_workflow_run_id_for_non_wo
 ) -> None:
     runtime_tool = SimpleNamespace(runtime=SimpleNamespace(runtime_parameters={}))
     get_runtime = MagicMock(return_value=runtime_tool)
-    monkeypatch.setattr(node_runtime.ToolManager, "get_workflow_tool_runtime", get_runtime)
-    monkeypatch.setattr(node_runtime, "get_system_text", lambda _pool, _key: None)
+    monkeypatch.setattr(tool_runtime.ToolManager, "get_workflow_tool_runtime", get_runtime)
+    monkeypatch.setattr(tool_runtime, "get_system_text", lambda _pool, _key: None)
 
-    runtime = node_runtime.DifyToolNodeRuntime(_build_run_context())
+    runtime = tool_runtime.DifyToolNodeRuntime(_build_run_context())
     node_data = ToolNodeData(
         title="Builtin Tool Node",
         desc=None,
@@ -660,7 +660,7 @@ def test_dify_tool_node_runtime_does_not_inject_outer_workflow_run_id_for_non_wo
 def test_dify_human_input_runtime_builds_debug_repository(monkeypatch: pytest.MonkeyPatch) -> None:
     repository = MagicMock()
     repository_cls = MagicMock(return_value=repository)
-    monkeypatch.setattr(node_runtime, "HumanInputFormRepositoryImpl", repository_cls)
+    monkeypatch.setattr(human_input_runtime, "HumanInputFormRepositoryImpl", repository_cls)
 
     runtime = DifyHumanInputNodeRuntime(
         _build_run_context(),

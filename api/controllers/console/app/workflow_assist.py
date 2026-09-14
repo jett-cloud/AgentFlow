@@ -23,6 +23,7 @@ from controllers.console import console_ns
 from controllers.console.app.error import (
     WorkflowAssistConversationStateTooLarge,
     WorkflowAssistConversationWriteConflict,
+    WorkflowAssistInvalidGraph,
 )
 from controllers.console.app.wraps import get_app_model, with_session
 from controllers.console.wraps import account_initialization_required, setup_required, with_current_user
@@ -30,7 +31,7 @@ from fields.base import ResponseModel
 from libs.helper import dump_response
 from libs.login import login_required
 from models import Account, App, AppMode
-from services.workflow_assist.apply import WorkflowAssistApplyConflictError
+from services.workflow_assist.apply import WorkflowAssistApplyConflictError, WorkflowAssistInvalidGraphError
 from services.workflow_assist.conversations import (
     WorkflowAssistConversationPayloadTooLargeError,
     WorkflowAssistConversationService,
@@ -47,6 +48,7 @@ from services.workflow_assist.service import (
     WorkflowAssistService,
 )
 from services.workflow_assist.turn_references import normalize_turn_references
+from services.workflow_assist.validate import generation_mode_from_app_mode
 
 _PLANNER_STATE_KEYS = frozenset(
     {
@@ -108,6 +110,7 @@ class WorkflowAssistTimelineQuery(_WorkflowAssistPayload):
     after_epoch: int = Field(default=0, ge=0, description="Timeline cursor epoch")
     after_sequence: int = Field(default=0, ge=0, description="Timeline cursor sequence")
     limit: int = Field(default=200, ge=1, le=500, description="Timeline page size")
+    compact: bool = Field(default=False, description="Coalesce adjacent text deltas, preserving source cursors")
 
 
 class WorkflowAssistRunEventsQuery(_WorkflowAssistPayload):
@@ -120,6 +123,7 @@ class WorkflowAssistTurnPayload(_WorkflowAssistPayload):
     model_config_data: dict[str, Any] = Field(alias="model_config")
     selected_node: str | None = Field(default=None, min_length=1, max_length=255)
     references: list[dict[str, Any]] | None = Field(default=None)
+    live_acceptance_request_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
 
     @field_validator("message")
     @classmethod
@@ -191,6 +195,27 @@ class WorkflowAssistCompletionEvidenceResponse(ResponseModel):
     candidate_base_hash: str | None
     app_mode: str
     assertion: str
+    contract_protocol_version: int | None = None
+    contract_revision: int | None = None
+    contract_hash: str | None = None
+    graph_hash: str | None = None
+    validation_version: int | None = None
+
+
+class WorkflowAssistContractCheckResponse(ResponseModel):
+    id: str
+    category: str
+    status: Literal["satisfied", "missing", "conflict", "unverified"]
+    blocking: bool
+    detail: str
+    requirement_ids: list[str]
+
+
+class WorkflowAssistContractReportResponse(ResponseModel):
+    version: int
+    passed: bool
+    checks: list[WorkflowAssistContractCheckResponse]
+    summary: dict[str, int]
 
 
 class WorkflowAssistCandidateResponse(ResponseModel):
@@ -198,6 +223,7 @@ class WorkflowAssistCandidateResponse(ResponseModel):
     revision: int
     base_hash: str | None
     completion_evidence: WorkflowAssistCompletionEvidenceResponse | None
+    contract_report: WorkflowAssistContractReportResponse | None
     active_run: WorkflowAssistRunSummaryResponse | None
     latest_run: WorkflowAssistRunSummaryResponse | None
 
@@ -222,6 +248,16 @@ class WorkflowAssistApplyResponse(ResponseModel):
 class WorkflowAssistConflictResponse(ResponseModel):
     active_run: WorkflowAssistRunSummaryResponse | None
     latest_run: WorkflowAssistRunSummaryResponse | None
+
+
+class WorkflowAssistGraphErrorItem(ResponseModel):
+    code: str
+    detail: str
+    node_id: str | None = None
+
+
+class WorkflowAssistInvalidGraphResponse(ResponseModel):
+    errors: list[WorkflowAssistGraphErrorItem]
 
 
 class ValidatePayload(_WorkflowAssistPayload):
@@ -266,6 +302,7 @@ register_response_schema_models(
     WorkflowAssistAbortResponse,
     WorkflowAssistApplyResponse,
     WorkflowAssistConflictResponse,
+    WorkflowAssistInvalidGraphResponse,
 )
 
 
@@ -321,8 +358,10 @@ class WorkflowAssistValidateApi(Resource):
     def post(self, app_model: App):
         args = ValidatePayload.model_validate(console_ns.payload or {})
         return WorkflowAssistService.validate(
+            app_model=app_model,
             graph=args.graph,
             mode=args.mode,
+            generation_mode=generation_mode_from_app_mode(app_model.mode),
             base_graph=args.base_graph,
             mutable_node_ids=args.mutable_node_ids,
             planned_new_ids=args.planned_new_ids,
@@ -362,6 +401,11 @@ class WorkflowAssistApplyApi(Resource):
         console_ns.models[WorkflowAssistApplyResponse.__name__],
     )
     @console_ns.response(
+        400,
+        "Workflow Assist candidate graph is invalid",
+        console_ns.models[WorkflowAssistInvalidGraphResponse.__name__],
+    )
+    @console_ns.response(
         409,
         "Workflow Assist candidate conflicts with current server state",
         console_ns.models[WorkflowAssistConflictResponse.__name__],
@@ -385,6 +429,8 @@ class WorkflowAssistApplyApi(Resource):
                     unique_hash=args.hash,
                 ),
             )
+        except WorkflowAssistInvalidGraphError as exc:
+            raise WorkflowAssistInvalidGraph(list(exc.errors)) from exc
         except WorkflowAssistApplyConflictError as exc:
             return (
                 dump_response(
@@ -566,6 +612,7 @@ class WorkflowAssistTurnApi(Resource):
                 model_config=payload.model_config_data,
                 selected_node=payload.selected_node,
                 references=payload.references,
+                live_acceptance_request_id=payload.live_acceptance_request_id,
             )
         except (ValidationError, WorkflowAssistInvalidTurnError) as exc:
             raise BadRequest(str(exc)) from exc
@@ -651,6 +698,7 @@ class WorkflowAssistTimelineApi(Resource):
             after_epoch=query.after_epoch,
             after_sequence=query.after_sequence,
             limit=query.limit,
+            compact=query.compact,
         )
         return dump_response(
             WorkflowAssistTimelineResponse,

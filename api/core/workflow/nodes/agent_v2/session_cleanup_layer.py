@@ -6,7 +6,7 @@ import logging
 from typing import override
 
 from clients.agent_backend import AgentBackendSessionCleanupPayload
-from core.workflow.system_variables import SystemVariableKey, get_system_text
+from core.workflow.runtime.variables.system_variables import SystemVariableKey, get_system_text
 from graphon.graph_engine.layers import GraphEngineLayer
 from graphon.graph_events import (
     GraphEngineEvent,

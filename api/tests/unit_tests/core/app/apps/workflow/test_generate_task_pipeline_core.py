@@ -48,7 +48,7 @@ from core.app.entities.task_entities import (
     WorkflowStartStreamResponse,
 )
 from core.base.tts.app_generator_tts_publisher import AudioTrunk
-from core.workflow.system_variables import build_system_variables, system_variables_to_mapping
+from core.workflow.runtime.variables.system_variables import build_system_variables, system_variables_to_mapping
 from graphon.enums import BuiltinNodeTypes, WorkflowExecutionStatus
 from graphon.runtime import GraphRuntimeState, VariablePool
 from libs.datetime_utils import naive_utc_now

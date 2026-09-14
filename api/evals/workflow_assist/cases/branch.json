@@ -2,10 +2,10 @@
   "instruction": "按条件分支",
   "initial_graph": {
     "nodes": [
-      {"id": "start", "data": {"type": "start", "title": "开始", "desc": "", "variables": []}},
-      {"id": "branch", "data": {"type": "if-else", "title": "分支", "desc": ""}},
-      {"id": "end_true", "data": {"type": "end", "title": "是", "desc": ""}},
-      {"id": "end_false", "data": {"type": "end", "title": "否", "desc": ""}}
+      {"id": "start", "data": {"type": "start", "title": "开始", "desc": "", "variables": [{"variable": "query", "label": "query", "type": "text-input"}]}},
+      {"id": "branch", "data": {"type": "if-else", "title": "分支", "desc": "", "cases": [{"case_id": "true", "logical_operator": "and", "conditions": [{"variable_selector": ["start", "query"], "comparison_operator": "empty", "value": null}]}]}},
+      {"id": "end_true", "data": {"type": "end", "title": "是", "desc": "", "outputs": [{"variable": "answer", "value_selector": ["start", "query"], "value_type": "string"}]}},
+      {"id": "end_false", "data": {"type": "end", "title": "否", "desc": "", "outputs": [{"variable": "answer", "value_selector": ["start", "query"], "value_type": "string"}]}}
     ],
     "edges": [{"source": "start", "target": "branch"}],
     "viewport": {"x": 0, "y": 0, "zoom": 0.7}

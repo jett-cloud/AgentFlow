@@ -845,6 +845,12 @@ class WorkflowConfig(BaseSettings):
         description="Maximum tokens the workflow-assist Level-2 compactor may receive",
         default=40_000,
     )
+    WORKFLOW_ASSIST_CONTRACT_ROLLOUT: Literal[
+        "disabled", "internal_samples", "new_conversations", "local_edits", "default"
+    ] = Field(
+        description="Staged rollout for the immutable Workflow Assist contract protocol on new conversations",
+        default="internal_samples",
+    )
 
     WORKFLOW_MAX_EXECUTION_TIME: PositiveInt = Field(
         description="Maximum execution time in seconds for a single workflow",

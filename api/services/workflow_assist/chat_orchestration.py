@@ -25,8 +25,8 @@ from uuid import uuid4
 
 from core.app.app_config.entities import ModelConfig
 from core.workflow.generator.agent.loop import iter_agent_events
-from core.workflow.generator.agent.types import AgentEvent, MinimalGraphDict
-from core.workflow.generator.output_language import detect_output_language
+from core.workflow.generator.agent.types import AgentEvent
+from core.workflow.generator.graph.types import MinimalGraphDict
 from models import Account, App
 from models.workflow_assist import WorkflowAssistConversation, WorkflowAssistMessage
 from services.workflow_assist.agent_initializer import (
@@ -310,6 +310,7 @@ def _run_fenced_loop(
     run_limits = limits or _limits_from_config()
     token_counter = _token_counter(runtime.model_instance)
     terminal: str | None = None
+    assert context.env.builder_input is not None
 
     for event_name, payload in iter_agent_events(
         agent_session,
@@ -318,7 +319,7 @@ def _run_fenced_loop(
         cancellation,
         run_limits,
         compact=runtime.compact,
-        system_text=chat_system_prompt(detect_output_language(message)),
+        system_text=chat_system_prompt(context.env.builder_input.output_language),
         token_counter=token_counter,
         token_limits=runtime.token_limits,
     ):

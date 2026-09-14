@@ -905,17 +905,18 @@ def test_convert_tool_parameters_type_agent_and_workflow_branches():
     )
     assert plain == {"text": "hello"}
 
-    variable_pool = Mock()
-    variable_pool.get.return_value = SimpleNamespace(value="from-variable")
-    variable_pool.convert_template.return_value = SimpleNamespace(text="from-template")
+    from graphon.runtime import VariablePool
+
+    variable_pool = VariablePool()
+    variable_pool.add(["sys", "query"], "from-variable")
 
     mixed = ToolManager._convert_tool_parameters_type(
         parameters=[text_param],
         variable_pool=variable_pool,
-        tool_configurations={"text": {"type": "mixed", "value": "Hello {{name}}"}},
+        tool_configurations={"text": {"type": "mixed", "value": "Hello {{#sys.query#}}"}},
         typ="workflow",
     )
-    assert mixed == {"text": "from-template"}
+    assert mixed == {"text": "Hello from-variable"}
 
     variable = ToolManager._convert_tool_parameters_type(
         parameters=[text_param],

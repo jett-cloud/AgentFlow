@@ -14,7 +14,7 @@ from core.app.file_access import DatabaseFileAccessController, FileAccessControl
 from core.db.session_factory import session_factory
 from core.file import remote_fetcher
 from core.tools.signature import sign_tool_file
-from core.workflow.file_reference import parse_file_reference
+from core.workflow.runtime.adapters.file_reference import parse_file_reference
 from extensions.ext_storage import storage
 from graphon.file import FileTransferMethod
 from graphon.file.protocols import WorkflowFileRuntimeProtocol

@@ -17,8 +17,8 @@ from configs import dify_config
 from core.app.entities.app_invoke_entities import InvokeFrom
 from core.app.file_access import DatabaseFileAccessController
 from core.trigger.constants import is_trigger_node_type
-from core.workflow.system_variables import SystemVariableKey
-from core.workflow.variable_prefixes import (
+from core.workflow.runtime.variables.system_variables import SystemVariableKey
+from core.workflow.runtime.variables.variable_prefixes import (
     CONVERSATION_VARIABLE_NODE_ID,
     ENVIRONMENT_VARIABLE_NODE_ID,
     RAG_PIPELINE_VARIABLE_NODE_ID,

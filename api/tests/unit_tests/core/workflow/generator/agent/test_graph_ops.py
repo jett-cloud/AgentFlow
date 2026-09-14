@@ -1,4 +1,4 @@
-from core.workflow.generator.agent.graph_ops import (
+from core.workflow.generator.graph.graph_ops import (
     connect,
     delete_node,
     disconnect,
@@ -199,6 +199,53 @@ def test_render_compact_graph_uses_declared_outputs_for_legacy_aggregator():
 
     assert rendered["nodes"][0]["outputs"] == ["output"]
     assert "config" not in rendered["nodes"][0]
+
+
+def test_render_compact_graph_exposes_confirmed_typed_variable_declarations():
+    graph = upsert_node(
+        empty_graph(),
+        node_id="code1",
+        node_type="code",
+        title="Parse",
+        desc="",
+        config={"outputs": {"items": {"type": "array[object]", "children": None}}},
+    )
+
+    rendered = render_compact_graph(graph)
+
+    assert rendered["nodes"][0]["variables"] == [
+        {
+            "selector": ["code1", "items"],
+            "type": "array[object]",
+            "scope": "workflow",
+            "confirmed": True,
+        }
+    ]
+
+
+def test_render_compact_graph_exposes_iteration_item_and_index():
+    graph = upsert_node(empty_graph(), node_id="iter1", node_type="iteration", title="逐题", desc="", config={})
+
+    rendered = render_compact_graph(graph)
+
+    assert rendered["nodes"][0]["outputs"] == ["output", "item", "index"]
+
+
+def test_render_compact_graph_exposes_loop_variable_labels_only():
+    graph = upsert_node(
+        empty_graph(),
+        node_id="loop1",
+        node_type="loop",
+        title="累计",
+        desc="",
+        config={"loop_variables": [{"label": "acc", "var_type": "string", "value_type": "constant", "value": ""}]},
+    )
+
+    rendered = render_compact_graph(graph)
+
+    assert rendered["nodes"][0]["outputs"] == ["acc"]
+    assert "item" not in rendered["nodes"][0]["outputs"]
+    assert "output" not in rendered["nodes"][0]["outputs"]
 
 
 def test_render_compact_graph_omits_config_and_includes_topology():

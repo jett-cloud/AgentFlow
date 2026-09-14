@@ -8,9 +8,9 @@ test('navigation items map the three top-level destinations', () => {
   assert.deepEqual(
     navigationItems.map(({ id, label, to }) => ({ id, label, to })),
     [
-      { id: 'copilot', label: 'CoPilot 协同设计', to: '/' },
-      { id: 'integrations', label: 'Integrations', to: '/integrations' },
-      { id: 'knowledge', label: 'Knowledge', to: '/datasets' },
+      { id: 'copilot', label: '工作流编排', to: '/' },
+      { id: 'integrations', label: '模型与工具', to: '/integrations' },
+      { id: 'knowledge', label: '知识库', to: '/datasets' },
     ],
   )
 })

@@ -3,6 +3,7 @@ export function flattenModelCatalog(payload) {
   return (Array.isArray(data) ? data : []).flatMap(provider => (provider.models || []).map(model => ({
     provider: provider.provider || provider.provider_name || '',
     providerLabel: provider.label?.zh_Hans || provider.label?.en_US || provider.label || provider.provider,
+    ...(provider.icon_small ? { providerIcon: provider.icon_small } : {}),
     model: model.model || model.model_name,
     label: model.label?.zh_Hans || model.label?.en_US || model.label || model.model,
   }))).filter(item => item.provider && item.model)

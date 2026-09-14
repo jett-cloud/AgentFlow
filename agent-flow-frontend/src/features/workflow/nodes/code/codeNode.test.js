@@ -4,6 +4,7 @@ import test from 'node:test'
 import { buildWorkflowChecklist } from '../../model/checklist.js'
 import { flowToGraph, graphToFlow } from '../../model/dsl.js'
 import { getDefaultNodeData } from '../../model/nodeMeta.js'
+import { getNodeOutputBranches } from '../../model/nodeHandleBranches.js'
 import { getNodeOutputVars } from '../../model/variableOutputs.js'
 import {
   buildCodeRunInputs,
@@ -17,6 +18,7 @@ import {
   upsertCodeOutput,
 } from './codeNode.js'
 
+// 1. generateNewNode 默认值
 test('new code nodes use the Dify default contract', () => {
   assert.deepEqual(getDefaultNodeData('code'), {
     type: 'code',
@@ -28,6 +30,7 @@ test('new code nodes use the Dify default contract', () => {
   })
 })
 
+// 2. 归一化、旧字段迁移与面板纯函数
 test('code normalization preserves unknown fields and official wire shapes', () => {
   assert.deepEqual(normalizeCodeNodeData({
     type: 'code',
@@ -120,6 +123,39 @@ test('code error strategy uses Dify wire values and typed default values', () =>
   assert.equal(setCodeErrorStrategy(configured, 'none').error_strategy, undefined)
 })
 
+// 3. 输出变量合同
+test('code outputs enter downstream variables with official types', () => {
+  assert.deepEqual(getNodeOutputVars({
+    id: 'code-1',
+    data: {
+      type: 'code',
+      outputs: {
+        result: { type: 'string', children: null },
+        flags: { type: 'array[boolean]', children: null },
+      },
+    },
+  }), [
+    { variable: 'result', type: 'string', children: null },
+    { variable: 'flags', type: 'arrayBoolean', children: null },
+  ])
+})
+
+// 4. Handle 合同
+test('code exposes only source unless fail-branch error handling is enabled', () => {
+  assert.deepEqual(getNodeOutputBranches({ type: 'code' }), [
+    { id: 'source', name: '', kind: 'normal' },
+  ])
+  assert.deepEqual(getNodeOutputBranches({ type: 'code', error_strategy: 'fail-branch' }), [
+    { id: 'source', name: '', kind: 'normal' },
+    { id: 'fail-branch', name: '失败', kind: 'failure' },
+  ])
+  assert.equal(getNodeOutputBranches({
+    type: 'code',
+    retry_config: { retry_enabled: true, max_retries: 3, retry_interval: 100 },
+  }).some(branch => branch.id === 'retry'), false)
+})
+
+// 5. DSL round-trip
 test('code DSL round-trip keeps official fields and unknown data', () => {
   const flow = graphToFlow({
     nodes: [{
@@ -141,22 +177,6 @@ test('code DSL round-trip keeps official fields and unknown data', () => {
   const exported = flowToGraph(flow.nodes, flow.edges)
   assert.deepEqual(exported.nodes[0].data.outputs.ok, { type: 'boolean', children: null })
   assert.equal(exported.nodes[0].data.custom_dify_field, 42)
-})
-
-test('code outputs enter downstream variables with official types', () => {
-  assert.deepEqual(getNodeOutputVars({
-    id: 'code-1',
-    data: {
-      type: 'code',
-      outputs: {
-        result: { type: 'string', children: null },
-        flags: { type: 'array[boolean]', children: null },
-      },
-    },
-  }), [
-    { variable: 'result', type: 'string', children: null },
-    { variable: 'flags', type: 'arrayBoolean', children: null },
-  ])
 })
 
 test('code single-run payload only contains declared input variables', () => {
@@ -185,6 +205,7 @@ function buildCodeWorkflow(data) {
   }
 }
 
+// 6. checklist 非法与合法配置
 test('code checklist blocks invalid language, variables, outputs, and empty code', () => {
   const issues = buildWorkflowChecklist(buildCodeWorkflow({
     code_language: 'ruby',
@@ -211,5 +232,16 @@ test('code checklist accepts a complete official configuration', () => {
     variables: [{ variable: 'query', value_selector: ['sys', 'user_id'], value_type: 'string' }],
     outputs: { result: { type: 'string', children: null } },
   }))
+  assert.equal(issues.filter(issue => issue.id.startsWith('code-')).length, 0)
+})
+
+test('code checklist allows executable code without declared outputs', () => {
+  const issues = buildWorkflowChecklist(buildCodeWorkflow({
+    code_language: 'javascript',
+    code: 'function main() { return {} }',
+    variables: [],
+    outputs: {},
+  }))
+
   assert.equal(issues.filter(issue => issue.id.startsWith('code-')).length, 0)
 })

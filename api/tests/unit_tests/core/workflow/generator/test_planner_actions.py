@@ -1,7 +1,7 @@
 import pytest
 
-from core.workflow.generator.llm_response import StageSchemaError
-from core.workflow.generator.planner_actions import (
+from core.workflow.generator.model_io.llm_response import StageSchemaError
+from core.workflow.generator.pipeline.planner_actions import (
     AcknowledgeTurnAction,
     ReplaceInstructionAction,
     RequestUserInputAction,
@@ -380,9 +380,7 @@ def test_parse_conversation_actions():
         {"action": "replace_instruction", "instruction": "Build a customer support routing workflow."}
     )
 
-    assert respond == RespondToUserAction(
-        message="I will search the selected knowledge base, then summarize matches."
-    )
+    assert respond == RespondToUserAction(message="I will search the selected knowledge base, then summarize matches.")
     assert replace == ReplaceInstructionAction(instruction="Build a customer support routing workflow.")
 
 

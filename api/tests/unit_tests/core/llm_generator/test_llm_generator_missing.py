@@ -92,7 +92,7 @@ class TestBuildSuggestionContext:
         mock_tool_catalogue = MagicMock()
         mock_tool_catalogue.build_tool_catalogue.return_value = "catalog"
         mock_tool_catalogue.format_tool_catalogue.return_value = "tool1\ntool2"
-        monkeypatch.setitem(sys.modules, "core.workflow.generator.tool_catalogue", mock_tool_catalogue)
+        monkeypatch.setitem(sys.modules, "core.workflow.generator.resources.tool_catalogue", mock_tool_catalogue)
 
         result = LLMGenerator._build_suggestion_context("tenant")
         assert "Knowledge bases:\n- kb1\n- kb2" in result
@@ -106,7 +106,7 @@ class TestBuildSuggestionContext:
         # rather than ``del``-ing it, so we don't evict it for sibling tests.
         mock_tool_catalogue = MagicMock()
         mock_tool_catalogue.build_tool_catalogue.side_effect = Exception("Tool error")
-        monkeypatch.setitem(sys.modules, "core.workflow.generator.tool_catalogue", mock_tool_catalogue)
+        monkeypatch.setitem(sys.modules, "core.workflow.generator.resources.tool_catalogue", mock_tool_catalogue)
 
         assert LLMGenerator._build_suggestion_context("tenant") == ""
 

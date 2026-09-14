@@ -19,6 +19,15 @@ function findStreamingText(messages) {
   return -1
 }
 
+function findLastAssistantText(messages) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message?.role === 'assistant' && message.kind === 'assistant_text')
+      return index
+  }
+  return -1
+}
+
 function findTextByMessageId(messages, messageId) {
   if (!messageId)
     return -1
@@ -242,10 +251,11 @@ export function normalizeAssistStreamEvent(input) {
 
 function upsertAssistantText(messages, patch) {
   const next = [...(Array.isArray(messages) ? messages : [])]
+  const hydrate = Boolean(patch.hydrate)
   const messageId = patch.messageId || ''
   const index = messageId
     ? findTextByMessageId(next, messageId)
-    : findStreamingText(next)
+    : (hydrate ? findLastAssistantText(next) : findStreamingText(next))
   const incomingText = patch.textDelta == null ? null : String(patch.textDelta)
   const incomingReasoning = patch.reasoningDelta == null ? null : String(patch.reasoningDelta)
   if (index >= 0) {
@@ -265,8 +275,8 @@ function upsertAssistantText(messages, patch) {
       kind: 'assistant_text',
       text,
       reasoning,
-      streaming: true,
-      reasoningStreaming: incomingReasoning != null ? true : Boolean(current.reasoningStreaming),
+      streaming: hydrate ? false : true,
+      reasoningStreaming: hydrate ? false : (incomingReasoning != null ? true : Boolean(current.reasoningStreaming)),
       ...(messageId ? { message_id: messageId } : {}),
     }
     return next
@@ -280,15 +290,16 @@ function upsertAssistantText(messages, patch) {
     kind: 'assistant_text',
     text,
     reasoning,
-    streaming: true,
-    reasoningStreaming: Boolean(reasoning),
+    streaming: hydrate ? false : true,
+    reasoningStreaming: hydrate ? false : Boolean(reasoning),
     ...(messageId ? { message_id: messageId } : {}),
   })
   return next
 }
 
-export function applyAssistStreamEvent(messages, input, language = 'zh-Hans') {
+export function applyAssistStreamEvent(messages, input, language = 'zh-Hans', options = {}) {
   const event = normalizeAssistStreamEvent(input)
+  const hydrate = options.mode === 'hydrate'
   if (!event?.event || event.event === 'thought')
     return messages
 
@@ -375,7 +386,7 @@ export function applyAssistStreamEvent(messages, input, language = 'zh-Hans') {
         ...last,
         status: item.status === 'failed' ? 'failed' : 'running',
         items: [item],
-        streaming: true,
+        streaming: hydrate ? false : true,
         message: item.message,
       }
       return next
@@ -385,7 +396,7 @@ export function applyAssistStreamEvent(messages, input, language = 'zh-Hans') {
       kind: 'activity',
       status: item.status === 'failed' ? 'failed' : 'running',
       items: [item],
-      streaming: true,
+      streaming: hydrate ? false : true,
       message: item.message,
     }]
   }
@@ -397,7 +408,7 @@ export function applyAssistStreamEvent(messages, input, language = 'zh-Hans') {
     const incoming = String(event.text || event.delta || '')
     if (!incoming)
       return messages
-    return upsertAssistantText(messages, { messageId, reasoningDelta: incoming })
+    return upsertAssistantText(messages, { messageId, reasoningDelta: incoming, hydrate })
   }
 
   if (event.event === 'message') {
@@ -405,7 +416,7 @@ export function applyAssistStreamEvent(messages, input, language = 'zh-Hans') {
       ? String(event.message_id)
       : ''
     const incoming = String(event.text || event.delta || '')
-    return upsertAssistantText(messages, { messageId, textDelta: incoming })
+    return upsertAssistantText(messages, { messageId, textDelta: incoming, hydrate })
   }
 
   if (event.event === 'done') {

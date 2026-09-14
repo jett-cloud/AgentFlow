@@ -3,16 +3,29 @@ import assert from 'node:assert/strict'
 
 import { buildAssistHistoryMessages } from './assistConversationHistory.js'
 
-test('history deduplicates semantically identical instructions across server records', () => {
+test('history preserves repeated turns but deduplicates the same server record', () => {
   const record = {
     id: 'message-1',
     role: 'user',
     payload: { instruction: 'build a workflow' },
   }
 
-  const messages = buildAssistHistoryMessages([record, { ...record, id: 'message-2' }])
+  const messages = buildAssistHistoryMessages([record, record, { ...record, id: 'message-2' }])
 
-  assert.deepEqual(messages, [{ role: 'user', text: 'build a workflow', turnKey: 'message:message-1' }])
+  assert.deepEqual(messages.map(message => message.turnKey), ['message:message-1', 'message:message-2'])
+})
+
+test('history retains assistant identity and reasoning including interrupted reasoning-only replies', () => {
+  const messages = buildAssistHistoryMessages([
+    { id: 'a1', role: 'assistant', event_type: 'message', payload: { message_id: 'stream-1', text: 'answer', reasoning: 'thought' } },
+    { id: 'a2', role: 'assistant', event_type: 'message', payload: { message_id: 'stream-2', reasoning: 'unfinished' } },
+  ])
+  assert.equal(messages.length, 2)
+  assert.equal(messages[0].message_id, 'stream-1')
+  assert.equal(messages[0].reasoning, 'thought')
+  assert.equal(messages[1].text, '')
+  assert.equal(messages[1].reasoning, 'unfinished')
+  assert.equal(messages[1].streaming, false)
 })
 
 test('history ignores thought and status placeholders while grouping operations', () => {
@@ -215,6 +228,36 @@ test('English history uses selected-language planning and abort copy', () => {
 
   assert.equal(messages[0].items[0].message, 'Resolving knowledge base resources…')
   assert.equal(messages[1].text, 'Stopped.')
+})
+
+test('history restores v2 conversation rows as a completed snapshot', () => {
+  const messages = buildAssistHistoryMessages([
+    { id: 'u1', role: 'user', event_type: 'message', sequence: 1, payload: { text: 'build a rag flow' } },
+    {
+      id: 'c1',
+      role: 'assistant',
+      event_type: 'tool_call',
+      sequence: 2,
+      payload: { id: 'call-1', name: 'read_graph', arguments: {} },
+    },
+    {
+      id: 'r1',
+      role: 'assistant',
+      event_type: 'tool_result',
+      sequence: 3,
+      payload: { tool_call_id: 'call-1', name: 'read_graph', ok: true, content: { summary: 'empty' } },
+    },
+    { id: 'a1', role: 'assistant', event_type: 'message', sequence: 4, payload: { text: 'I will add retrieval next.' } },
+  ])
+
+  assert.equal(messages[0].text, 'build a rag flow')
+  assert.equal(messages[1].kind, 'activity')
+  assert.equal(messages[1].status, 'completed')
+  assert.equal(messages[1].collapsed, true)
+  assert.equal(messages[1].streaming, false)
+  assert.equal(messages[2].kind, 'assistant_text')
+  assert.equal(messages[2].text, 'I will add retrieval next.')
+  assert.equal(messages[2].streaming, false)
 })
 
 test('conversation timestamps are localized instead of exposing raw server text', async () => {

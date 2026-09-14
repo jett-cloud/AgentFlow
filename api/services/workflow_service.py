@@ -18,7 +18,7 @@ from core.plugin.impl.model_runtime_factory import create_plugin_model_assembly,
 from core.repositories import DifyCoreRepositoryFactory
 from core.repositories.human_input_repository import FormCreateParams, HumanInputFormRepositoryImpl
 from core.trigger.constants import is_trigger_node_type
-from core.workflow.human_input_adapter import (
+from core.workflow.graph.adapters.human_input_adapter import (
     DeliveryChannelConfig,
     adapt_human_input_node_data_for_graph,
     parse_human_input_delivery_methods,
@@ -28,9 +28,7 @@ from core.workflow.node_factory import (
     get_node_type_classes_mapping,
     is_start_node_type,
 )
-from core.workflow.node_runtime import (
-    apply_dify_debug_email_recipient,
-)
+from core.workflow.runtime.adapters.human_input import apply_dify_debug_email_recipient
 from core.workflow.nodes.human_input.callback import (
     DifyHITLCallback,
     render_form_content_before_submission,
@@ -39,9 +37,9 @@ from core.workflow.nodes.human_input.callback import (
 from core.workflow.nodes.human_input.entities import FormInputConfig, HumanInputNodeData
 from core.workflow.nodes.human_input.enums import HumanInputFormKind
 from core.workflow.nodes.human_input.pause_reason import HumanInputRequired
-from core.workflow.system_variables import build_bootstrap_variables, build_system_variables, default_system_variables
-from core.workflow.variable_pool_initializer import add_node_inputs_to_pool, add_variables_to_pool
-from core.workflow.workflow_entry import WorkflowEntry
+from core.workflow.runtime.variables.system_variables import build_bootstrap_variables, build_system_variables, default_system_variables
+from core.workflow.runtime.variables.variable_pool_initializer import add_node_inputs_to_pool, add_variables_to_pool
+from core.workflow.runtime.workflow_entry import WorkflowEntry
 from enterprise.telemetry.draft_trace import enqueue_draft_node_execution_trace
 from enums.cloud_plan import CloudPlan
 from events.app_event import app_draft_workflow_was_synced, app_published_workflow_was_updated

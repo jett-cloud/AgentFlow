@@ -1,13 +1,26 @@
 from types import SimpleNamespace
 from typing import Any, cast
 
-from core.workflow.generator.agent.graph_ops import empty_graph
+import pytest
+
+from core.workflow.generator.graph.graph_ops import empty_graph
 from core.workflow.generator.agent.loop import iter_agent_events
-from core.workflow.generator.agent.tools import ToolContext, ToolEnv, ToolTurnState
+from core.workflow.generator.agent.tools.tools import ToolContext, ToolEnv, ToolTurnState
 from core.workflow.generator.agent.types import AgentMessage, AgentSession
-from core.workflow.generator.llm_response import LLMJsonClient, ModelInvoker
-from core.workflow.generator.node_builder import BuilderInput
+from core.workflow.generator.model_io.llm_response import LLMJsonClient, ModelInvoker
+from core.workflow.generator.compiler.node_builder import BuilderInput
+from services.workflow_assist.agent_initializer import _turn_from_llm_result
 from services.workflow_assist.chat import WorkflowAgentInvoker
+
+
+@pytest.mark.parametrize("arguments", ['{"id":', "[1]", 42])
+def test_blocking_adapter_does_not_replace_invalid_arguments_with_empty_object(arguments: object) -> None:
+    call = SimpleNamespace(id="bad", function=SimpleNamespace(name="read_graph", arguments=arguments))
+    result = SimpleNamespace(message=SimpleNamespace(content="", tool_calls=[call]))
+
+    turn = _turn_from_llm_result(result)
+
+    assert turn["tool_calls"][0]["arguments"] == arguments
 
 
 class RecordingModel:
@@ -66,6 +79,8 @@ def _tool_context() -> ToolContext:
                 output_language="zh-Hans",
             ),
             llm_client=LLMJsonClient(model_instance=cast("ModelInvoker", object()), model_parameters={}),
+            agent_model_entries=(),
+            models_available=False,
             hydrate_graph=None,
         ),
         state=ToolTurnState(graph=empty_graph()),

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from core.workflow.system_variables import build_system_variables
+from core.workflow.runtime.variables.system_variables import build_system_variables
 from graphon.file import File, FileTransferMethod, FileType
 from graphon.model_runtime.entities.llm_entities import LLMUsage
 from graphon.node_events import StreamChunkEvent, StreamCompletedEvent
@@ -239,7 +239,6 @@ def test_image_link_messages_use_tool_file_id_metadata(tool_node: ToolNode):
 def test_tool_node_passes_node_execution_id_when_runtime_accepts_it(tool_node: ToolNode):
     runtime_handle = ToolRuntimeHandle(raw=object())
     tool_node._runtime.get_runtime = MagicMock(return_value=runtime_handle)
-    tool_node.ensure_execution_id = MagicMock(return_value="node-execution-id")
 
     result = tool_node._get_tool_runtime(
         variable_pool=tool_node.graph_runtime_state.variable_pool,

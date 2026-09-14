@@ -127,6 +127,17 @@ class WorkflowAssistPlanningFailed(BaseHTTPException):
         self.data["errors"] = errors or [{"code": self.error_code, "detail": description}]
 
 
+class WorkflowAssistInvalidGraph(BaseHTTPException):
+    error_code = "INVALID_GRAPH"
+    description = "The Workflow Assist candidate graph is invalid."
+    code = 400
+
+    def __init__(self, errors: list[dict]) -> None:
+        super().__init__(self.description)
+        assert self.data is not None
+        self.data["errors"] = errors
+
+
 class WorkflowAssistClarificationInvalid(BaseHTTPException):
     error_code = "INVALID_CLARIFICATION"
     description = "The clarification response does not match the pending questions."

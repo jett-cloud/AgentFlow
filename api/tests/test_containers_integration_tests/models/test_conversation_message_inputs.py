@@ -12,7 +12,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.orm import Session
 
-from core.workflow.file_reference import build_file_reference
+from core.workflow.runtime.adapters.file_reference import build_file_reference
 from graphon.file import FILE_MODEL_IDENTITY, FileTransferMethod
 from models.model import App, AppMode, Conversation, Message
 
