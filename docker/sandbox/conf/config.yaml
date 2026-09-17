@@ -1,0 +1,19 @@
+app:
+  port: 8194
+  debug: false
+  key: dify-sandbox
+max_workers: 4
+max_requests: 50
+worker_timeout: 15
+python_path: /opt/python/bin/python3
+enable_network: true
+enable_preload: false
+log_path: "./logs"
+# Empty means use dify-sandbox's maintained default seccomp allowlist.
+# A short custom list prevents the Python runtime from starting and appears in
+# Workflow Code nodes as "operation not permitted".
+allowed_syscalls: []
+proxy:
+  socks5: ''
+  http: ''
+  https: ''

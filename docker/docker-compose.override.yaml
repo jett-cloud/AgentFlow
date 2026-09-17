@@ -1,0 +1,20 @@
+# Local development: mount Console auth so open /register and workspace auto-create
+# work against the published langgenius/dify-api image.
+# Publish Postgres + plugin_daemon management port for host-run Flask
+# (api/.env: DB_HOST=127.0.0.1:5433, PLUGIN_DAEMON_URL=http://127.0.0.1:5002).
+services:
+  db_postgres:
+    ports:
+      - "${EXPOSE_POSTGRES_PORT:-5433}:5432"
+  plugin_daemon:
+    ports:
+      - "${EXPOSE_PLUGIN_DAEMON_PORT:-5002}:${PLUGIN_DAEMON_PORT:-5002}"
+      - "${EXPOSE_PLUGIN_DEBUGGING_PORT:-5003}:${PLUGIN_DEBUGGING_PORT:-5003}"
+  api:
+    volumes:
+      - ./patches/email_register.py:/app/api/controllers/console/auth/email_register.py:ro
+      - ./patches/login.image.py:/app/api/controllers/console/auth/login.py:ro
+  worker:
+    volumes:
+      - ./patches/email_register.py:/app/api/controllers/console/auth/email_register.py:ro
+      - ./patches/login.image.py:/app/api/controllers/console/auth/login.py:ro

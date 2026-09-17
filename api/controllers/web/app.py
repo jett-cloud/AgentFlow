@@ -1,0 +1,216 @@
+import logging
+from typing import Any, cast
+
+from flask import request
+from flask_restx import Resource
+from pydantic import BaseModel, ConfigDict, Field
+from werkzeug.exceptions import Unauthorized
+
+from constants import HEADER_NAME_APP_CODE
+from controllers.common import fields
+from controllers.common.agent_app_parameters import get_published_agent_app_feature_dict_and_user_input_form
+from controllers.common.schema import query_params_from_model, register_response_schema_models, register_schema_models
+from core.app.app_config.common.parameters_mapping import get_parameters_from_feature_dict
+from core.app.apps.agent_app.errors import AgentAppGeneratorError, AgentAppNotPublishedError
+from extensions.ext_database import db
+from libs.passport import PassportService
+from libs.token import extract_webapp_passport
+from models.model import App, AppMode, EndUser, load_annotation_reply_config
+from services.app_service import AppService
+from services.enterprise.enterprise_service import EnterpriseService
+from services.feature_service import FeatureService
+from services.webapp_auth_service import WebAppAuthService
+
+from . import web_ns
+from .error import AgentNotPublishedError, AppUnavailableError
+from .wraps import WebApiResource
+
+logger = logging.getLogger(__name__)
+
+
+class AppAccessModeQuery(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    app_id: str | None = Field(default=None, alias="appId", description="Application ID")
+    app_code: str | None = Field(default=None, alias="appCode", description="Application code")
+
+
+class AppPermissionQuery(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    app_id: str = Field(..., alias="appId", description="Application ID")
+
+
+class AppMetaResponse(BaseModel):
+    tool_icons: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Tool icon metadata keyed by tool name",
+    )
+
+
+register_schema_models(web_ns, AppAccessModeQuery, AppPermissionQuery)
+register_response_schema_models(
+    web_ns,
+    fields.Parameters,
+    AppMetaResponse,
+    fields.AccessModeResponse,
+    fields.BooleanResultResponse,
+)
+
+
+@web_ns.route("/parameters")
+class AppParameterApi(WebApiResource):
+    """Resource for app variables."""
+
+    @web_ns.doc("Get App Parameters")
+    @web_ns.doc(description="Retrieve the parameters for a specific app.")
+    @web_ns.doc(
+        responses={
+            200: "Success",
+            400: "Bad Request",
+            401: "Unauthorized",
+            403: "Forbidden",
+            404: "App Not Found",
+            500: "Internal Server Error",
+        }
+    )
+    @web_ns.response(200, "Success", web_ns.models[fields.Parameters.__name__])
+    def get(self, app_model: App, end_user: EndUser):
+        """Retrieve app parameters."""
+        session = db.session()
+        features_dict: dict[str, Any]
+        user_input_form: list[dict[str, Any]]
+        if app_model.mode == AppMode.AGENT:
+            try:
+                features_dict, user_input_form = get_published_agent_app_feature_dict_and_user_input_form(
+                    app_model,
+                    session=session,
+                )
+            except AgentAppNotPublishedError:
+                raise AgentNotPublishedError()
+            except AgentAppGeneratorError:
+                raise AppUnavailableError()
+        elif app_model.mode in {AppMode.ADVANCED_CHAT, AppMode.WORKFLOW}:
+            workflow = app_model.workflow_with_session(session=session)
+            if workflow is None:
+                raise AppUnavailableError()
+
+            features_dict = workflow.features_dict
+            user_input_form = workflow.user_input_form(to_old_structure=True)
+        else:
+            app_model_config = app_model.app_model_config_with_session(session=session)
+            if app_model_config is None:
+                raise AppUnavailableError()
+
+            annotation_reply = load_annotation_reply_config(session, app_model.id)
+            features_dict = cast(
+                dict[str, Any],
+                app_model_config.to_dict(annotation_reply=annotation_reply),
+            )
+
+            user_input_form = features_dict.get("user_input_form", [])
+
+        parameters = get_parameters_from_feature_dict(features_dict=features_dict, user_input_form=user_input_form)
+        return fields.Parameters.model_validate(parameters).model_dump(mode="json")
+
+
+@web_ns.route("/meta")
+class AppMeta(WebApiResource):
+    @web_ns.doc("Get App Meta")
+    @web_ns.doc(description="Retrieve the metadata for a specific app.")
+    @web_ns.doc(
+        responses={
+            200: "Success",
+            400: "Bad Request",
+            401: "Unauthorized",
+            403: "Forbidden",
+            404: "App Not Found",
+            500: "Internal Server Error",
+        }
+    )
+    @web_ns.response(200, "Success", web_ns.models[AppMetaResponse.__name__])
+    def get(self, app_model: App, end_user: EndUser):
+        """Get app meta"""
+        return AppService().get_app_meta(app_model, session=db.session())
+
+
+@web_ns.route("/webapp/access-mode")
+class AppAccessMode(Resource):
+    @web_ns.doc("Get App Access Mode")
+    @web_ns.doc(description="Retrieve the access mode for a web application (public or restricted).")
+    @web_ns.doc(params=query_params_from_model(AppAccessModeQuery))
+    @web_ns.doc(
+        responses={
+            200: "Success",
+            400: "Bad Request",
+            500: "Internal Server Error",
+        }
+    )
+    @web_ns.response(200, "Success", web_ns.models[fields.AccessModeResponse.__name__])
+    def get(self):
+        raw_args = request.args.to_dict()
+        args = AppAccessModeQuery.model_validate(raw_args)
+
+        features = FeatureService.get_system_features()
+        if not features.webapp_auth.enabled:
+            return {"accessMode": "public"}
+
+        app_id = args.app_id
+        if args.app_code:
+            app_id = AppService.get_app_id_by_code(args.app_code, session=db.session())
+
+        if not app_id:
+            raise ValueError("appId or appCode must be provided")
+
+        res = EnterpriseService.WebAppAuth.get_app_access_mode_by_id(app_id)
+
+        return {"accessMode": res.access_mode}
+
+
+@web_ns.route("/webapp/permission")
+class AppWebAuthPermission(Resource):
+    @web_ns.doc("Check App Permission")
+    @web_ns.doc(description="Check if user has permission to access a web application.")
+    @web_ns.doc(params=query_params_from_model(AppPermissionQuery))
+    @web_ns.doc(
+        responses={
+            200: "Success",
+            400: "Bad Request",
+            401: "Unauthorized",
+            500: "Internal Server Error",
+        }
+    )
+    @web_ns.response(200, "Success", web_ns.models[fields.BooleanResultResponse.__name__])
+    def get(self):
+        user_id = "visitor"
+        app_code = request.headers.get(HEADER_NAME_APP_CODE)
+        app_id = request.args.get("appId")
+        if not app_id or not app_code:
+            raise ValueError("appId must be provided")
+
+        require_permission_check = WebAppAuthService.is_app_require_permission_check(
+            app_id=app_id, session=db.session()
+        )
+        if not require_permission_check:
+            return {"result": True}
+
+        try:
+            tk = extract_webapp_passport(app_code, request)
+            if not tk:
+                raise Unauthorized("Access token is missing.")
+            decoded = PassportService().verify(tk)
+            user_id = decoded.get("user_id", "visitor")
+        except Unauthorized:
+            raise
+        except Exception:
+            logger.exception("Unexpected error during auth verification")
+            raise
+
+        features = FeatureService.get_system_features()
+        if not features.webapp_auth.enabled:
+            return {"result": True}
+
+        res = True
+        if WebAppAuthService.is_app_require_permission_check(app_id=app_id, session=db.session()):
+            res = EnterpriseService.WebAppAuth.is_user_allowed_to_access_webapp(str(user_id), app_id)
+        return {"result": res}
