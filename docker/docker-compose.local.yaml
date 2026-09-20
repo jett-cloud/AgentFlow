@@ -19,11 +19,27 @@ services:
 
   worker_beat:
     <<: *agentflow-api-image
+    profiles:
+      - scheduled-tasks
+
+  # AgentFlow uses the Vue/Vite frontend in agent-flow-frontend/ by default.
+  # Enable the upstream Dify web stack explicitly with --profile dify-web.
+  web:
+    profiles:
+      - dify-web
+
+  nginx:
+    profiles:
+      - dify-web
 
   plugin_daemon:
     dns:
       - ${PLUGIN_DNS_PRIMARY:-223.5.5.5}
       - ${PLUGIN_DNS_SECONDARY:-1.1.1.1}
+    environment:
+      # AI Studio creates local unsigned packages; production keeps signature verification enabled.
+      THIRD_PARTY_SIGNATURE_VERIFICATION_ENABLED: "false"
+      FORCE_VERIFYING_SIGNATURE: "false"
 
   agent_backend:
     image: agentflow-agent-backend:local
