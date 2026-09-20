@@ -5,11 +5,13 @@ on:
     paths:
       - "api/**"
       - "dify-agent/**"
+      - "docker/**"
       - ".github/workflows/api-tests.yml"
   pull_request:
     paths:
       - "api/**"
       - "dify-agent/**"
+      - "docker/**"
       - ".github/workflows/api-tests.yml"
   workflow_call:
     secrets:
