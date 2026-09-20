@@ -143,15 +143,15 @@ test('Assist copy, live announcements, keyboard controls, and reduced motion are
   assert.match(composer, /@media \(prefers-reduced-motion: reduce\)/)
 })
 
-test('clarification card uses studio chips and optional other without a duplicate legend', () => {
+test('clarification card groups native choices and only expands selected other input', () => {
   const card = source('src/features/workflow/assistant/AssistClarificationCard.vue')
 
-  assert.match(card, /class="chip/)
-  assert.match(card, /copy\.other/)
-  assert.match(card, /min-height:\s*32px/)
-  assert.match(card, /#175cd3/)
-  assert.match(card, /shouldSubmitOnChipClick/)
-  assert.doesNotMatch(card, /<legend/)
+  assert.match(card, /'checkbox' : 'radio'/)
+  assert.match(card, /<legend class="prompt">/)
+  assert.match(card, /v-if="!isChoiceQuestion\(question\) \|\| otherSelected\(question\)"/)
+  assert.match(card, /copy\.submitAnswers/)
+  assert.match(card, /props\.disabled \|\| !canSubmit\.value/)
+  assert.doesNotMatch(card, /shouldSubmitOnChipClick/)
 })
 
 test('Dock resize cleanup and narrow history content have symmetric observable contracts', () => {

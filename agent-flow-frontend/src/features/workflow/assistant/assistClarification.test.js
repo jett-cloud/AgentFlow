@@ -6,6 +6,7 @@ import {
   clarificationAnswerText,
   shouldSubmitOnChipClick,
   toggleClarificationOption,
+  toggleClarificationOther,
 } from './assistClarification.js'
 
 const knowledge = {
@@ -62,14 +63,43 @@ test('chip answers cover every question including optional other text', () => {
   assert.equal(clarificationAnswerText(answers), 'Product docs\nRAG、Eval\nkeep citations')
 })
 
-test('a lone single-choice question submits when a chip is clicked', () => {
-  assert.equal(shouldSubmitOnChipClick([knowledge], knowledge), true)
+test('choice selection waits for explicit submission', () => {
+  assert.equal(shouldSubmitOnChipClick([knowledge], knowledge), false)
   assert.equal(shouldSubmitOnChipClick([knowledge, extras], knowledge), false)
   assert.equal(shouldSubmitOnChipClick([extras], extras), false)
 
   const draft = toggleClarificationOption({}, knowledge, 'wiki')
   assert.equal(canSubmitClarification([knowledge], draft), true)
   assert.equal(buildClarificationAnswers([knowledge], draft)[0].text, 'Team wiki')
+})
+
+test('single choice switches exclusively between options and other', () => {
+  let draft = toggleClarificationOption({}, knowledge, 'docs')
+  draft = toggleClarificationOther(draft, knowledge)
+  assert.deepEqual(draft.knowledge.selected, [])
+  assert.equal(canSubmitClarification([knowledge], draft), false)
+  draft.knowledge.other = 'Custom source'
+  assert.equal(buildClarificationAnswers([knowledge], draft)[0].text, 'Custom source')
+  draft = toggleClarificationOption(draft, knowledge, 'wiki')
+  assert.equal(draft.knowledge.otherSelected, false)
+  assert.equal(buildClarificationAnswers([knowledge], draft)[0].text, 'Team wiki')
+})
+
+test('serialization never submits conflicting single-choice values', () => {
+  const answers = buildClarificationAnswers([knowledge], {
+    knowledge: { selected: ['docs', 'wiki'], other: 'custom', otherSelected: true },
+  })
+  assert.deepEqual(answers[0].labels, [])
+  assert.equal(answers[0].text, 'custom')
+})
+
+test('multiple choice permits other and retains it in submitted message text', () => {
+  let draft = toggleClarificationOption({}, extras, 'rag')
+  draft = toggleClarificationOther(draft, extras)
+  draft.extras.other = 'Custom metric'
+  assert.equal(clarificationAnswerText(buildClarificationAnswers([extras], draft)), 'RAG、Custom metric')
+  draft = toggleClarificationOther(draft, extras)
+  assert.equal(buildClarificationAnswers([extras], draft)[0].text, 'RAG')
 })
 
 test('other text is enough to submit a choice question', () => {

@@ -10,8 +10,8 @@ function labelsText(labels) {
 }
 
 function answerText(answer) {
-  return labelsText(answer?.labels)
-    || trimmedText(answer?.text)
+  return trimmedText(answer?.text)
+    || labelsText(answer?.labels)
     || trimmedText(answer?.other_text)
     || trimmedText(answer?.value)
     || trimmedText(answer?.selected_value)
@@ -46,14 +46,30 @@ export function optionLabel(option) {
 }
 
 export function shouldSubmitOnChipClick(questions, question) {
-  return Array.isArray(questions)
-    && questions.length === 1
-    && question?.kind === 'single_choice'
-    && questionOptions(question).length > 0
+  // Selection is always reviewable before the user explicitly submits.
+  return false
 }
 
 export function emptyClarificationDraft(question) {
-  return { selected: [], other: '' }
+  return { selected: [], other: '', otherSelected: false }
+}
+
+export function isClarificationOtherSelected(state = {}) {
+  // Preserve text-only drafts created before explicit Other selection existed.
+  return state.otherSelected ?? (!state.selected?.length && !!trimmedText(state.other))
+}
+
+export function toggleClarificationOther(draft, question) {
+  const current = draft?.[question.id] || emptyClarificationDraft(question)
+  const multi = question.kind === 'multi_choice'
+  return {
+    ...draft,
+    [question.id]: {
+      ...current,
+      selected: multi ? [...current.selected] : [],
+      otherSelected: multi ? !isClarificationOtherSelected(current) : true,
+    },
+  }
 }
 
 export function toggleClarificationOption(draft, question, value) {
@@ -71,15 +87,26 @@ export function toggleClarificationOption(draft, question, value) {
   }
   return {
     ...draft,
-    [question.id]: { ...current, selected },
+    [question.id]: {
+      ...current, selected,
+      otherSelected: question.kind === 'multi_choice' ? isClarificationOtherSelected(current) : false,
+    },
   }
 }
 
 export function buildClarificationAnswers(questions, draft = {}) {
   return (Array.isArray(questions) ? questions : []).map((question) => {
     const state = draft[question.id] || emptyClarificationDraft(question)
-    const selected = Array.isArray(state.selected) ? state.selected.filter(Boolean) : []
-    const other = trimmedText(state.other)
+    const choice = isChoiceQuestion(question)
+    const multi = question.kind === 'multi_choice'
+    const otherActive = isClarificationOtherSelected(state)
+    let selected = Array.isArray(state.selected) ? state.selected.filter(Boolean) : []
+    if (choice) {
+      selected = selected.filter(value => questionOptions(question).some(option => optionValue(option) === value))
+      if (!multi)
+        selected = otherActive ? [] : selected.slice(0, 1)
+    }
+    const other = !choice || otherActive ? trimmedText(state.other) : ''
     const labels = selected.map((value) => {
       const match = questionOptions(question).find(option => optionValue(option) === value)
       return match ? optionLabel(match) : value
@@ -104,5 +131,8 @@ export function buildClarificationAnswers(questions, draft = {}) {
 }
 
 export function canSubmitClarification(questions, draft = {}) {
+  if ((questions || []).some(question => isChoiceQuestion(question)
+    && isClarificationOtherSelected(draft[question.id]) && !trimmedText(draft[question.id]?.other)))
+    return false
   return buildClarificationAnswers(questions, draft).length > 0
 }
