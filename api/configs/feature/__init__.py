@@ -1458,7 +1458,7 @@ class PositionConfig(BaseSettings):
 
     POSITION_TOOL_EXCLUDES: str = Field(
         description="Comma-separated list of excluded tools",
-        default="",
+        default="time,audio,code,webscraper",
     )
 
     @property

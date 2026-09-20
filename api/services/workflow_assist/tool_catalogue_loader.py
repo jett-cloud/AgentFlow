@@ -98,6 +98,8 @@ def build_tool_catalogue(
     )
 
     for provider in ToolManager.list_builtin_providers(tenant_id):
+        if ToolManager.is_tool_provider_filtered(provider):
+            continue
         provider_name = provider.entity.identity.name
         plugin_id = ""
         # Hardcoded built-ins return "builtin"; plugin providers return "plugin".

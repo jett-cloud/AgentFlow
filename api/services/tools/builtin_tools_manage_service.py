@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session, sessionmaker
 from configs import dify_config
 from constants import HIDDEN_VALUE, UNKNOWN_VALUE
 from core.helper.name_generator import generate_incremental_name
-from core.helper.position_helper import is_filtered
 from core.helper.provider_cache import NoOpProviderCredentialCache, ToolProviderCredentialsCache
 from core.plugin.entities.plugin_daemon import CredentialType
 from core.plugin.plugin_service import PluginService
@@ -646,12 +645,7 @@ class BuiltinToolManageService:
         for provider_controller in provider_controllers:
             try:
                 # handle include, exclude
-                if is_filtered(
-                    include_set=dify_config.POSITION_TOOL_INCLUDES_SET,
-                    exclude_set=dify_config.POSITION_TOOL_EXCLUDES_SET,
-                    data=provider_controller,
-                    name_func=lambda x: x.entity.identity.name,
-                ):
+                if ToolManager.is_tool_provider_filtered(provider_controller):
                     continue
 
                 # convert provider controller to user provider

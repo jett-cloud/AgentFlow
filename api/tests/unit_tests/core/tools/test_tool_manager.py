@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from core.app.entities.app_invoke_entities import InvokeFrom
+from core.helper.position_helper import is_filtered as position_is_filtered
 from core.plugin.entities.plugin_daemon import CredentialType
 from core.tools.__base.tool_runtime import ToolRuntime
 from core.tools.entities.tool_entities import (
@@ -72,7 +73,10 @@ def _setup_list_providers_from_api_mocks(
     monkeypatch.setattr("core.tools.tool_manager.is_filtered", lambda *args, **kwargs: False)
     monkeypatch.setattr(
         "core.tools.tool_manager.ToolTransformService.builtin_provider_to_user_provider",
-        lambda **kwargs: SimpleNamespace(name=kwargs["provider_controller"].entity.identity.name),
+        lambda **kwargs: SimpleNamespace(
+            name=kwargs["provider_controller"].entity.identity.name,
+            source=kwargs["provider_controller"],
+        ),
     )
     monkeypatch.setattr(
         "core.tools.tool_manager.ToolTransformService.api_provider_to_controller",
@@ -679,6 +683,60 @@ def test_list_providers_from_api_covers_builtin_api_workflow_and_mcp(monkeypatch
 
     names = {provider.name for provider in providers}
     assert {"hardcoded", "plugin-provider", "api-provider", "workflow-provider", "mcp-provider"} <= names
+
+
+def test_list_providers_from_api_excludes_only_hardcoded_name_collision(monkeypatch: pytest.MonkeyPatch):
+    hardcoded_controller = SimpleNamespace(entity=SimpleNamespace(identity=SimpleNamespace(name="time")))
+    plugin_controller = object.__new__(PluginToolProviderController)
+    plugin_controller.entity = SimpleNamespace(identity=SimpleNamespace(name="time"))
+
+    session = Mock()
+    _setup_list_providers_from_api_mocks(
+        monkeypatch,
+        session=session,
+        hardcoded_controller=hardcoded_controller,
+        plugin_controller=plugin_controller,
+        api_controller=SimpleNamespace(provider_id="api-1"),
+        workflow_controller=SimpleNamespace(provider_id="workflow-1"),
+    )
+    monkeypatch.setattr(
+        "core.tools.tool_manager.dify_config",
+        SimpleNamespace(
+            POSITION_TOOL_INCLUDES_SET=set(),
+            POSITION_TOOL_EXCLUDES_SET={"time", "audio", "code", "webscraper"},
+        ),
+    )
+    monkeypatch.setattr("core.tools.tool_manager.is_filtered", position_is_filtered)
+
+    providers = ToolManager.list_providers_from_api(
+        user_id="user-1",
+        tenant_id="tenant-1",
+        typ="builtin",
+    )
+
+    assert len(providers) == 1
+    assert providers[0].source is plugin_controller
+
+
+@pytest.mark.parametrize(
+    ("includes", "excludes"),
+    [
+        ({"another-plugin"}, {"time", "audio", "code", "webscraper"}),
+        (set(), {"time", "audio", "code", "webscraper", "weather-plugin"}),
+    ],
+)
+def test_plugin_provider_keeps_nondefault_position_filters(monkeypatch, includes, excludes):
+    plugin_controller = object.__new__(PluginToolProviderController)
+    plugin_controller.entity = SimpleNamespace(identity=SimpleNamespace(name="weather-plugin"))
+    monkeypatch.setattr(
+        "core.tools.tool_manager.dify_config",
+        SimpleNamespace(
+            POSITION_TOOL_INCLUDES_SET=includes,
+            POSITION_TOOL_EXCLUDES_SET=excludes,
+        ),
+    )
+
+    assert ToolManager.is_tool_provider_filtered(plugin_controller) is True
 
 
 def test_get_api_provider_controller_returns_controller_and_credentials():

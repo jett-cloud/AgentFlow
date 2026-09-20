@@ -89,6 +89,14 @@ def test_dify_config(monkeypatch: pytest.MonkeyPatch):
     assert Version(config.project.version) >= Version("1.0.0")
 
 
+def test_dify_config_hides_legacy_builtin_tools_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_basic_config_env(monkeypatch)
+
+    config = DifyConfig(_env_file=None)
+
+    assert {"time", "audio", "code", "webscraper"} == config.POSITION_TOOL_EXCLUDES_SET
+
+
 def test_new_user_default_plugin_ids_are_parsed_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_basic_config_env(monkeypatch)
     monkeypatch.setenv(

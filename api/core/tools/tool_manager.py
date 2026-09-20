@@ -66,6 +66,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_HIDDEN_HARDCODED_TOOL_PROVIDERS = frozenset({"time", "audio", "code", "webscraper"})
+
 
 class ApiProviderControllerItem(TypedDict):
     provider: ApiToolProvider
@@ -588,6 +590,27 @@ class ToolManager:
         # get plugin providers
         yield from cls.list_plugin_providers(tenant_id)
 
+    @staticmethod
+    def is_tool_provider_filtered(
+        provider: BuiltinToolProviderController | PluginToolProviderController,
+    ) -> bool:
+        """Apply position filters without hiding colliding tenant plugins.
+
+        Plugin providers inherit ``BuiltinToolProviderController`` for legacy
+        compatibility. They still honor operator include/exclude filters, but
+        AgentFlow's default hardcoded exclusions must not hide an installed
+        plugin that happens to use the same provider name.
+        """
+        exclude_set = dify_config.POSITION_TOOL_EXCLUDES_SET
+        if isinstance(provider, PluginToolProviderController):
+            exclude_set = exclude_set.difference(DEFAULT_HIDDEN_HARDCODED_TOOL_PROVIDERS)
+        return is_filtered(
+            include_set=dify_config.POSITION_TOOL_INCLUDES_SET,
+            exclude_set=exclude_set,
+            data=provider,
+            name_func=lambda item: item.entity.identity.name,
+        )
+
     @classmethod
     def list_mcp_provider_controllers(cls, tenant_id: str) -> list[MCPToolProviderController]:
         """Load MCP provider metadata for a tenant without calling tools/list."""
@@ -726,12 +749,7 @@ class ToolManager:
                 # append builtin providers
                 for provider in builtin_providers:
                     # handle include, exclude
-                    if is_filtered(
-                        include_set=dify_config.POSITION_TOOL_INCLUDES_SET,
-                        exclude_set=dify_config.POSITION_TOOL_EXCLUDES_SET,
-                        data=provider,
-                        name_func=lambda x: x.entity.identity.name,
-                    ):
+                    if cls.is_tool_provider_filtered(provider):
                         continue
                     user_provider = ToolTransformService.builtin_provider_to_user_provider(
                         provider_controller=provider,

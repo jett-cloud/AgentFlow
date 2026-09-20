@@ -1,10 +1,50 @@
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from core.tools.plugin_tool.provider import PluginToolProviderController
 from services.tools.builtin_tools_manage_service import BuiltinToolManageService
 
 MODULE = "services.tools.builtin_tools_manage_service"
+
+
+def test_list_builtin_tools_excludes_only_hardcoded_name_collision(monkeypatch: pytest.MonkeyPatch) -> None:
+    hardcoded_controller = SimpleNamespace(
+        entity=SimpleNamespace(identity=SimpleNamespace(name="time")),
+        get_tools=lambda: [],
+    )
+    plugin_controller = object.__new__(PluginToolProviderController)
+    plugin_controller.entity = SimpleNamespace(identity=SimpleNamespace(name="time"))
+    plugin_controller.get_tools = lambda: []
+
+    monkeypatch.setattr(
+        BuiltinToolManageService,
+        "get_builtin_provider",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        f"{MODULE}.ToolManager.list_builtin_providers",
+        lambda _tenant_id: [hardcoded_controller, plugin_controller],
+    )
+    monkeypatch.setattr(f"{MODULE}.ToolManager.list_default_builtin_providers", lambda _tenant_id: [])
+    position_config = SimpleNamespace(
+        POSITION_TOOL_INCLUDES_SET=set(),
+        POSITION_TOOL_EXCLUDES_SET={"time"},
+    )
+    monkeypatch.setattr(f"{MODULE}.dify_config", position_config)
+    monkeypatch.setattr("core.tools.tool_manager.dify_config", position_config)
+    monkeypatch.setattr(
+        f"{MODULE}.ToolTransformService.builtin_provider_to_user_provider",
+        lambda **kwargs: SimpleNamespace(tools=[], source=kwargs["provider_controller"]),
+    )
+    monkeypatch.setattr(f"{MODULE}.ToolTransformService.repack_provider", lambda **_kwargs: None)
+    monkeypatch.setattr(f"{MODULE}.BuiltinToolProviderSort.sort", lambda providers: providers)
+
+    providers = BuiltinToolManageService.list_builtin_tools("user-1", "tenant-1")
+
+    assert len(providers) == 1
+    assert providers[0].source is plugin_controller
 
 
 def _mock_session(mock_session_cls):

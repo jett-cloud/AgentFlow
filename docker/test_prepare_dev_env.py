@@ -44,6 +44,7 @@ class PrepareDevEnvTest(unittest.TestCase):
             content = output.read_text(encoding="utf-8")
             values = parse_env(output)
             self.assertNotIn("CHANGE_ME_", content)
+            self.assertEqual(values["POSITION_TOOL_EXCLUDES"], "time,audio,code,webscraper")
             for left, right in (
                 ("CODE_EXECUTION_API_KEY", "SANDBOX_API_KEY"),
                 ("WEAVIATE_API_KEY", "WEAVIATE_AUTHENTICATION_APIKEY_ALLOWED_KEYS"),
