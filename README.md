@@ -1,38 +1,113 @@
 # AgentFlow
 
-AgentFlow是一个面向 AI 应用团队的工作流构建与集成展示项目。它以 Dify 的 API、Agent 运行时和 Docker 配置为基础，配合独立的 Vue/Vite 管理前端，聚焦可视化工作流、流式 Workflow Assist、MCP 工具接入、AI 辅助工具插件生成与数据集管理。
+> A visual AI Agent workflow platform for building LLM, RAG, MCP and tool-calling applications.
 
-**English summary:** AgentFlow is a curated Dify-based showcase for building AI workflows, streaming workflow assistance, MCP integrations, AI-assisted tool-plugin generation, and dataset operations. It is a source snapshot for development and evaluation, not a packaged production release.
+AgentFlow 是一个面向 AI 应用开发的可视化 Agent 工作流平台，支持工作流编排、LLM、RAG、MCP 工具接入、Tool Calling 与流式 Agent 执行。
+
+基于 Vue 3 + Python 构建，项目聚焦于 AI Agent 工作流的可视化编排、工具调用与运行过程展示。
+
+## Core Features
+
+* **Visual Workflow Builder** — 基于可视化节点构建和编排 AI 工作流
+* **Agent Execution** — 支持 Agent 运行与任务执行流程
+* **RAG / Knowledge Base** — 支持知识库与检索增强生成
+* **MCP Integration** — 接入 MCP Server 与外部工具
+* **Streaming Workflow Assist** — 基于 SSE 展示实时 Agent / Workflow 执行过程
+* **AI Tool Generator** — AI 辅助生成、校验和管理工具插件
+* **Docker Development Environment** — 提供完整的本地容器化开发环境
+
+##  Preview
+
+### Visual Workflow
+
+![Visual Workflow](docs/screenshots/work-flow.png)
+
+### Workflow Assist
+
+![Workflow Assist](docs/screenshots/work-assistant.png)
+
+### AI Tool Generator
+
+![AI Tool Generator](docs/screenshots/tool.png)
 
 ## 功能亮点
 
-- 工作流画布：基于 Vue Flow 的画布、节点注册、运行时状态和 DSL 处理，覆盖 LLM、代码、知识库、工具、循环、条件与触发器等工作流节点。
+##  What I Built
 
-  ![工作流画布](docs/screenshots/work-flow.png)
+AgentFlow 基于 Dify 的开源能力进行扩展和重新组织，项目重点聚焦于 AI Agent 工作流的可视化编排、运行过程展示以及 MCP 工具集成。
 
-- 流式 Workflow Assist：前端包含 assist 状态机、SSE 消息处理、会话和运行事件展示；API 提供工作流协助会话、运行协调与持久化实现。
+在现有开源基础上，本项目主要进行了以下开发和整合：
 
-  ![Workflow Assist](docs/screenshots/work-assistant.png)
+* **独立 Vue 3 工作流前端**
+  使用 Vue 3、Vite、Pinia、Vue Router 和 Vue Flow 构建独立的工作流管理界面。
 
-  ![Workflow Assist 运行结果](docs/screenshots/work-assistant-result.png)
+* **Visual Workflow Editor**
+  实现可视化节点编排、节点状态管理、工作流 DSL 处理以及运行状态展示。
 
-- MCP 集成：包含 MCP 客户端、工具提供方管理、OAuth 回调以及远程 MCP 助手界面。
+* **Streaming Workflow Assist**
+  实现基于 SSE 的流式消息处理、Agent 执行状态展示、会话管理以及运行事件展示。
 
-- AI 工具插件生成：提供生成、校验、会话、流式 agent turn、发布、卸载和测试授权的 API 与前端工作区。
+* **MCP Integration**
+  集成 MCP Client、Tool Provider 管理、OAuth 回调以及 MCP 工具调用能力。
 
-  ![AI 工具插件生成器](docs/screenshots/tool.png)
+* **AI Tool Generator**
+  提供 AI 辅助工具插件生成、校验、测试、发布以及卸载相关能力。
 
-- 数据集：包含创建向导、文档、检索命中测试、数据管道、外部知识库连接和访问配置界面。
+* **Dataset Management UI**
+  提供知识库、文档、检索测试、数据管道和外部知识库相关管理界面。
 
-## 架构与技术栈
+* **Local Development Environment**
+  整合 Docker Compose、PostgreSQL、Redis、Vector Database、Sandbox 和 Agent Runtime，提供本地开发环境。
 
-| 层级 | 目录 | 技术 |
-| --- | --- | --- |
-| 控制台前端 | `agent-flow-frontend/` | Vue 3、Vite、Pinia、Vue Router、Vue Flow、Element Plus |
-| 应用 API | `api/` | Python 3.12、Flask、Celery、SQLAlchemy、Pydantic、uv |
-| Agent SDK/服务 | `dify-agent/` | Python、Pydantic AI、HTTPX |
-| Agent 运行时 | `dify-agent-runtime/` | Go |
-| 本地基础设施 | `docker/` | Docker Compose、PostgreSQL、Redis、沙箱、SSRF 代理与可选向量库 |
+> AgentFlow 不是从零重新实现 Dify，而是在其开源基础上进行学习、集成、裁剪和功能扩展。项目中来自上游 Dify 的代码及相关许可信息请参见 [LICENSE](LICENSE)。
+
+##  Architecture
+
+AgentFlow 采用前后端分离架构，并通过 Agent Runtime、数据库、缓存和向量数据库提供 AI Workflow 的运行能力。
+
+```text
+┌─────────────────────────────────────────────┐
+│                Web Browser                  │
+└─────────────────────┬───────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────┐
+│          Vue 3 / Vite Frontend              │
+│                                             │
+│  Workflow Editor · Dataset · MCP · Assist   │
+└─────────────────────┬───────────────────────┘
+                      │ REST / SSE
+                      ▼
+┌─────────────────────────────────────────────┐
+│              Python API                     │
+│                                             │
+│ Workflow · Agent · Dataset · MCP · Tools    │
+└───────────────┬─────────────────────────────┘
+                │
+                ▼
+┌─────────────────────────────────────────────┐
+│              Agent Runtime                  │
+│                                             │
+│        LLM · Tool Calling · MCP             │
+└───────────────┬─────────────────────────────┘
+                │
+        ┌───────┼────────┐
+        ▼       ▼        ▼
+   PostgreSQL  Redis   Vector DB
+```
+
+### Tech Stack
+
+| Layer          | Directory              | Technologies                                                |
+| -------------- | ---------------------- | ----------------------------------------------------------- |
+| Frontend       | `agent-flow-frontend/` | Vue 3, Vite, Pinia, Vue Router, Vue Flow, Element Plus      |
+| Backend API    | `api/`                 | Python 3.12, Flask, Celery, SQLAlchemy, Pydantic, uv        |
+| Agent SDK      | `dify-agent/`          | Python, Pydantic AI, HTTPX                                  |
+| Agent Runtime  | `dify-agent-runtime/`  | Go                                                          |
+| Infrastructure | `docker/`              | Docker Compose, PostgreSQL, Redis, Sandbox, Vector Database |
+
+
+
 
 ## 精选目录
 
