@@ -56,7 +56,43 @@ export function normalizeDeclaredOutput(item) {
     description: String(item.description || ''),
   }
   if (type === 'array' && item.array_item && typeof item.array_item === 'object')
-    out.array_item = { type: String(item.array_item.type || 'object') }
+    out.array_item = normalizeDeclaredArrayItem(item.array_item)
+  if (type === 'object' && Array.isArray(item.children))
+    out.children = item.children.map(normalizeDeclaredChild).filter(Boolean)
+  if (type === 'file')
+    out.file = item.file && typeof item.file === 'object' ? item.file : { extensions: [], mime_types: [] }
+  return out
+}
+
+function normalizeDeclaredArrayItem(item) {
+  const type = SUPPORTED_OUTPUT_TYPES.has(String(item.type || 'object'))
+    ? String(item.type || 'object')
+    : 'object'
+  const out = { type }
+  if (type === 'object' && Array.isArray(item.children))
+    out.children = item.children.map(normalizeDeclaredChild).filter(Boolean)
+  return out
+}
+
+function normalizeDeclaredChild(item) {
+  if (!item || typeof item !== 'object')
+    return null
+  const name = String(item.name || '').trim()
+  if (!name)
+    return null
+  const type = SUPPORTED_OUTPUT_TYPES.has(String(item.type || 'string'))
+    ? String(item.type || 'string')
+    : 'string'
+  const out = {
+    name,
+    type,
+    required: item.required !== undefined ? Boolean(item.required) : true,
+    description: String(item.description || ''),
+  }
+  if (type === 'object' && Array.isArray(item.children))
+    out.children = item.children.map(normalizeDeclaredChild).filter(Boolean)
+  if (type === 'array' && item.array_item && typeof item.array_item === 'object')
+    out.array_item = normalizeDeclaredArrayItem(item.array_item)
   if (type === 'file')
     out.file = item.file && typeof item.file === 'object' ? item.file : { extensions: [], mime_types: [] }
   return out

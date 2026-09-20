@@ -174,16 +174,24 @@ test('loop inner vars use labels and var_type, not synthetic item/index', () => 
     data: {
       type: 'loop',
       loop_variables: [
-        { label: 'acc', var_type: 'number', value_type: 'constant', value: 0 },
+        {
+          label: 'state',
+          var_type: 'object',
+          value_type: 'constant',
+          value: { count: 0 },
+          children: { count: { type: 'number', children: null } },
+        },
       ],
     },
   }
   const inner = getContainerInnerVars(loop)
-  assert.deepEqual(inner.map(v => v.variable), ['acc'])
-  assert.equal(inner[0].type, 'number')
+  assert.deepEqual(inner.map(v => v.variable), ['state'])
+  assert.equal(inner[0].type, 'object')
+  assert.deepEqual(inner[0].children.map(v => v.variable), ['count'])
   const outputs = getNodeOutputVars(loop)
-  assert.deepEqual(outputs.map(v => v.variable), ['acc'])
-  assert.equal(outputs[0].type, 'number')
+  assert.deepEqual(outputs.map(v => v.variable), ['state'])
+  assert.equal(outputs[0].type, 'object')
+  assert.deepEqual(outputs[0].children.map(v => v.variable), ['count'])
 })
 
 test('iteration item type comes from iterator element type', () => {
@@ -201,6 +209,36 @@ test('iteration item type comes from iterator element type', () => {
   const item = inner.find(v => v.variable === 'item')
   assert.equal(item.type, 'object')
   assert.ok(item.children?.some(child => child.variable === 'question'))
+})
+
+test('agent declared object arrays expose their item fields to iteration', () => {
+  const nodes = [
+    {
+      id: 'agent1',
+      data: {
+        type: 'agent',
+        agent_binding: { binding_type: 'inline_agent' },
+        agent_declared_outputs: [{
+          name: 'cases',
+          type: 'array',
+          array_item: {
+            type: 'object',
+            children: [{ name: 'question', type: 'string' }],
+          },
+        }],
+      },
+    },
+    {
+      id: 'iter1',
+      data: { type: 'iteration', iterator_selector: ['agent1', 'cases'] },
+    },
+  ]
+
+  const cases = getNodeOutputVars(nodes[0])[0]
+  const item = getContainerInnerVars(nodes[1], { nodes }).find(v => v.variable === 'item')
+  assert.equal(cases.type, 'arrayObject')
+  assert.deepEqual(cases.children.map(child => child.variable), ['question'])
+  assert.deepEqual(item.children.map(child => child.variable), ['question'])
 })
 
 test('container output scope contains direct children but not outside nodes', () => {

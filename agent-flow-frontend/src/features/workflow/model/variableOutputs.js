@@ -376,6 +376,9 @@ export function getNodeOutputVars(node, { isChatMode = false, ragPipelineVariabl
       variable: v.label || v.variable || v.name,
       type: v.var_type || v.type || VarType.string,
       isLoopVariable: true,
+      children: normalizeVarChildren(v.children).length
+        ? normalizeVarChildren(v.children)
+        : undefined,
     })).filter(v => v.variable)
   }
   else if (type === BlockEnum.VariableAssigner) {
@@ -408,13 +411,7 @@ export function getNodeOutputVars(node, { isChatMode = false, ragPipelineVariabl
           { name: 'files', type: 'array', description: 'Agent 产出的文件', array_item: { type: 'file' } },
           { name: 'json', type: 'object', description: '结构化 JSON' },
         ]
-    vars = declared.map(item => ({
-      variable: item.name,
-      type: item.type === 'array' && item.array_item?.type === 'file'
-        ? VarType.arrayFile
-        : (item.type || VarType.string),
-      des: item.description || '',
-    })).filter(item => item.variable)
+    vars = declared.map(agentDeclaredOutputToVar).filter(item => item.variable)
   }
   else if (type === BlockEnum.Tool) {
     vars = getToolDeclaredOutputVars(data)
@@ -432,6 +429,38 @@ export function getNodeOutputVars(node, { isChatMode = false, ragPipelineVariabl
 
   vars = attachFileChildren(vars)
   return appendErrorStrategyVars(vars, data)
+}
+
+function agentDeclaredOutputToVar(item) {
+  const childrenSource = item?.type === 'array' && item?.array_item?.type === 'object'
+    ? item.array_item.children
+    : item?.children
+  const children = Array.isArray(childrenSource)
+    ? childrenSource.map(agentDeclaredOutputToVar).filter(child => child.variable)
+    : []
+  return {
+    variable: item?.name,
+    type: agentDeclaredTypeToVarType(item),
+    des: item?.description || '',
+    children: children.length ? children : undefined,
+  }
+}
+
+function agentDeclaredTypeToVarType(item) {
+  if (item?.type !== 'array')
+    return item?.type || VarType.string
+  const itemType = item?.array_item?.type
+  if (itemType === 'string')
+    return VarType.arrayString
+  if (itemType === 'number')
+    return VarType.arrayNumber
+  if (itemType === 'boolean')
+    return VarType.arrayBoolean
+  if (itemType === 'object')
+    return VarType.arrayObject
+  if (itemType === 'file')
+    return VarType.arrayFile
+  return VarType.array
 }
 
 function safeParseSchema(raw) {
@@ -460,6 +489,9 @@ export function getContainerInnerVars(parentNode, { nodes = [] } = {}) {
       type: v.var_type || v.type || VarType.string,
       isLoopVariable: true,
       des: '循环变量',
+      children: normalizeVarChildren(v.children).length
+        ? normalizeVarChildren(v.children)
+        : undefined,
     })).filter(v => v.variable)
   }
   return []

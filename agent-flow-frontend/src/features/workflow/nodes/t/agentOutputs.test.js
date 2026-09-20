@@ -53,3 +53,21 @@ test('normalizeDeclaredOutput supports file type', () => {
   assert.equal(fileOut.type, 'file')
   assert.ok(fileOut.file)
 })
+
+test('normalizeDeclaredOutput preserves nested object and array item children', () => {
+  const output = normalizeDeclaredOutput({
+    name: 'result',
+    type: 'object',
+    children: [
+      { name: 'answer', type: 'string' },
+      {
+        name: 'evidence',
+        type: 'array',
+        array_item: { type: 'object', children: [{ name: 'source', type: 'string' }] },
+      },
+    ],
+  })
+
+  assert.equal(output.children[0].name, 'answer')
+  assert.equal(output.children[1].array_item.children[0].name, 'source')
+})

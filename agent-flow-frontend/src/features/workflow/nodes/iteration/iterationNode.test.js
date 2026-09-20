@@ -61,3 +61,9 @@ test('normalizeIterationData keeps only official error handle modes', () => {
   assert.equal(normalizeIterationData({ error_handle_mode: 'explode' }).error_handle_mode, 'terminated')
   assert.equal(normalizeIterationData({ error_strategy: 'continue-on-error' }).error_handle_mode, 'continue-on-error')
 })
+
+test('normalizeIterationData clamps parallelism to the shared 1 to 10 contract', () => {
+  assert.equal(normalizeIterationData({ parallel_nums: 0 }).parallel_nums, 1)
+  assert.equal(normalizeIterationData({ parallel_nums: 6 }).parallel_nums, 6)
+  assert.equal(normalizeIterationData({ parallel_nums: 50 }).parallel_nums, 10)
+})
