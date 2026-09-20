@@ -2,8 +2,8 @@
   <section class="sandbox">
     <div class="sandbox-header">
       <div>
-        <h2>验证并发布</h2>
-        <p>测试会真实调用外部 API，可能消耗额度；成功后才会发布当前草稿。</p>
+        <h2>发布插件</h2>
+        <p>直接发布不会调用外部 API；测试发布会真实调用外部 API，可能消耗额度。</p>
       </div>
       <span class="local-badge">本地预览</span>
     </div>
@@ -29,11 +29,30 @@
 
       <div class="parameter-panel">
         <div class="parameter-header">
-          <h3>测试参数</h3>
-          <button type="button" :disabled="!canRunTest || testing || uploading" @click="handleTest">
-            {{ testing ? '验证并发布中…' : uploading ? '上传中…' : '真实测试并发布' }}
-          </button>
+          <h3>发布方式</h3>
+          <div class="publish-actions">
+            <button
+              type="button"
+              class="secondary-publish"
+              :disabled="!canRunTest || testing || uploading"
+              @click="handleTest"
+            >
+              {{ testing && activePublishMode === 'test' ? '测试并发布中…' : '真实测试并发布' }}
+            </button>
+            <button
+              type="button"
+              class="direct-publish"
+              :disabled="!canPublish || testing || uploading"
+              @click="handleDirectPublish"
+            >
+              {{ testing && activePublishMode === 'direct' ? '直接发布中…' : uploading ? '上传中…' : '直接发布（不调用 API）' }}
+            </button>
+          </div>
         </div>
+
+        <p class="direct-publish-hint">直接发布仍会执行本地文件、YAML、Python 语法和插件结构校验。</p>
+
+        <h3 class="test-parameters-title">真实测试参数（可选）</h3>
 
         <div v-if="nodeData.credentials_schema?.length" class="creds-block">
           <h4>凭证</h4>
@@ -176,15 +195,15 @@
         <p v-else class="empty-parameters">此工具没有可配置参数。</p>
         <p v-if="!canPublish" class="test-hint">请先生成并保存插件草稿。</p>
         <p v-else-if="missingRequiredParameters.length" class="test-hint warn">
-          请先填写必填参数：{{ missingRequiredLabels }}
+          如需真实测试，请先填写必填参数：{{ missingRequiredLabels }}
         </p>
         <p v-else-if="missingRequiredCredentials" class="test-hint warn">
-          请先填写必填凭据：凭据只用于本次验证，不会保存。
+          如需真实测试，请先填写必填凭据：凭据只用于本次验证，不会保存。
         </p>
         <p v-if="uploadError" class="test-hint warn">{{ uploadError }}</p>
         <div v-if="testResult" class="test-result" :class="{ error: !testResult.ok }">
           <div class="test-result-header">
-            <strong>{{ testResult.ok ? '发布成功' : '发布失败' }}</strong>
+            <strong>{{ publishResultTitle }}</strong>
             <span>{{ testResult.elapsed_ms }} ms</span>
           </div>
           <p v-if="testResult.plugin_unique_identifier" class="test-package">
@@ -212,6 +231,7 @@ import {
 import { isAuthorizationError } from './pluginInstallHelpers.js'
 import { toSandboxNodeData } from './previewToolNodeData.js'
 import {
+  buildDirectPublishPayload,
   buildSandboxFilePayload,
   buildSandboxTestParameters,
   localizedParameterText,
@@ -231,6 +251,7 @@ const emit = defineEmits(['publish-start', 'publish-result', 'publish-end'])
 
 const nodeData = ref(toSandboxNodeData(props.previewTool))
 const testing = ref(false)
+const activePublishMode = ref('')
 const uploading = ref(false)
 const uploadError = ref('')
 const testResult = ref(null)
@@ -291,6 +312,12 @@ const canRunTest = computed(() => {
   return props.canPublish
     && !missingRequiredParameters.value.length
     && !missingRequiredCredentials.value
+})
+
+const publishResultTitle = computed(() => {
+  if (!testResult.value?.ok)
+    return '发布失败'
+  return activePublishMode.value === 'direct' ? '发布成功（未测试）' : '测试并发布成功'
 })
 
 function parameterLabel(parameter) {
@@ -441,6 +468,7 @@ async function handleTest() {
     return
 
   testing.value = true
+  activePublishMode.value = 'test'
   testResult.value = null
   unauthorized.value = false
   uploadError.value = ''
@@ -468,10 +496,11 @@ async function handleTest() {
     const authorization = await authorizeToolPluginTest(props.sessionId, payload)
     const result = await publishToolPluginSession(props.sessionId, {
       ...payload,
+      publish_mode: 'test',
       authorization_token: authorization.token,
     })
     testResult.value = result
-    emit('publish-result', result)
+    emit('publish-result', { ...result, publish_mode: 'test' })
     unauthorized.value = !result?.ok && isAuthorizationError(result?.error)
   }
   catch (error) {
@@ -502,6 +531,59 @@ async function handleTest() {
   finally {
     for (const key of Object.keys(nodeData.value.credentials || {}))
       nodeData.value.credentials[key] = ''
+    testing.value = false
+    emit('publish-end')
+  }
+}
+
+async function handleDirectPublish() {
+  if (!props.canPublish)
+    return
+
+  testing.value = true
+  activePublishMode.value = 'direct'
+  testResult.value = null
+  unauthorized.value = false
+  uploadError.value = ''
+  emit('publish-start')
+  try {
+    await ElMessageBox.confirm(
+      '将执行免费的本地静态校验并直接发布，不会调用外部 API，也不会消耗 API 调用次数。该版本未经真实调用验证，运行时仍可能失败。',
+      '确认直接发布',
+      {
+        type: 'warning',
+        confirmButtonText: '直接发布',
+        cancelButtonText: '取消',
+        distinguishCancelAndClose: true,
+      },
+    )
+    const result = await publishToolPluginSession(
+      props.sessionId,
+      buildDirectPublishPayload({
+        expectedRevision: props.expectedRevision,
+        toolName: nodeData.value.tool_name,
+      }),
+    )
+    testResult.value = result
+    emit('publish-result', { ...result, publish_mode: 'direct' })
+  }
+  catch (error) {
+    if (error === 'cancel' || error === 'close' || error?.action === 'cancel' || error?.action === 'close')
+      return
+    const failure = error.response?.data?.diagnostic
+      ? error.response.data
+      : {
+          ok: false,
+          diagnostic: {
+            error_type: error.response?.status === 409 ? 'session_conflict' : 'publish_request_error',
+            message: error.response?.data?.message || error.message || '插件发布失败。',
+          },
+          elapsed_ms: 0,
+        }
+    testResult.value = failure
+    emit('publish-result', { ...failure, publish_mode: 'direct' })
+  }
+  finally {
     testing.value = false
     emit('publish-end')
   }
@@ -606,6 +688,7 @@ async function handleTest() {
 }
 .parameter-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .parameter-panel h3 { margin: 0; color: #344054; font-size: 13px; }
+.publish-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .parameter-header button {
   border: 1px solid var(--af-brand);
   border-radius: 8px;
@@ -615,7 +698,19 @@ async function handleTest() {
   cursor: pointer;
   font-size: 12px;
 }
+.parameter-header .secondary-publish {
+  border-color: #c7d7fe;
+  background: #fff;
+  color: var(--af-brand-strong);
+}
 .parameter-header button:disabled { cursor: not-allowed; opacity: .55; }
+.direct-publish-hint {
+  margin: -2px 0 14px;
+  color: #475467;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.test-parameters-title { margin-bottom: 12px !important; }
 .creds-block {
   margin-bottom: 14px;
   padding-bottom: 12px;

@@ -60,6 +60,8 @@ ARG dify_uid=1001
 ARG NODE_MAJOR=22
 ARG NODE_PACKAGE_VERSION=22.21.0-1nodesource1
 ARG NODESOURCE_KEY_FPR=6F71F525282841EEDAF851B42F59B5F99B1BE0B4
+ARG DIFY_PLUGIN_CLI_VERSION=0.6.3
+ARG TARGETARCH=amd64
 RUN groupadd -r -g ${dify_uid} dify && \
     useradd -r -u ${dify_uid} -g ${dify_uid} -s /bin/bash dify && \
     chown -R dify:dify /app
@@ -96,6 +98,16 @@ RUN \
         libmagic1 \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
+
+# Studio publishes official .difypkg archives, which require the Dify Plugin CLI.
+RUN case "${TARGETARCH}" in amd64|arm64) ;; *) echo "Unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; esac \
+    && curl -fsSL --retry 5 \
+        "https://github.com/langgenius/dify-plugin-daemon/releases/download/${DIFY_PLUGIN_CLI_VERSION}/dify-plugin-linux-${TARGETARCH}" \
+        -o /usr/local/bin/dify \
+    && chmod 755 /usr/local/bin/dify \
+    && /usr/local/bin/dify version
+
+ENV DIFY_PLUGIN_CLI_PATH=/usr/local/bin/dify
 
 # Copy Python environment and packages
 ENV VIRTUAL_ENV=/app/api/.venv

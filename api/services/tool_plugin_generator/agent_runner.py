@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from collections.abc import Callable, Generator
@@ -31,6 +32,11 @@ from services.tool_plugin_generator.scaffold import list_tool_names
 from services.tool_plugin_generator.validator import ToolPluginValidationError, validate_plugin_files
 
 MAX_AGENT_ITERATIONS = 16
+
+_DEEPSEEK_REASONING_BLOCK = re.compile(
+    r"<think>\s*<!--dify-deepseek-reasoning-->.*?</think>",
+    re.DOTALL | re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -121,7 +127,7 @@ class TenantAgentLLMClient:
         message = response.message
         content = ""
         if message is not None:
-            content = message.get_text_content() or ""
+            content = _DEEPSEEK_REASONING_BLOCK.sub("", message.get_text_content() or "")
         tool_calls: list[AgentToolCall] = []
         native_calls = getattr(message, "tool_calls", None) or []
         for call in native_calls:

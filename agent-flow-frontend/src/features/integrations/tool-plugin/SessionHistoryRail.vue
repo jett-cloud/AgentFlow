@@ -62,16 +62,6 @@
       >
         从已有插件…
       </button>
-      <button
-        v-if="!collapsed"
-        type="button"
-        class="ghost-btn"
-        :class="{ on: showHidden }"
-        :disabled="disabled"
-        @click="$emit('update:showHidden', !showHidden)"
-      >
-        {{ showHidden ? '隐藏已归档' : '显示已隐藏' }}
-      </button>
     </div>
 
     <div v-if="!collapsed" class="rail-body">
@@ -87,7 +77,7 @@
           v-for="item in group.items"
           :key="item.id"
           class="session-item"
-          :class="{ active: item.id === activeId, hidden: item.is_hidden }"
+          :class="{ active: item.id === activeId }"
         >
           <button
             type="button"
@@ -114,19 +104,8 @@
               </svg>
             </button>
             <div v-if="openMenuId === item.id" class="menu-pop" @click.stop>
-              <button
-                v-if="item.is_hidden"
-                type="button"
-                @click="emitAction('unhide', item.id)"
-              >
-                取消隐藏
-              </button>
-              <button
-                v-else
-                type="button"
-                @click="emitAction('hide', item.id)"
-              >
-                隐藏
+              <button type="button" @click="emitAction('rename', item)">
+                重命名
               </button>
               <button type="button" class="danger" @click="emitAction('delete', item.id)">
                 删除
@@ -145,12 +124,11 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 const props = defineProps({
   sessions: { type: Array, default: () => [] },
   activeId: { type: String, default: '' },
-  showHidden: { type: Boolean, default: false },
   collapsed: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['new', 'fork-pick', 'open', 'hide', 'unhide', 'delete', 'update:showHidden', 'update:collapsed'])
+const emit = defineEmits(['new', 'fork-pick', 'open', 'rename', 'delete', 'update:collapsed'])
 
 const openMenuId = ref('')
 
@@ -162,9 +140,9 @@ function toggleMenu(id) {
   openMenuId.value = openMenuId.value === id ? '' : id
 }
 
-function emitAction(type, id) {
+function emitAction(type, payload) {
   openMenuId.value = ''
-  emit(type, id)
+  emit(type, payload)
 }
 
 function closeMenu() {
@@ -356,23 +334,6 @@ onBeforeUnmount(() => {
   opacity: 0.5;
   cursor: not-allowed;
 }
-.ghost-btn {
-  border: 0;
-  background: transparent;
-  color: var(--muted-soft);
-  font-size: 12px;
-  text-align: left;
-  padding: 6px 8px;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease;
-}
-.ghost-btn:hover:not(:disabled),
-.ghost-btn.on {
-  color: var(--ink);
-  background: var(--hover);
-}
-
 .rail-body {
   flex: 1;
   min-height: 0;
@@ -428,9 +389,6 @@ onBeforeUnmount(() => {
   font-weight: 600;
   background: var(--surface);
   border: 1px solid var(--hairline);
-}
-.session-item.hidden .session-main {
-  opacity: 0.7;
 }
 .session-title {
   display: block;

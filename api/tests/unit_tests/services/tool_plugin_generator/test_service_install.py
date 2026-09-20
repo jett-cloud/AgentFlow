@@ -56,6 +56,40 @@ def test_install_tool_plugin_packages_uploads_and_installs(monkeypatch) -> None:
     assert result.installation_id == "install-1"
 
 
+def test_install_tool_plugin_surfaces_packaging_configuration_error(monkeypatch) -> None:
+    monkeypatch.setattr(
+        service,
+        "package_plugin_files",
+        Mock(side_effect=service.PluginPackagingError("DIFY_PLUGIN_CLI_PATH is not configured")),
+    )
+
+    with pytest.raises(
+        service.ToolPluginInstallError,
+        match="DIFY_PLUGIN_CLI_PATH is not configured",
+    ):
+        service.install_tool_plugin(
+            files=_valid_files(),
+            tenant_id="tenant-1",
+            user_id="user-1",
+        )
+
+
+def test_install_tool_plugin_surfaces_daemon_upload_error(monkeypatch) -> None:
+    monkeypatch.setattr(service, "package_plugin_files", Mock(return_value=b"PK_FAKE"))
+    monkeypatch.setattr(
+        service.PluginService,
+        "upload_pkg",
+        Mock(side_effect=RuntimeError("plugin has a bad signature")),
+    )
+
+    with pytest.raises(service.ToolPluginInstallError, match="plugin has a bad signature"):
+        service.install_tool_plugin(
+            files=_valid_files(),
+            tenant_id="tenant-1",
+            user_id="user-1",
+        )
+
+
 def test_install_tool_plugin_uninstalls_previous_installation(monkeypatch) -> None:
     files = _valid_files()
     uninstall = Mock(return_value=True)

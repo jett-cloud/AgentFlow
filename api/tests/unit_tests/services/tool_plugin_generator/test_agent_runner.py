@@ -117,6 +117,44 @@ def test_tenant_agent_llm_client_does_not_send_max_tokens() -> None:
     assert "max_tokens" not in parameters
 
 
+def test_tenant_agent_llm_client_strips_deepseek_reasoning_from_final_content() -> None:
+    model_instance = FakeModelInstance(
+        features=[ModelFeature.TOOL_CALL],
+        content=(
+            "<think>\n<!--dify-deepseek-reasoning-->"
+            "Validation passed. The tool is complete.\n</think>"
+            "已完成首个工具 image_to_image 的脚手架搭建与实现。"
+        ),
+    )
+    client = TenantAgentLLMClient(
+        tenant_id="tenant-1",
+        provider="langgenius/deepseek/deepseek",
+        model="deepseek-chat",
+        model_manager=FakeModelManager(model_instance),
+    )
+
+    step = client.next_step(messages=[], tools=[])
+
+    assert step.content == "已完成首个工具 image_to_image 的脚手架搭建与实现。"
+
+
+def test_tenant_agent_llm_client_preserves_unmarked_think_tags_in_final_content() -> None:
+    model_instance = FakeModelInstance(
+        features=[ModelFeature.TOOL_CALL],
+        content="请原样返回 <think>这是用户要求展示的文本</think>。",
+    )
+    client = TenantAgentLLMClient(
+        tenant_id="tenant-1",
+        provider="provider-1",
+        model="tool-model",
+        model_manager=FakeModelManager(model_instance),
+    )
+
+    step = client.next_step(messages=[], tools=[])
+
+    assert step.content == "请原样返回 <think>这是用户要求展示的文本</think>。"
+
+
 MIN_FILES = {
     "manifest.yaml": "version: 0.0.1\n",
     "main.py": "pass\n",

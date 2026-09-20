@@ -125,6 +125,25 @@ test('persisted assistant tool calls render as tool cards instead of ellipsis bu
   assert.equal(displayed[0].tool_calls[0].status, 'completed')
 })
 
+test('persisted assistant messages hide DeepSeek provider reasoning blocks', () => {
+  const persisted = [{
+    role: 'assistant',
+    content: '<think>\n<!--dify-deepseek-reasoning-->internal plan\n</think>最终答复',
+  }]
+
+  const displayed = normalizeAgentMessagesForDisplay(persisted)
+
+  assert.deepEqual(displayed, [{ role: 'assistant', content: '最终答复' }])
+})
+
+test('persisted assistant messages preserve unmarked think tags', () => {
+  const persisted = [{ role: 'assistant', content: '示例：<think>保留文本</think>' }]
+
+  const displayed = normalizeAgentMessagesForDisplay(persisted)
+
+  assert.deepEqual(displayed, persisted)
+})
+
 test('completed stream merge keeps persisted tool calls and temporary thinking cards', () => {
   const persisted = [{
     role: 'assistant',

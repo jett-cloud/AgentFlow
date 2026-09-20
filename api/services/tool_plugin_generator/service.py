@@ -21,7 +21,11 @@ from core.tools.tool_manager import ToolManager
 from extensions.ext_database import db
 from factories.file_factory import build_from_mapping, build_from_mappings
 from services.tool_plugin_generator.llm_fill import LLMFillClient, build_fill_prompt, parse_llm_fill_payload
-from services.tool_plugin_generator.packager import normalize_plugin_source_files, package_plugin_files
+from services.tool_plugin_generator.packager import (
+    PluginPackagingError,
+    normalize_plugin_source_files,
+    package_plugin_files,
+)
 from services.tool_plugin_generator.preview_mapper import map_files_to_preview_tool, normalize_plugin_provider_id
 from services.tool_plugin_generator.scaffold import render_scaffold
 from services.tool_plugin_generator.validator import ToolPluginValidationError, validate_plugin_files
@@ -509,8 +513,14 @@ def install_tool_plugin(
         decoded = PluginService.upload_pkg(tenant_id, package)
     except ToolPluginValidationError:
         raise
+    except PluginPackagingError as exc:
+        raise ToolPluginInstallError(str(exc)) from exc
     except Exception as exc:
-        raise ToolPluginInstallError("Unable to prepare candidate plugin package") from exc
+        detail = str(exc).strip()
+        message = "Unable to prepare candidate plugin package"
+        if detail:
+            message = f"{message}: {detail}"
+        raise ToolPluginInstallError(message) from exc
     plugin_unique_identifier = str(decoded.unique_identifier)
     plugin_id = plugin_id_from_unique_identifier(plugin_unique_identifier)
 

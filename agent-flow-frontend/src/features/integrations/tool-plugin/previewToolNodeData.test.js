@@ -84,7 +84,6 @@ test('studio wires streaming agent turn with stop support', () => {
   assert.match(studio, /session_id/)
   assert.match(studio, /SessionHistoryRail/)
   assert.doesNotMatch(studio, /historyPayload/)
-  assert.match(studio, /hideToolPluginSession/)
   assert.doesNotMatch(studio, /@bootstrap/)
   assert.doesNotMatch(panel, /初始化生成/)
   assert.match(panel, /messages-scroll/)
@@ -110,6 +109,23 @@ test('studio wires streaming agent turn with stop support', () => {
   assert.match(studio, /applyBootstrapQuery/)
   assert.match(studio, /fork-pick/)
   assert.match(api, /\/workspaces\/current\/tool-plugin\/session-fork/)
+})
+
+test('session history replaces hiding with persistent renaming', () => {
+  const studio = readFileSync(new URL('../pages/AiToolPluginStudio.vue', import.meta.url), 'utf8')
+  const rail = readFileSync(new URL('./SessionHistoryRail.vue', import.meta.url), 'utf8')
+
+  assert.match(rail, /重命名/)
+  assert.match(rail, /emitAction\('rename', item\)/)
+  assert.doesNotMatch(rail, /显示已隐藏|隐藏已归档|取消隐藏/)
+  assert.doesNotMatch(rail, /showHidden|is_hidden/)
+
+  assert.match(studio, /@rename="handleRenameSession"/)
+  assert.match(studio, /listToolPluginSessions\(\{ includeHidden: true \}\)/)
+  assert.match(studio, /ElMessageBox\.prompt/)
+  assert.match(studio, /expected_revision: item\.revision/)
+  assert.match(studio, /title: nextTitle/)
+  assert.doesNotMatch(studio, /hideToolPluginSession|unhideToolPluginSession|showHiddenSessions/)
 })
 
 test('studio greeting has no prompt suggestion shortcuts', () => {

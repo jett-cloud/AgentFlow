@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
@@ -156,7 +156,7 @@ def rollback_published_candidate(
         elapsed_ms=0,
         diagnostic=_diagnostic(
             stage="persist",
-            message="Verified candidate could not be recorded; publish was rolled back",
+            message="Installed candidate could not be recorded; publish was rolled back",
             tool_name=tool_name,
         ),
         rollback_succeeded=rollback_succeeded,
@@ -176,8 +176,13 @@ def publish_tool_plugin(
     tool_name: str,
     parameters: dict[str, Any],
     credentials: dict[str, Any],
+    publish_mode: Literal["test", "direct"] = "test",
 ) -> PublishResult:
-    """Install the draft, invoke the active tool, and roll back on any verification failure."""
+    """Install a valid draft, optionally invoke it, and roll back on verification failure.
+
+    ``direct`` mode still runs local validation and package installation, but it
+    deliberately skips required test inputs and external tool invocation.
+    """
     try:
         validate_plugin_files(files)
         _require_session_manifest_identity(files, author=author, plugin_name=plugin_name)
@@ -200,44 +205,45 @@ def publish_tool_plugin(
             diagnostic=_diagnostic(stage="validate", message=message, tool_name=tool_name),
         )
     provider_id = str(preview.get("provider_id") or "")
-    required_parameters = {
-        str(item.get("name"))
-        for item in preview.get("parameters_schema") or []
-        if isinstance(item, dict) and item.get("required") and item.get("name")
-    }
-    missing_parameters = sorted(
-        name for name in required_parameters if parameters.get(name) is None or parameters.get(name) == ""
-    )
-    if missing_parameters:
-        message = f"Missing required test parameters: {', '.join(missing_parameters)}"
-        return PublishResult(
-            ok=False,
-            status="publish_failed",
-            plugin_unique_identifier=owned_plugin_unique_identifier,
-            installation_id=owned_installation_id,
-            output_text="",
-            elapsed_ms=0,
-            diagnostic=_diagnostic(stage="input", message=message, tool_name=tool_name),
+    if publish_mode == "test":
+        required_parameters = {
+            str(item.get("name"))
+            for item in preview.get("parameters_schema") or []
+            if isinstance(item, dict) and item.get("required") and item.get("name")
+        }
+        missing_parameters = sorted(
+            name for name in required_parameters if parameters.get(name) is None or parameters.get(name) == ""
         )
-    required_credentials = {
-        str(item.get("name"))
-        for item in preview.get("credentials_schema") or []
-        if isinstance(item, dict) and item.get("required") and item.get("name")
-    }
-    missing_credentials = sorted(
-        name for name in required_credentials if credentials.get(name) is None or credentials.get(name) == ""
-    )
-    if missing_credentials:
-        message = f"Missing required credentials: {', '.join(missing_credentials)}"
-        return PublishResult(
-            ok=False,
-            status="publish_failed",
-            plugin_unique_identifier=owned_plugin_unique_identifier,
-            installation_id=owned_installation_id,
-            output_text="",
-            elapsed_ms=0,
-            diagnostic=_diagnostic(stage="input", message=message, tool_name=tool_name),
+        if missing_parameters:
+            message = f"Missing required test parameters: {', '.join(missing_parameters)}"
+            return PublishResult(
+                ok=False,
+                status="publish_failed",
+                plugin_unique_identifier=owned_plugin_unique_identifier,
+                installation_id=owned_installation_id,
+                output_text="",
+                elapsed_ms=0,
+                diagnostic=_diagnostic(stage="input", message=message, tool_name=tool_name),
+            )
+        required_credentials = {
+            str(item.get("name"))
+            for item in preview.get("credentials_schema") or []
+            if isinstance(item, dict) and item.get("required") and item.get("name")
+        }
+        missing_credentials = sorted(
+            name for name in required_credentials if credentials.get(name) is None or credentials.get(name) == ""
         )
+        if missing_credentials:
+            message = f"Missing required credentials: {', '.join(missing_credentials)}"
+            return PublishResult(
+                ok=False,
+                status="publish_failed",
+                plugin_unique_identifier=owned_plugin_unique_identifier,
+                installation_id=owned_installation_id,
+                output_text="",
+                elapsed_ms=0,
+                diagnostic=_diagnostic(stage="input", message=message, tool_name=tool_name),
+            )
     try:
         candidate = install_tool_plugin(
             files=files,
@@ -279,6 +285,17 @@ def publish_tool_plugin(
             elapsed_ms=0,
             diagnostic=_diagnostic(stage="install", message=message, tool_name=tool_name),
             rollback_succeeded=rollback_succeeded,
+        )
+
+    if publish_mode == "direct":
+        return PublishResult(
+            ok=True,
+            status="published",
+            plugin_unique_identifier=candidate.plugin_unique_identifier,
+            installation_id=candidate.installation_id,
+            output_text="未执行真实 API 测试。",
+            elapsed_ms=0,
+            diagnostic=None,
         )
 
     test_result = test_tool_plugin(

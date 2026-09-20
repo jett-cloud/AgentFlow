@@ -162,6 +162,45 @@ def test_successful_publish_returns_candidate_identity(monkeypatch) -> None:
     assert invoke.call_args.kwargs["allow_workspace_credentials"] is False
 
 
+def test_direct_publish_installs_valid_draft_without_invoking_external_tool(monkeypatch) -> None:
+    install = Mock(return_value=_install_result("acme/demo:0.0.2@new", "candidate-2"))
+    invoke = Mock()
+    monkeypatch.setattr(publish_service, "install_tool_plugin", install)
+    monkeypatch.setattr(publish_service, "test_tool_plugin", invoke)
+    files = {
+        **FILES,
+        "provider/demo.yaml": (
+            "identity:\n  name: demo\n"
+            "credentials_for_provider:\n"
+            "  api_key:\n"
+            "    type: secret-input\n"
+            "    required: true\n"
+        ),
+    }
+
+    result = publish_service.publish_tool_plugin(
+        files=files,
+        published_files=FILES,
+        tenant_id="tenant-1",
+        user_id="user-1",
+        owned_installation_id="old-1",
+        owned_plugin_unique_identifier="acme/demo:0.0.1@old",
+        author="acme",
+        plugin_name="demo",
+        tool_name="echo",
+        parameters={},
+        credentials={},
+        publish_mode="direct",
+    )
+
+    assert result.ok is True
+    assert result.status == "published"
+    assert result.installation_id == "candidate-2"
+    assert result.output_text == "未执行真实 API 测试。"
+    install.assert_called_once()
+    invoke.assert_not_called()
+
+
 def test_missing_required_credentials_returns_saved_safe_diagnostic_without_install(monkeypatch) -> None:
     install = Mock()
     monkeypatch.setattr(publish_service, "install_tool_plugin", install)

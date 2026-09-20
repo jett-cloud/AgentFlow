@@ -8,7 +8,7 @@ import zipfile
 from collections.abc import Callable, Generator
 from pathlib import PurePosixPath
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 
 from flask import request, send_file
 from flask_restx import Resource
@@ -151,7 +151,8 @@ class ToolPluginPublishPayload(BaseModel):
 
     expected_revision: int = Field(ge=0)
     tool_name: str = Field(min_length=1)
-    parameters: dict[str, Any]
+    publish_mode: Literal["test", "direct"] = "test"
+    parameters: dict[str, Any] = Field(default_factory=dict)
     credentials: dict[str, SecretStr] = Field(default_factory=dict)
     authorization_token: str | None = Field(default=None, min_length=1)
 
@@ -1055,7 +1056,7 @@ class ToolPluginPublishApi(Resource):
     @console_ns.expect(console_ns.models[ToolPluginPublishPayload.__name__])
     @console_ns.response(
         200,
-        "Tool plugin verified and published",
+        "Tool plugin published",
         console_ns.models[ToolPluginPublishResponse.__name__],
     )
     @setup_required
@@ -1083,22 +1084,23 @@ class ToolPluginPublishApi(Resource):
             _require_session_revision(studio_session, payload.expected_revision)
             if payload.tool_name != studio_session.active_tool_name:
                 raise BadRequest("tool_name must match the session's active tool")
-            if not payload.authorization_token:
-                raise BadRequest("Explicit confirmation is required before a live tool test")
             credentials = {name: value.get_secret_value() for name, value in payload.credentials.items()}
-            try:
-                consume_test_authorization(
-                    tenant_id=tenant_id,
-                    account_id=account_id,
-                    session_id=session_id,
-                    expected_revision=payload.expected_revision,
-                    tool_name=payload.tool_name,
-                    parameters=payload.parameters,
-                    credentials=credentials,
-                    token=payload.authorization_token,
-                )
-            except TestAuthorizationError as exc:
-                raise BadRequest(str(exc)) from exc
+            if payload.publish_mode == "test":
+                if not payload.authorization_token:
+                    raise BadRequest("Explicit confirmation is required before a live tool test")
+                try:
+                    consume_test_authorization(
+                        tenant_id=tenant_id,
+                        account_id=account_id,
+                        session_id=session_id,
+                        expected_revision=payload.expected_revision,
+                        tool_name=payload.tool_name,
+                        parameters=payload.parameters,
+                        credentials=credentials,
+                        token=payload.authorization_token,
+                    )
+                except TestAuthorizationError as exc:
+                    raise BadRequest(str(exc)) from exc
             plugin_identity = (
                 sanitize_plugin_id_segment(studio_session.author),
                 sanitize_plugin_id_segment(studio_session.plugin_name),
@@ -1123,6 +1125,7 @@ class ToolPluginPublishApi(Resource):
                     tool_name=payload.tool_name,
                     parameters=payload.parameters,
                     credentials=credentials,
+                    publish_mode=payload.publish_mode,
                 )
             except ToolPluginOwnershipError as exc:
                 raise Conflict(str(exc)) from exc

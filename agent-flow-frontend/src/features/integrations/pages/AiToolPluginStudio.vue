@@ -13,16 +13,13 @@
       <SessionHistoryRail
         :sessions="sessions"
         :active-id="sessionId"
-        :show-hidden="showHiddenSessions"
         :collapsed="sessionRailCollapsed"
         :disabled="agentRunning"
         @new="handleNewSession"
         @fork-pick="handleForkPick"
         @open="openSession"
-        @hide="handleHideSession"
-        @unhide="handleUnhideSession"
+        @rename="handleRenameSession"
         @delete="handleDeleteSession"
-        @update:show-hidden="onShowHiddenChange"
         @update:collapsed="sessionRailCollapsed = $event; localStorage.setItem('ai-tool-plugin-rail-collapsed', $event ? '1' : '0')"
       />
 
@@ -64,7 +61,7 @@
                 :disabled="!canPublishPlugin || publishing"
                 @click="openPublishDialog"
               >
-                {{ publishing ? '验证并发布中…' : '验证并发布' }}
+                {{ publishing ? '发布中…' : '发布插件' }}
               </button>
               <button
                 v-if="canAskAgentToRepair"
@@ -121,7 +118,7 @@
 
     <el-dialog
       v-model="sandboxOpen"
-      title="验证并发布插件"
+      title="发布插件"
       width="860px"
       destroy-on-close
       append-to-body
@@ -152,9 +149,7 @@ import {
   downloadToolPluginZip,
   forkToolPluginSession,
   getToolPluginSession,
-  hideToolPluginSession,
   listToolPluginSessions,
-  unhideToolPluginSession,
   updateToolPluginSession,
   validateToolPlugin,
 } from '@/features/integrations/api/difyToolPluginGeneratorApi.js'
@@ -217,7 +212,6 @@ const phase = ref('creating')
 const toolNames = ref([])
 const sandboxOpen = ref(false)
 const pendingIntent = ref('')
-const showHiddenSessions = ref(false)
 const sessionRailCollapsed = ref(localStorage.getItem('ai-tool-plugin-rail-collapsed') === '1')
 const chatRatio = ref(Number(localStorage.getItem('ai-tool-plugin-chat-ratio') || 38))
 let abortController = null
@@ -325,13 +319,8 @@ function isDraftName(name) {
 }
 
 async function refreshSessions() {
-  const result = await listToolPluginSessions({ includeHidden: showHiddenSessions.value })
+  const result = await listToolPluginSessions({ includeHidden: true })
   sessions.value = result?.data || result || []
-}
-
-async function onShowHiddenChange(value) {
-  showHiddenSessions.value = value
-  await refreshSessions()
 }
 
 async function resetToBlankOrNext() {
@@ -349,34 +338,44 @@ async function resetToBlankOrNext() {
   installedIdentifier.value = ''
   installationId.value = ''
   await refreshSessions()
-  const next = sessions.value.find(item => !item.is_hidden)
+  const next = sessions.value[0]
   if (next)
     await openSession(next.id)
 }
 
-async function handleHideSession(id) {
+async function handleRenameSession(item) {
   try {
-    await hideToolPluginSession(id)
-    ElMessage.success('已隐藏会话')
-    if (id === sessionId.value)
-      await resetToBlankOrNext()
-    else
-      await refreshSessions()
-  }
-  catch (error) {
-    ElMessage.error(error.response?.data?.message || error.message || '隐藏失败')
-  }
-}
-
-async function handleUnhideSession(id) {
-  try {
-    await unhideToolPluginSession(id)
-    ElMessage.success('已取消隐藏')
+    const { value } = await ElMessageBox.prompt('请输入新的对话名称', '重命名对话', {
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValue: item.display_name || item.title || item.plugin_name || '',
+      inputPlaceholder: '对话名称',
+      inputAttrs: { maxlength: 80 },
+      inputValidator: (input) => {
+        const title = String(input || '').trim()
+        if (!title)
+          return '名称不能为空'
+        if (title.length > 80)
+          return '名称不能超过 80 个字符'
+        return true
+      },
+    })
+    const nextTitle = String(value || '').trim()
+    const detail = await updateToolPluginSession(item.id, {
+      expected_revision: item.revision,
+      title: nextTitle,
+    })
+    if (item.id === sessionId.value) {
+      sessionTitle.value = detail.title || nextTitle
+      sessionRevision.value = detail.revision ?? sessionRevision.value
+    }
     await refreshSessions()
+    ElMessage.success('对话已重命名')
   }
   catch (error) {
-    const message = error.response?.data?.message || error.message || '取消隐藏失败'
-    ElMessage.error(message)
+    if (error === 'cancel' || error === 'close')
+      return
+    ElMessage.error(error.response?.data?.message || error.message || '重命名失败')
   }
 }
 
@@ -799,7 +798,7 @@ async function handleAgentTurn() {
     else {
       pluginStatus.value = filePaths.value.length ? 'draft_ready' : 'idle'
       if (!statusError.value)
-        status.value = 'Agent 已更新草稿，请点击「验证并发布」。'
+        status.value = 'Agent 已更新草稿，请点击「发布插件」。'
     }
     phase.value = filePaths.value.length ? 'editing' : phase.value
     await refreshSessions()
@@ -864,16 +863,17 @@ async function handlePublishResult(result) {
   lastPublishDiagnostic.value = result?.diagnostic || null
   if (result?.ok) {
     pluginStatus.value = 'published'
-    status.value = '当前草稿已验证并发布。'
+    const direct = result.publish_mode === 'direct'
+    status.value = direct ? '当前草稿已直接发布（未执行真实 API 测试）。' : '当前草稿已测试并发布。'
     statusError.value = false
     await toolStore.fetchTools(true)
     await refreshSessions()
-    ElMessage.success('插件已验证并发布')
+    ElMessage.success(direct ? '插件已直接发布' : '插件已测试并发布')
     return
   }
 
   pluginStatus.value = 'draft_ready'
-  status.value = result?.diagnostic?.message || '发布测试失败，草稿已保留。'
+  status.value = result?.diagnostic?.message || '发布失败，草稿已保留。'
   statusError.value = true
   if (result?.status === 'rollback_failed')
     ElMessage.error('发布失败且旧版本未能恢复，请先检查插件状态再重试。')

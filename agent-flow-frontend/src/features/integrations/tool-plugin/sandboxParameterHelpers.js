@@ -14,6 +14,21 @@ export const SANDBOX_WIDGET = {
   text: 'text',
 }
 
+/**
+ * Build the server contract for publishing without a live tool invocation.
+ * Test credentials and parameters must never cross this boundary.
+ * @param {{ expectedRevision: number, toolName: string }} input
+ */
+export function buildDirectPublishPayload({ expectedRevision, toolName }) {
+  return {
+    expected_revision: expectedRevision,
+    tool_name: toolName,
+    publish_mode: 'direct',
+    parameters: {},
+    credentials: {},
+  }
+}
+
 const FILE_TYPES = new Set(['file'])
 const FILES_TYPES = new Set(['files', 'system-files', 'system_files', 'array[file]'])
 const NUMBER_TYPES = new Set(['number', 'integer', 'float', 'number-input'])

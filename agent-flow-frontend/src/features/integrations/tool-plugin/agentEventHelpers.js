@@ -1,3 +1,5 @@
+const DEEPSEEK_REASONING_BLOCK = /<think>\s*<!--dify-deepseek-reasoning-->.*?<\/think>/gis
+
 function callIdFor(event) {
   const callId = String(event?.call_id || '').trim()
   return callId || null
@@ -63,15 +65,19 @@ export function normalizeAgentMessagesForDisplay(messages) {
     return []
   const displayed = []
   for (const message of messages) {
-    const calls = message?.role === 'assistant' && Array.isArray(message.tool_calls)
-      ? message.tool_calls
+    const content = message?.role === 'assistant'
+      ? String(message.content || '').replace(DEEPSEEK_REASONING_BLOCK, '')
+      : message?.content
+    const normalizedMessage = content === message?.content ? message : { ...message, content }
+    const calls = normalizedMessage?.role === 'assistant' && Array.isArray(normalizedMessage.tool_calls)
+      ? normalizedMessage.tool_calls
       : []
     if (!calls.length) {
-      displayed.push(message)
+      displayed.push(normalizedMessage)
       continue
     }
-    if (String(message.content || '').trim())
-      displayed.push({ role: 'assistant', content: message.content })
+    if (String(normalizedMessage.content || '').trim())
+      displayed.push({ role: 'assistant', content: normalizedMessage.content })
     for (const call of calls) {
       const name = call.name || call.tool || 'tool'
       const failed = persistedToolFailed(call)
