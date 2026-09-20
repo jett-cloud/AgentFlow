@@ -85,7 +85,6 @@ playwright-report/
 test-results/
 *.lcov
 /_wa_player_test.html
-/docker/sandbox/
 
 # Local design notes and duplicate image exports
 /docs/superpowers/
