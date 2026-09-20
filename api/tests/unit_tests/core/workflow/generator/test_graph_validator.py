@@ -30,6 +30,38 @@ def test_validate_graph_reports_unreachable_end_without_mutating_graph():
     assert graph == before
 
 
+def test_validate_graph_rejects_direct_terminal_edge_that_bypasses_a_longer_path() -> None:
+    graph = cast(
+        GraphDict,
+        {
+            "nodes": [
+                {"id": "start", "data": {"type": "start", "variables": []}},
+                {"id": "parse", "data": {"type": "code", **node_config("code")}},
+                {"id": "iterate", "data": {"type": "code", **node_config("code")}},
+                {"id": "judge", "data": {"type": "llm", **node_config("llm")}},
+                {"id": "end", "data": {"type": "end", **node_config("end")}},
+            ],
+            "edges": [
+                {"source": "start", "target": "parse"},
+                {"source": "parse", "target": "end"},
+                {"source": "parse", "target": "iterate"},
+                {"source": "iterate", "target": "judge"},
+                {"source": "judge", "target": "end"},
+            ],
+            "viewport": {"x": 0, "y": 0, "zoom": 0.7},
+        },
+    )
+
+    errors = validate_graph(graph=graph, mode="workflow")
+
+    assert any(
+        error["code"] == "INVALID_SCHEMA"
+        and error.get("node_id") == "parse"
+        and "bypasses downstream work" in error["detail"]
+        for error in errors
+    )
+
+
 def test_validate_graph_rejects_runtime_valid_llm_with_empty_prompt():
     graph = cast(
         GraphDict,

@@ -31,6 +31,7 @@ _EXPECTED = {
     "validate_graph",
     "search_datasets",
     "search_tools",
+    "list_models",
     "inspect_tool",
     "run_acceptance",
     "inspect_attempt",
@@ -50,7 +51,7 @@ def _schema(name: str) -> dict[str, Any]:
 def test_tool_names_match_the_declared_schemas():
     assert TOOL_NAMES == _EXPECTED
     assert {schema["name"] for schema in TOOL_SCHEMAS} == _EXPECTED
-    assert len(TOOL_SCHEMAS) == 22
+    assert len(TOOL_SCHEMAS) == 23
 
 
 def test_workflow_plan_schema_exposes_structured_resources_but_not_verified_claims() -> None:
@@ -204,6 +205,32 @@ def test_build_node_input_schema_accepts_nested_selectors() -> None:
         {
             "objective": "Read the nested title",
             "inputs": [{"source": ["iteration", "item", "title"], "role": "title"}],
+        }
+    )
+
+
+def test_build_node_output_schema_accepts_declared_object_children() -> None:
+    intent = _schema("build_node")["parameters"]["properties"]["intent"]
+    output_schema = intent["properties"]["outputs"]["items"]
+
+    assert "children" in output_schema["properties"]
+
+    assert Draft202012Validator(intent).is_valid(
+        {
+            "objective": "Parse cases",
+            "outputs": [
+                {
+                    "name": "cases",
+                    "type": "array[object]",
+                    "children": {
+                        "question": {"type": "string"},
+                        "metadata": {
+                            "type": "object",
+                            "children": {"source": {"type": "string"}},
+                        },
+                    },
+                }
+            ],
         }
     )
 

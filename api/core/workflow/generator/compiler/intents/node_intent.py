@@ -127,9 +127,31 @@ class NodeInputIntent(BaseModel):
         return value
 
 
+class NodeOutputFieldIntent(BaseModel):
+    type: str
+    children: dict[str, "NodeOutputFieldIntent"] | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("type")
+    @classmethod
+    def _supported_type(cls, value: str) -> str:
+        normalized = canonical_value_type(value.strip())
+        if normalized not in _INTENT_OUTPUT_TYPES:
+            raise ValueError(f"unsupported output field type {value!r}")
+        return normalized
+
+    @model_validator(mode="after")
+    def _children_match_type(self) -> Self:
+        if self.children and self.type not in {"object", "array[object]"}:
+            raise ValueError("children are supported only for object and array[object] fields")
+        return self
+
+
 class NodeOutputIntent(BaseModel):
     name: str
     type: str | None = None
+    children: dict[str, NodeOutputFieldIntent] | None = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -150,6 +172,12 @@ class NodeOutputIntent(BaseModel):
         if normalized not in _INTENT_OUTPUT_TYPES:
             raise ValueError(f"unsupported output type {value!r}")
         return normalized
+
+    @model_validator(mode="after")
+    def _children_match_type(self) -> Self:
+        if self.children and self.type not in {"object", "array[object]"}:
+            raise ValueError("children are supported only for object and array[object] outputs")
+        return self
 
 
 class StartVariableIntent(BaseModel):

@@ -393,10 +393,11 @@ Loaded one type at a time by inspect_node_schema / node builders. Do not dump th
     The generator supplies ``start_node_id``, child wrappers, and the synthetic
     ``iteration-start`` node; omit these system-owned fields. Submit Iteration
     through ``build_iteration`` with child ``ref`` values. The main agent must not emit
-    ``iteration-start`` nodes, ``start_node_id``, ``iterator_input_type``,
-    ``output_type``, ``_children``, or ``parentId``. ``iterator_input_type``
-    and ``output_type`` are derived after selectors are repaired.
-    ``parallel_nums`` must be at least 1.
+    ``iteration-start`` nodes, ``start_node_id``, ``output_type``, ``_children``,
+    or ``parentId``. Submit ``iterator_input_type`` from the confirmed iterator
+    output type; the compiler verifies it against ``iterator_selector``.
+    ``output_type`` is derived from ``output_selector``.
+    ``parallel_nums`` must be from 1 to 10.
     Child nodes inside this iteration read the current element as
     ``["<iter-id>", "item"]`` or, when that element is an object, a field
     ``["<iter-id>", "item", "<field>"]``. Object arrays cannot be drilled

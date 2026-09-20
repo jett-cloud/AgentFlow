@@ -7,6 +7,7 @@ model-visible parameter schema, and projects knowledge through
 
 from __future__ import annotations
 
+from itertools import starmap
 from typing import Any
 
 from core.workflow.generator.compiler.agent_knowledge import (
@@ -15,6 +16,7 @@ from core.workflow.generator.compiler.agent_knowledge import (
     collect_agent_knowledge_dataset_ids,
 )
 from core.workflow.generator.compiler.intents.agent_intent import AgentBindingManifest, AgentNodeBuildIntent
+from core.workflow.generator.compiler.intents.node_intent import NodeOutputFieldIntent, NodeOutputIntent
 from core.workflow.generator.compiler.intents.tool_intent import ToolBinding
 from core.workflow.generator.resources.knowledge_catalogue import KnowledgeCatalogueEntry
 from core.workflow.generator.resources.tool_catalogue import ToolCatalogueEntry, find_tool_entry
@@ -62,9 +64,7 @@ def compile_agent_node_config(
         "dify_tools": dify_tools,
     }
     if intent.outputs:
-        config["agent_declared_outputs"] = [
-            {"name": output.name, "type": output.type or "string"} for output in intent.outputs
-        ]
+        config["agent_declared_outputs"] = [_compile_declared_output(output) for output in intent.outputs]
 
     try:
         apply_agent_knowledge_intent(
@@ -92,6 +92,36 @@ def compile_agent_node_config(
         "dataset_ids": list(manifest.dataset_ids),
     }
     return config, manifest
+
+
+def _compile_declared_output(output: NodeOutputIntent) -> dict[str, Any]:
+    return {
+        "name": output.name,
+        **_compile_declared_shape(output.type or "string", output.children),
+    }
+
+
+def _compile_declared_child(name: str, field: NodeOutputFieldIntent) -> dict[str, Any]:
+    return {"name": name, **_compile_declared_shape(field.type, field.children)}
+
+
+def _compile_declared_shape(
+    value_type: str,
+    children: dict[str, NodeOutputFieldIntent] | None,
+) -> dict[str, Any]:
+    if value_type.startswith("array"):
+        item_type = "object"
+        if value_type.startswith("array["):
+            item_type = value_type[6:-1]
+        array_item: dict[str, Any] = {"type": item_type}
+        if item_type == "object" and children:
+            array_item["children"] = list(starmap(_compile_declared_child, children.items()))
+        return {"type": "array", "array_item": array_item}
+
+    shape: dict[str, Any] = {"type": value_type}
+    if value_type == "object" and children:
+        shape["children"] = list(starmap(_compile_declared_child, children.items()))
+    return shape
 
 
 def _compile_model(intent: AgentNodeBuildIntent) -> dict[str, Any]:

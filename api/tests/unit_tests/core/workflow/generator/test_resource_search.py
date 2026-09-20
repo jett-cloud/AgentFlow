@@ -72,3 +72,23 @@ def test_knowledge_search_uses_name_and_description_across_full_catalogue():
     results = search_knowledge(entries, "operations guide")
 
     assert [entry["id"] for entry in results] == ["product"]
+
+
+def test_knowledge_browse_discovers_file_named_datasets_without_a_keyword():
+    entries: list[KnowledgeCatalogueEntry] = [
+        {"id": "beads", "name": "拼豆颜色.txt...", "description": "拼豆颜色资料"},
+    ]
+
+    assert search_knowledge(entries, "rag 知识库 测试") == []
+    assert search_knowledge(entries, "") == entries
+    assert search_knowledge(entries, " \t ") == entries
+
+
+def test_knowledge_browse_is_bounded_stable_and_does_not_reorder_snapshot():
+    entries: list[KnowledgeCatalogueEntry] = [
+        {"id": f"ds-{index:02d}", "name": f"File {index:02d}", "description": ""}
+        for index in reversed(range(20))
+    ]
+
+    assert [entry["id"] for entry in search_knowledge(entries, "")] == [f"ds-{index:02d}" for index in range(12)]
+    assert entries[0]["id"] == "ds-19"

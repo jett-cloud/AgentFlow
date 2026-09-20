@@ -169,6 +169,7 @@ def _patch_loop_config(
                 container_id=request.container_id,
                 loop_variable_labels=labels,
             ),
+            "children": _serialize_intent_children(item.children),
         }
         for item in intent.loop_variables
     ]
@@ -249,3 +250,15 @@ def _patch_iteration_config(
     data.pop("loop_variables", None)
     data.pop("break_conditions", None)
     data.pop("loop_count", None)
+
+
+def _serialize_intent_children(children: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not children:
+        return None
+    return {
+        name: {
+            "type": child.type,
+            "children": _serialize_intent_children(child.children),
+        }
+        for name, child in children.items()
+    }

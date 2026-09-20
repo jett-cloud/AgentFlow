@@ -263,6 +263,50 @@ def test_iteration_output_type_must_match_derived_aggregate(tool_context: ToolCo
     assert result["error_code"] == "VARIABLE_TYPE_MISMATCH"
 
 
+def test_iteration_output_must_be_produced_on_every_branch(tool_context: ToolContext) -> None:
+    _enable_image_tool(tool_context)
+    tool_context.state.graph = _outer_graph()
+    branch = {
+        "kind": "standard",
+        "ref": "branch",
+        "node_type": "if-else",
+        "intent": {
+            "objective": "Only process even-indexed items",
+            "inputs": [{"source": ["iter1", "index"], "role": "index"}],
+            "structure": {
+                "kind": "if-else",
+                "cases": [
+                    {
+                        "id": "matched",
+                        "conditions": [
+                            {
+                                "source": ["iter1", "index"],
+                                "type": "number",
+                                "operator": "=",
+                                "value": 0,
+                            }
+                        ],
+                    }
+                ],
+            },
+        },
+    }
+
+    result = dispatch(
+        _call(
+            **_min_iteration_args(
+                children=[branch, _worker_child()],
+                edges=[{"source": "branch", "target": "worker", "source_handle": "matched"}],
+            )
+        ),
+        tool_context,
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "REFERENCE_NOT_AVAILABLE"
+    assert result["path"] == "output_selector"
+
+
 def test_compile_build_iteration_does_not_write_the_candidate_graph(tool_context: ToolContext) -> None:
     _enable_image_tool(tool_context)
     tool_context.state.graph = _outer_graph()
@@ -278,6 +322,34 @@ def test_compile_build_iteration_does_not_write_the_candidate_graph(tool_context
     assert tool_context.state.candidate_revision == 2
     assert compiled.compiled.base_revision == 2
     assert compiled.compiled.graph is not frozen
+
+
+def test_create_iteration_can_be_connected_after_atomic_container_commit(tool_context: ToolContext) -> None:
+    _enable_image_tool(tool_context)
+    tool_context.state.graph = upsert_node(
+        empty_graph(),
+        node_id="start",
+        node_type="start",
+        title="开始",
+        desc="",
+        config=_start_images_config(),
+    )
+
+    compiled = compile_build_iteration(
+        _call(
+            **_min_iteration_args(
+                mode="create",
+                id="iter2",
+                title="第二次处理",
+                children=[_worker_child(selector=["iter2", "item"])],
+            )
+        ),
+        tool_context,
+    )
+
+    assert not isinstance(compiled, dict)
+    assert find_node(compiled.compiled.graph, "iter2") is not None
+    assert not any(edge["target"] == "iter2" for edge in compiled.compiled.graph["edges"])
 
 
 def test_iterator_claimed_type_mismatch_does_not_mutate_graph(tool_context: ToolContext) -> None:

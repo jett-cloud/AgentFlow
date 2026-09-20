@@ -20,7 +20,7 @@ from core.workflow.generator.compiler.intents.node_intent import (
 )
 from core.workflow.generator.graph.types import MinimalGraphDict
 from core.workflow.generator.variables.declarations import declared_output_type, declared_outputs, declares_variable
-from core.workflow.generator.variables.syntax import collect_references
+from core.workflow.generator.variables.syntax import collect_exact_references
 from core.workflow.generator.variables.variable_registry import canonical_registry_type
 from core.workflow.generator.variables.variable_types import canonical_value_type
 
@@ -170,9 +170,9 @@ def validate_node_config_against_intent(
         # Code is executable payload, not a runtime variable binding. A
         # placeholder in a comment or string literal must not satisfy intent.
         reference_config = {key: value for key, value in config.items() if key != "code"}
-    actual_references = collect_references(reference_config)
+    actual_references = collect_exact_references(reference_config)
     for source, role, field_path, _expected_type in _required_bindings(intent):
-        expected = (source[0], ".".join(source[1:]))
+        expected = tuple(source)
         if expected not in actual_references:
             issues.append(
                 IntentConfigIssue(

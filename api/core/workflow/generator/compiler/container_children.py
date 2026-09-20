@@ -159,6 +159,17 @@ def compile_builder_child(child: StandardContainerChildIntent, context: ChildCom
             child_ref=child.ref,
         )
     node_id = context.ref_map[child.ref]
+    for item in child.intent.inputs:
+        try:
+            context.registry.resolve(item.source, referrer_id=node_id, expected_type=None)
+        except VariableResolutionError as exc:
+            raise ContainerCompileError(
+                exc.code,
+                exc.detail,
+                path=f"children.{child.ref}",
+                child_ref=child.ref,
+                cause=_resolution_cause(exc, context.registry),
+            ) from exc
     spec = render_node_builder_spec(child.intent, node_type=child.node_type)
     if child.intent.structure is not None:
         config = {}

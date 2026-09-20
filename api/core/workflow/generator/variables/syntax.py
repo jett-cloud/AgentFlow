@@ -241,3 +241,59 @@ def collect_references(data: object) -> set[tuple[str, str]]:
     refs: set[tuple[str, str]] = set()
     _collect_refs_in_data(data, refs)
     return refs
+
+
+def collect_exact_references(data: object) -> set[tuple[str, ...]]:
+    """Collect selectors without collapsing nested path segments.
+
+    Placeholder syntax has no segment-array representation, so its dotted
+    variable path is split into the same tuple shape used by runtime selectors.
+    """
+    refs: set[tuple[str, ...]] = set()
+
+    def add_selector(value: Any) -> None:
+        if _is_selector_list(value):
+            refs.add(tuple(part.strip() for part in value))
+
+    def walk(value: Any, *, parent: dict[str, Any] | None = None, key: str = "") -> None:
+        kind = _field_scan_kind(key, parent) if key else "walk"
+        if kind in {"literal", "skip"}:
+            if isinstance(value, dict):
+                for child_key, item in value.items():
+                    walk(item, parent=value, key=child_key)
+            return
+        if isinstance(value, str):
+            refs.update(
+                (match.group(1).strip(), *tuple(part.strip() for part in match.group(2).split(".")))
+                for match in _VAR_REF_RE.finditer(value)
+            )
+            return
+        if kind == "query":
+            if _is_multi_wrapped_selectors(value):
+                return
+            if _is_wrapped_single_selector(value):
+                add_selector(value[0])
+                return
+            add_selector(value)
+            if _is_selector_list(value):
+                return
+        elif kind == "selector":
+            add_selector(value)
+            if _is_selector_list(value):
+                return
+        elif kind == "selector_list" and isinstance(value, list):
+            for item in value:
+                if _is_selector_list(item):
+                    add_selector(item)
+                else:
+                    walk(item, parent=parent, key=key)
+            return
+        if isinstance(value, dict):
+            for child_key, item in value.items():
+                walk(item, parent=value, key=child_key)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item, parent=parent, key=key)
+
+    walk(data)
+    return refs

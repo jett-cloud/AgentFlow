@@ -9,7 +9,7 @@ Tool results are *always* returned — a failure is a ``ToolResult`` with
 what makes the agent self-correcting: a rejected call becomes an observation
 the model can act on, instead of terminating the turn.
 
-``TOOL_SCHEMAS`` is the 22-tool surface advertised to the main model.
+``TOOL_SCHEMAS`` is the public tool surface advertised to the main model.
 ``write_node`` / ``upsert_node`` / ``patch_node`` are not on that list;
 ``graph_ops.upsert_node`` remains the internal writer. ``compile_build_node``
 builds config without writing the graph; ``commit_build_node`` is the writer.
@@ -75,6 +75,7 @@ from core.workflow.generator.agent.tools.tool_read import (
     activate_skills,
     inspect_node_schema,
     inspect_tool,
+    list_models,
     read_graph,
     read_node,
     search_datasets,
@@ -210,6 +211,27 @@ _AGENT_KNOWLEDGE_SCHEMA: dict[str, Any] = {
     "required": ["operation"],
     "additionalProperties": False,
 }
+
+
+def _node_output_field_schema(*, remaining_depth: int = 6) -> dict[str, Any]:
+    """Return the model-visible schema for one recursively typed output field."""
+    properties: dict[str, Any] = {"type": _STRING}
+    if remaining_depth > 0:
+        properties["children"] = {
+            "type": "object",
+            "additionalProperties": _node_output_field_schema(remaining_depth=remaining_depth - 1),
+        }
+    return _obj(properties, ["type"])
+
+
+_NODE_OUTPUT_SCHEMA: dict[str, Any] = _obj(
+    {
+        "name": _STRING,
+        "type": _STRING,
+        "children": {"type": "object", "additionalProperties": _node_output_field_schema()},
+    },
+    ["name"],
+)
 _NODE_BUILD_INTENT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -222,7 +244,7 @@ _NODE_BUILD_INTENT_SCHEMA: dict[str, Any] = {
                 ["source", "role"],
             ),
         },
-        "outputs": {"type": "array", "items": _obj({"name": _STRING, "type": _STRING}, ["name"])},
+        "outputs": {"type": "array", "items": _NODE_OUTPUT_SCHEMA},
         "requirements": {"type": "array", "items": _STRING},
         "tool": {
             "type": "object",
@@ -397,21 +419,39 @@ TOOL_SCHEMAS: list[ToolSchema] = [
     },
     {
         "name": "search_datasets",
-        "description": "Search the tenant's knowledge bases available in this run's catalogue snapshot.",
+        "description": (
+            "Search tenant knowledge-base names/descriptions; this does not search document contents. "
+            "Use query=\"\" to browse up to 12 datasets when the name is unknown or keywords miss. "
+            "catalogue_count is the total available dataset count, not the hit count. "
+            "Empty hits do not mean the catalogue is empty."
+        ),
         "parameters": _obj({"query": _STRING}, ["query"]),
     },
     {
         "name": "search_tools",
-        "description": "Search installed tools and return at most 12 schema-free summaries.",
+        "description": (
+            "Search installed tool names, labels and descriptions; return at most 12 schema-free summaries. "
+            "Use query=\"\" to browse when the name is unknown or keywords miss. "
+            "catalogue_count counts the full run snapshot, not matches. Empty hits do not mean no tools exist."
+        ),
         "parameters": _obj({"query": _STRING}, ["query"]),
     },
     {
         "name": "inspect_tool",
-        "description": "Return the full parameter and output schema for one exact tool binding.",
+        "description": "Return known parameters, output names and output types for one exact tool binding.",
         "parameters": _obj(
             {"provider_name": _STRING, "tool_name": _STRING},
             ["provider_name", "tool_name"],
         ),
+    },
+    {
+        "name": "list_models",
+        "description": (
+            "List available tenant LLM identities and features from the current run snapshot, 12 per page. "
+            "Use the exact provider/name when building model-backed nodes. Follow next_offset for more models. "
+            "available=false means discovery failed; catalogue_count=0 with available=true means none are available."
+        ),
+        "parameters": _obj({"offset": {"type": "integer", "minimum": 0}}, []),
     },
     {
         "name": "run_acceptance",
@@ -510,6 +550,7 @@ _HANDLERS: dict[str, Callable[[ToolCall, ToolContext], ToolResult]] = {
     "validate_graph": validate_graph,
     "search_datasets": search_datasets,
     "search_tools": search_tools,
+    "list_models": list_models,
     "inspect_tool": inspect_tool,
     "run_acceptance": run_acceptance,
     "inspect_attempt": inspect_attempt,

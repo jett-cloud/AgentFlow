@@ -32,7 +32,7 @@ def compile_structured_node_config(
     config = deepcopy(builder_config)
     structure = intent.structure
     if structure is None:
-        return config
+        return _restore_declared_input_selectors(config, intent)
     if isinstance(structure, StartStructureIntent):
         config["variables"] = [_start_variable(item) for item in structure.variables]
     elif isinstance(structure, EndStructureIntent):
@@ -64,7 +64,9 @@ def compile_structured_node_config(
             {"variable": item.name, "value_selector": list(item.source)} for item in structure.bindings
         ]
         config["outputs"] = {
-            item.name: {"type": item.type, "children": None} for item in intent.outputs if item.type is not None
+            item.name: {"type": item.type, "children": _compile_output_children(item.children)}
+            for item in intent.outputs
+            if item.type is not None
         }
     elif isinstance(structure, IfElseStructureIntent):
         config["cases"] = [
@@ -83,7 +85,50 @@ def compile_structured_node_config(
             }
             for case in structure.cases
         ]
-    return config
+    return _restore_declared_input_selectors(config, intent)
+
+
+def _restore_declared_input_selectors(config: dict[str, Any], intent: NodeBuildIntent) -> dict[str, Any]:
+    """Restore nested selector paths that the prose Builder flattened.
+
+    Builder prompts render a selector as a Dify placeholder such as
+    ``{{#iteration.item.question#}}``.  Some node builders infer the runtime
+    selector as ``["iteration", "item.question"]`` from that text, but Dify's
+    variable pool expects ``["iteration", "item", "question"]``.  The main
+    Agent already supplied the typed path in ``intent.inputs``; use that path
+    as the source of truth for every matching selector in the generated config.
+    """
+    expanded_by_flattened = {
+        (item.source[0], ".".join(item.source[1:])): list(item.source) for item in intent.inputs if len(item.source) > 2
+    }
+    if not expanded_by_flattened:
+        return config
+
+    def restore(value: Any) -> Any:
+        if isinstance(value, list):
+            if value and all(isinstance(part, str) for part in value):
+                expanded = expanded_by_flattened.get(tuple(value))
+                if expanded is not None:
+                    return expanded
+            return [restore(item) for item in value]
+        if isinstance(value, dict):
+            return {key: restore(item) for key, item in value.items()}
+        return value
+
+    restored = restore(config)
+    return restored if isinstance(restored, dict) else config
+
+
+def _compile_output_children(children: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not children:
+        return None
+    return {
+        name: {
+            "type": child.type,
+            "children": _compile_output_children(child.children),
+        }
+        for name, child in children.items()
+    }
 
 
 def _start_variable(intent: StartVariableIntent) -> dict[str, Any]:

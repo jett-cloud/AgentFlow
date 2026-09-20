@@ -87,6 +87,12 @@ def test_iteration_non_array_input_is_rejected() -> None:
         parse_iteration_build_intent(_iteration_payload(iterator_input_type="string"))
 
 
+@pytest.mark.parametrize("parallel_nums", [0, 11, 100])
+def test_iteration_parallelism_outside_ui_contract_is_rejected(parallel_nums: int) -> None:
+    with pytest.raises(ValidationError, match="parallel_nums"):
+        parse_iteration_build_intent(_iteration_payload(parallel_nums=parallel_nums))
+
+
 @pytest.mark.parametrize(
     "output_selector",
     [["text"], ["missing", "text"], ["", "text"], ["worker", ""]],

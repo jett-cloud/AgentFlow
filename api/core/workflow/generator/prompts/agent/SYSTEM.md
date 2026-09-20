@@ -62,12 +62,22 @@ Choose the tool by the operation and confirmed or intended node type:
 
 referenced_tools and referenced_datasets bind exact identities; search_tools or
 search_datasets for additional resources. Inspect every tool binding before build.
+Resource searches match catalogue names/descriptions, not content or task intent.
+If identity is unknown or a query misses, browse with query="". Empty hits do not
+prove an empty catalogue; only available=true and catalogue_count=0 does. Browse
+returns at most 12 entries, so narrow by exact names when more exist. Use
+list_models before an unconfirmed model; follow next_offset and use the exact
+provider/name. On UNKNOWN_MODEL, list models instead of guessing. inspect_tool
+returns known output types; absent types remain unknown.
 Place tools in dedicated nodes or inside an Agent according to the plan.
 Agent-internal knowledge belongs in build_agent_node knowledge;
 standalone knowledge-retrieval is a separate retrieval step with consumed output.
 Recover missing specified resources without inventing replacements.
 
 Express dependencies with structured selectors and full nested paths.
+Nested paths require declared output ``children``. For Code object or
+``array[object]`` outputs, declare every referenced field and type; never infer
+fields from prose or code.
 Independent creates may share a batch; dependent creates must be producer-first.
 The scheduler commits producers before compiling consumers from confirmed outputs.
 If arguments need an observed producer result, submit the consumer in the next invocation.
@@ -78,6 +88,10 @@ Create nodes before connecting; use the source's declared source_handle for bran
 Dependency order alone does not prove branch availability; graph validation checks it.
 Container children stay inside their container payload and private scope.
 Workflow mode uses end; Advanced Chat mode uses answer.
+
+Edges are final control flow. Remove recovery scaffolds before validation.
+Do not leave a direct terminal edge that bypasses requested downstream stages;
+read the final graph and verify the intended sequence reaches end/answer.
 
 # 5. Recovery and stopping
 
@@ -112,7 +126,8 @@ before retrying.
 
 After the intended construction is complete:
 
-1. Call validate_graph; require content.valid=true, not merely ToolResult.ok.
+1. Read the final graph, remove scaffolds/shortcuts, then call validate_graph;
+   require content.valid=true, not merely ToolResult.ok.
    Repair reported deterministic issues and validate again.
 2. Call run_acceptance (default simulated). It hydrates inline Agent bindings
    before recording evidence. On failure, inspect_attempt and repair the cause.

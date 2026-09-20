@@ -188,7 +188,14 @@ def _item_path_allowed(
     raw_type = str(schema.get("type") or "")
     if raw_type not in _ARRAY_OUTPUT_TYPES:
         return True
-    return _schema_allows_path(_element_schema(schema), rest)
+    element_schema = _element_schema(schema)
+    if (
+        str(element_schema.get("type") or "") in _OBJECT_OUTPUT_TYPES
+        and not element_schema.get("properties")
+        and not element_schema.get("children")
+    ):
+        return False
+    return _schema_allows_path(element_schema, rest)
 
 
 def _output_path_allowed(
@@ -249,7 +256,10 @@ def _declared_output_schema(node: dict[str, Any], base: str) -> dict[str, Any]:
     if node_type == BuiltinNodeTypes.LOOP:
         for item in data.get("loop_variables") or []:
             if isinstance(item, dict) and item.get("label") == base:
-                return {"type": str(item.get("var_type") or "string")}
+                return {
+                    "type": str(item.get("var_type") or "string"),
+                    "children": item.get("children"),
+                }
         return {"type": "string"}
     if node_type == BuiltinNodeTypes.HTTP_REQUEST and base == "files":
         return {"type": "arrayFile"}

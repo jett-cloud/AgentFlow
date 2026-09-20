@@ -1287,6 +1287,50 @@ def test_parallel_container_then_child_commits_both(loop_harness, monkeypatch: p
     assert loop_harness.context.state.pending_plan_nodes == ()
 
 
+def test_iteration_scope_selector_does_not_create_self_dependency(
+    loop_harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loop_harness.context.env = replace(loop_harness.context.env, llm_client=_FakeLLM())  # type: ignore[arg-type]
+    iteration_call = {
+        "id": "iteration-call",
+        "name": "build_iteration",
+        "arguments": {
+            "mode": "create",
+            "id": "iter1",
+            "title": "逐条处理",
+            "iterator_selector": ["parse_cases", "cases"],
+            "iterator_input_type": "array[object]",
+            "output_selector": ["judge", "text"],
+            "children": [
+                {
+                    "kind": "llm",
+                    "ref": "judge",
+                    "intent": {
+                        "inputs": [{"role": "query", "source": ["iter1", "item"]}],
+                        "outputs": [{"name": "text", "type": "string"}],
+                    },
+                }
+            ],
+            "edges": [],
+            "outputs": [{"name": "output", "type": "array[string]"}],
+            "is_parallel": False,
+            "parallel_nums": 10,
+            "error_handle_mode": "terminated",
+            "flatten_output": True,
+        },
+    }
+
+    monkeypatch.setattr(create_scheduler, "compile_build_iteration", _compiled_loop_stub)
+    loop_harness.invoker.queue_tool_calls([iteration_call])
+    loop_harness.invoker.queue_text("先这样")
+
+    list(iter_agent_events(**loop_harness.kwargs))
+
+    assert find_node(loop_harness.context.state.graph, "iter1") is not None
+    results = [message.payload for message in loop_harness.session.messages if message.event_type == "tool_result"]
+    assert [result["tool_call_id"] for result in results] == ["iteration-call"]
+
+
 def test_parallel_child_before_container_drops_later_container(loop_harness, monkeypatch: pytest.MonkeyPatch) -> None:
 
     loop_harness.context.env = replace(loop_harness.context.env, llm_client=_FakeLLM())  # type: ignore[arg-type]

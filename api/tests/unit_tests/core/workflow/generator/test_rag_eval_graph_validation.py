@@ -148,11 +148,14 @@ def test_rag_eval_graph_flags_illegal_code_types_and_missing_end_types() -> None
     assert (WorkflowGenerateErrorCode.INVALID_CODE_OUTPUT, "node_parse") in codes
     assert (WorkflowGenerateErrorCode.INVALID_CODE_OUTPUT, "node_code") in codes
     assert (WorkflowGenerateErrorCode.INVALID_END_OUTPUT, "node_end") in codes
-    assert not any(error["code"] == WorkflowGenerateErrorCode.UNRESOLVED_REFERENCE for error in errors)
+    assert any(error["code"] == WorkflowGenerateErrorCode.UNRESOLVED_REFERENCE for error in errors)
 
 
 def test_rag_eval_graph_is_structurally_valid_once_output_types_are_legal() -> None:
     graph = _rag_eval_graph(code_output_type="array[object]")
+    graph["nodes"][3]["data"]["outputs"]["questions"]["children"] = {
+        "question": {"type": "string", "children": None}
+    }
     graph["nodes"][-2]["data"]["outputs"]["accuracy"] = {"type": "number", "children": None}
     for item in graph["nodes"][-1]["data"]["outputs"]:
         item["value_type"] = "number"
@@ -160,3 +163,18 @@ def test_rag_eval_graph_is_structurally_valid_once_output_types_are_legal() -> N
     errors = validate_graph(graph=graph, mode="workflow")
 
     assert errors == []
+
+
+def test_iteration_rejects_nested_item_field_without_output_schema() -> None:
+    graph = _rag_eval_graph(code_output_type="array[object]")
+    graph["nodes"][-2]["data"]["outputs"]["accuracy"] = {"type": "number", "children": None}
+    for item in graph["nodes"][-1]["data"]["outputs"]:
+        item["value_type"] = "number"
+
+    errors = validate_graph(graph=graph, mode="workflow")
+
+    assert any(
+        error["code"] == WorkflowGenerateErrorCode.UNRESOLVED_REFERENCE
+        and error.get("node_id") == "node_iter"
+        for error in errors
+    )

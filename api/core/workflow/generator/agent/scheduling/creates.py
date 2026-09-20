@@ -116,8 +116,19 @@ def _structured_selector_sources(value: object, *, field_name: str | None = None
 
 
 def _create_data_dependencies(call: ToolCall) -> set[str]:
+    """Return other same-batch nodes that must commit before this create.
+
+    Container children address iteration and loop variables through the
+    container id itself (for example ``["iter1", "item"]``).  That selector
+    is an internal scope reference, not a dependency on a separate producer.
+    Keeping it would make the create depend on itself and deadlock the wave
+    scheduler before the container can compile.
+    """
     arguments = call.get("arguments")
-    return _structured_selector_sources(arguments if isinstance(arguments, dict) else {})
+    dependencies = _structured_selector_sources(arguments if isinstance(arguments, dict) else {})
+    if node_id := _call_argument_str(call, "id"):
+        dependencies.discard(node_id)
+    return dependencies
 
 
 def _creates_conflict(left: ToolCall, right: ToolCall) -> bool:

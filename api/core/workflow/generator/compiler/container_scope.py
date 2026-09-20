@@ -96,12 +96,24 @@ def validate_compiled_container(
     request: ContainerCompileRequest,
     ref_map: Mapping[str, str],
 ) -> None:
-    errors = validate_graph(
-        graph=cast(GraphDict, graph),
+    baseline_errors = validate_graph(
+        graph=cast(GraphDict, request.frozen_graph),
         mode=request.generation_mode,
         installed_tools=request.installed_tools,
         tool_entries=list(request.tool_entries) if request.tool_entries else None,
     )
+    baseline_error_keys = {_validation_error_key(item) for item in baseline_errors}
+    errors = [
+        item
+        for item in validate_graph(
+            graph=cast(GraphDict, graph),
+            mode=request.generation_mode,
+            installed_tools=request.installed_tools,
+            tool_entries=list(request.tool_entries) if request.tool_entries else None,
+        )
+        if _validation_error_key(item) not in baseline_error_keys
+        and not _is_staged_container_attachment_error(item, request)
+    ]
     if errors:
         first = errors[0]
         node_id = str(first.get("node_id") or "")
@@ -115,6 +127,34 @@ def validate_compiled_container(
         )
     if request.kind == "loop":
         _validate_loop_exit(graph, request, ref_map)
+
+
+def _validation_error_key(error: Mapping[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(error.get("code") or ""),
+        str(error.get("node_id") or ""),
+        str(error.get("detail") or ""),
+    )
+
+
+def _is_staged_container_attachment_error(
+    error: Mapping[str, Any], request: ContainerCompileRequest
+) -> bool:
+    """Ignore errors resolved by connecting a newly committed container.
+
+    Node builders commit nodes before separate ``connect`` calls wire the final
+    workflow. A newly assembled top-level container follows the same staged
+    protocol, so reachability and upstream-availability checks cannot pass
+    until after the atomic container commit. Explicit ``validate_graph`` and
+    ``finish`` still enforce both invariants once graph construction is complete.
+    """
+    code = str(error.get("code") or "")
+    if str(error.get("node_id") or "") != request.container_id:
+        return False
+    detail = str(error.get("detail") or "")
+    return code == "REFERENCE_NOT_AVAILABLE" or (
+        code == "INVALID_SCHEMA" and " is not reachable from start node " in detail
+    )
 
 
 def build_container_registry(
@@ -133,15 +173,16 @@ def build_container_registry(
         known.add(node_id)
         declarations.extend(_declarations_for_existing(node, tool_entries=request.tool_entries))
     declarations.extend(_seed_container_scope(request))
+    declarations.extend(_iteration_item_child_declarations(request))
     by_ref = {child.ref: child for child in request.intent.children}
     for ref, node_id in ref_map.items():
         producer_layer = layer_by_ref[ref] + 1
         for selector, value_type in _child_output_declarations(by_ref[ref], request.tool_entries):
-            name = selector[1] if len(selector) > 1 else ""
+            path = selector[1:]
             for owner in (ref, node_id):
                 declarations.append(
                     VariableDeclaration(
-                        selector=(owner, name) if name else (owner,),
+                        selector=(owner, *path) if path else (owner,),
                         value_type=value_type,
                         owner_container_id=request.container_id,
                         producer_layer=producer_layer,
@@ -284,8 +325,33 @@ def _child_output_declarations(
                 child_ref=child.ref,
             )
         return []
-    outputs = child.intent.outputs
-    return [((child.ref, item.name), item.type or "string") for item in outputs]
+    declarations: list[tuple[tuple[str, ...], str]] = []
+    for item in child.intent.outputs:
+        declarations.append(((child.ref, item.name), item.type or "string"))
+        if item.type == "object":
+            declarations.extend(
+                _intent_child_output_declarations(
+                    prefix=(child.ref, item.name),
+                    children=item.children,
+                )
+            )
+    return declarations
+
+
+def _intent_child_output_declarations(
+    *,
+    prefix: tuple[str, ...],
+    children: Mapping[str, Any] | None,
+) -> list[tuple[tuple[str, ...], str]]:
+    declarations: list[tuple[tuple[str, ...], str]] = []
+    for name, child in (children or {}).items():
+        child_selector = (*prefix, name)
+        declarations.append((child_selector, child.type))
+        if child.type == "object":
+            declarations.extend(
+                _intent_child_output_declarations(prefix=child_selector, children=child.children)
+            )
+    return declarations
 
 
 def _declarations_for_existing(
@@ -328,7 +394,78 @@ def _declarations_for_existing(
                 guaranteed=True,
             )
         )
+        declarations.extend(
+            _schema_child_declarations(
+                prefix=(node_id, name),
+                schema=schema,
+                owner_container_id=None,
+                producer_layer=0,
+            )
+        )
     return declarations
+
+
+def _schema_child_declarations(
+    *,
+    prefix: tuple[str, ...],
+    schema: Mapping[str, Any],
+    owner_container_id: str | None,
+    producer_layer: int,
+) -> list[VariableDeclaration]:
+    if _canonical_value_type(str(schema.get("type") or "object")).startswith("array"):
+        return []
+    properties = schema.get("properties")
+    if properties is None:
+        properties = schema.get("children")
+    if not isinstance(properties, Mapping):
+        return []
+    declarations: list[VariableDeclaration] = []
+    for name, raw_child in properties.items():
+        if not isinstance(name, str) or not isinstance(raw_child, Mapping):
+            continue
+        child_schema = dict(raw_child)
+        value_type = _canonical_value_type(str(child_schema.get("type") or "object"))
+        selector = (*prefix, name)
+        declarations.append(
+            VariableDeclaration(
+                selector=selector,
+                value_type=value_type,
+                owner_container_id=owner_container_id,
+                producer_layer=producer_layer,
+                guaranteed=True,
+            )
+        )
+        declarations.extend(
+            _schema_child_declarations(
+                prefix=selector,
+                schema=child_schema,
+                owner_container_id=owner_container_id,
+                producer_layer=producer_layer,
+            )
+        )
+    return declarations
+
+
+def _iteration_item_child_declarations(request: ContainerCompileRequest) -> list[VariableDeclaration]:
+    intent = request.intent
+    if not isinstance(intent, IterationBuildIntent):
+        return []
+    source_id = intent.iterator_selector[0]
+    source = next((node for node in request.frozen_graph["nodes"] if node.get("id") == source_id), None)
+    if source is None:
+        return []
+    schema = VariableReferences._schema_for_variable(
+        dict(source),
+        ".".join(intent.iterator_selector[1:]),
+        {str(node["id"]): dict(node) for node in request.frozen_graph["nodes"] if node.get("id")},
+    )
+    item_schema = VariableReferences._element_schema(schema)
+    return _schema_child_declarations(
+        prefix=(request.container_id, "item"),
+        schema=item_schema,
+        owner_container_id=request.container_id,
+        producer_layer=0,
+    )
 
 
 def _validate_declared_outputs(
@@ -367,6 +504,19 @@ def _validate_declared_outputs(
     if registry is None:
         raise ContainerCompileError(
             "INVALID_CONTAINER", "iteration output validation requires a registry", path="outputs"
+        )
+    output_ref = intent.output_selector[0]
+    if output_ref not in _dominated_child_refs(intent.children, intent.edges):
+        raise ContainerCompileError(
+            "REFERENCE_NOT_AVAILABLE",
+            "iteration output is not produced on every branch",
+            path="output_selector",
+            child_ref=output_ref,
+            cause={
+                "error_code": "REFERENCE_NOT_AVAILABLE",
+                "error": "iteration output is not path-dominated",
+                "selector": list(intent.output_selector),
+            },
         )
     output_selector = _rewrite_selector(
         list(intent.output_selector),
@@ -414,16 +564,36 @@ def _seed_container_scope(request: ContainerCompileRequest) -> tuple[VariableDec
     intent = request.intent
     if isinstance(intent, IterationBuildIntent):
         return IterationCompilePolicy(request.container_id).seed_scope(intent)
-    return tuple(
-        VariableDeclaration(
-            selector=(request.container_id, variable.label),
-            value_type=variable.var_type,
-            owner_container_id=request.container_id,
-            producer_layer=0,
-            guaranteed=True,
+    declarations: list[VariableDeclaration] = []
+    for variable in intent.loop_variables:
+        declarations.append(
+            VariableDeclaration(
+                selector=(request.container_id, variable.label),
+                value_type=variable.var_type,
+                owner_container_id=request.container_id,
+                producer_layer=0,
+                guaranteed=True,
+            )
         )
-        for variable in intent.loop_variables
-    )
+        nested = (
+            _intent_child_output_declarations(
+                prefix=(request.container_id, variable.label),
+                children=variable.children,
+            )
+            if variable.var_type == "object"
+            else []
+        )
+        for selector, value_type in nested:
+            declarations.append(
+                VariableDeclaration(
+                    selector=selector,
+                    value_type=value_type,
+                    owner_container_id=request.container_id,
+                    producer_layer=0,
+                    guaranteed=True,
+                )
+            )
+    return tuple(declarations)
 
 
 def _validate_iterator_selector(request: ContainerCompileRequest, registry: VariableRegistry) -> None:

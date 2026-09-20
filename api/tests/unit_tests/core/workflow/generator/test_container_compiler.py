@@ -1,5 +1,7 @@
+import pytest
+
 from core.workflow.generator.compiler.container_compiler import topological_layers
-from core.workflow.generator.compiler.container_scope import IterationCompilePolicy
+from core.workflow.generator.compiler.container_scope import IterationCompilePolicy, build_container_registry
 from core.workflow.generator.compiler.container_selectors import allocate_child_ids, rewrite_selectors
 from core.workflow.generator.compiler.container_types import ContainerCompileRequest
 from core.workflow.generator.compiler.intents.container_intent import (
@@ -9,6 +11,7 @@ from core.workflow.generator.compiler.intents.container_intent import (
     parse_iteration_build_intent,
     parse_loop_build_intent,
 )
+from core.workflow.generator.variables.variable_registry import VariableResolutionError
 
 
 def _tool_child(ref: str) -> dict[str, object]:
@@ -191,6 +194,147 @@ def test_iteration_policy_seeds_private_item_and_index() -> None:
     assert seeded[("iter1", "index")].value_type == "number"
     assert seeded[("iter1", "item")].owner_container_id == "iter1"
     assert seeded[("iter1", "index")].owner_container_id == "iter1"
+
+
+def test_iteration_registry_exposes_declared_object_item_children() -> None:
+    child = StandardContainerChildIntent.model_validate(
+        {
+            "kind": "standard",
+            "ref": "reader",
+            "node_type": "template-transform",
+            "intent": {
+                "objective": "Read question",
+                "inputs": [{"source": ["iter1", "item", "question"], "role": "question"}],
+                "outputs": [{"name": "output", "type": "string"}],
+            },
+        }
+    )
+    intent = parse_iteration_build_intent(
+        {
+            "iterator_selector": ["parse", "cases"],
+            "iterator_input_type": "array[object]",
+            "output_selector": ["reader", "output"],
+            "children": [child.model_dump(mode="python")],
+            "outputs": [{"name": "output", "type": "array[string]"}],
+        }
+    )
+    request = ContainerCompileRequest(
+        kind="iteration",
+        container_id="iter1",
+        intent=intent,
+        frozen_graph={
+            "nodes": [
+                {
+                    "id": "parse",
+                    "data": {
+                        "type": "code",
+                        "outputs": {
+                            "cases": {
+                                "type": "array[object]",
+                                "children": {"question": {"type": "string", "children": None}},
+                            }
+                        },
+                    },
+                }
+            ],
+            "edges": [],
+            "viewport": {"x": 0.0, "y": 0.0, "zoom": 1.0},
+        },
+        base_revision=0,
+        existing_child_ids={},
+        tool_entries=(),
+        knowledge_entries=(),
+        installed_tools=None,
+        generation_mode="workflow",
+    )
+
+    registry = build_container_registry(request, {"reader": "iter1_reader"}, [["reader"]])
+
+    declaration = registry.resolve(
+        ("iter1", "item", "question"),
+        referrer_id="iter1_reader",
+        expected_type="string",
+    )
+    assert declaration.value_type == "string"
+
+
+def test_iteration_registry_rejects_undeclared_object_item_child() -> None:
+    request = _iteration_request(children=[_tool_child("worker")])
+    request = ContainerCompileRequest(
+        **{
+            **request.__dict__,
+            "intent": parse_iteration_build_intent(
+                {
+                    "iterator_selector": ["start", "images"],
+                    "iterator_input_type": "array[file]",
+                    "output_selector": ["worker", "file"],
+                    "children": [_tool_child("worker")],
+                    "outputs": [{"name": "output", "type": "array[file]"}],
+                }
+            ),
+        }
+    )
+    registry = build_container_registry(request, {"worker": "iter1_worker"}, [["worker"]])
+
+    with pytest.raises(VariableResolutionError) as exc_info:
+        registry.resolve(
+            ("iter1", "item", "question"),
+            referrer_id="iter1_worker",
+            expected_type=None,
+        )
+
+    assert exc_info.value.code == "UNKNOWN_OUTPUT"
+
+
+def test_loop_registry_exposes_declared_object_variable_children() -> None:
+    intent = parse_loop_build_intent(
+        {
+            "loop_count": 3,
+            "loop_variables": [
+                {
+                    "label": "state",
+                    "var_type": "object",
+                    "value_type": "constant",
+                    "value": {"count": 0},
+                    "children": {"count": {"type": "number"}},
+                }
+            ],
+            "children": [
+                {
+                    "kind": "standard",
+                    "ref": "reader",
+                    "node_type": "template-transform",
+                    "intent": {
+                        "objective": "Read count",
+                        "inputs": [{"source": ["loop1", "state", "count"], "role": "count"}],
+                        "outputs": [{"name": "output", "type": "string"}],
+                    },
+                }
+            ],
+            "outputs": [{"name": "state", "type": "object"}],
+        }
+    )
+    request = ContainerCompileRequest(
+        kind="loop",
+        container_id="loop1",
+        intent=intent,
+        frozen_graph={"nodes": [], "edges": [], "viewport": {"x": 0.0, "y": 0.0, "zoom": 1.0}},
+        base_revision=0,
+        existing_child_ids={},
+        tool_entries=(),
+        knowledge_entries=(),
+        installed_tools=None,
+        generation_mode="workflow",
+    )
+
+    registry = build_container_registry(request, {"reader": "loop1_reader"}, [["reader"]])
+
+    declaration = registry.resolve(
+        ("loop1", "state", "count"),
+        referrer_id="loop1_reader",
+        expected_type="number",
+    )
+    assert declaration.value_type == "number"
 
 
 def test_rewrite_selectors_maps_iteration_child_refs() -> None:

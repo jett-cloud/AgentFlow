@@ -59,7 +59,9 @@ def _search[Entry: (ToolCatalogueEntry, KnowledgeCatalogueEntry)](
 def search_tools(
     entries: list[ToolCatalogueEntry], query: str, *, limit: int = _MAX_RESULTS
 ) -> list[ToolCatalogueEntry]:
-    """Return the most relevant installed tools with stable tie-breaking."""
+    """Search installed tools, or browse a bounded stable list for a blank query."""
+    if not query.strip():
+        return sorted(entries, key=itemgetter("provider_name", "tool_name"))[:limit]
     return _search(
         entries,
         query,
@@ -91,7 +93,14 @@ def _tool_search_fields(
 def search_knowledge(
     entries: list[KnowledgeCatalogueEntry], query: str, *, limit: int = _MAX_RESULTS
 ) -> list[KnowledgeCatalogueEntry]:
-    """Return the most relevant tenant datasets with stable tie-breaking."""
+    """Search dataset metadata; a blank query browses a bounded, stable list.
+
+    Generic task words such as RAG need not appear in a dataset's name or
+    description. Browsing lets callers discover file-named datasets without
+    treating a keyword miss as proof that the tenant has no knowledge bases.
+    """
+    if not query.strip():
+        return sorted(entries, key=itemgetter("name", "id"))[:limit]
     return _search(
         entries,
         query,

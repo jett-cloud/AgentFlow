@@ -11,7 +11,11 @@ from typing import Annotated, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from core.workflow.generator.compiler.intents.agent_intent import AgentNodeBuildIntent
-from core.workflow.generator.compiler.intents.node_intent import NodeBuildIntent, NodeOutputIntent
+from core.workflow.generator.compiler.intents.node_intent import (
+    NodeBuildIntent,
+    NodeOutputFieldIntent,
+    NodeOutputIntent,
+)
 from core.workflow.generator.compiler.intents.tool_intent import ToolNodeBuildIntent
 
 _NESTED_CONTAINER_TYPES = frozenset({"loop", "iteration", "loop-start", "iteration-start"})
@@ -133,6 +137,7 @@ class LoopVariableIntent(BaseModel):
     var_type: str
     value_type: Literal["constant", "variable"]
     value: object
+    children: dict[str, NodeOutputFieldIntent] | None = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -157,6 +162,8 @@ class LoopVariableIntent(BaseModel):
             if not isinstance(self.value, (list, tuple)) or any(not isinstance(part, str) for part in self.value):
                 raise ValueError("variable loop initial value must be a selector")
             self.value = list(_selector_parts(tuple(self.value), minimum=2))
+        if self.children and self.var_type not in {"object", "array[object]"}:
+            raise ValueError("loop variable children require object or array[object]")
         return self
 
 
@@ -214,7 +221,7 @@ class IterationBuildIntent(BaseModel):
     edges: list[ContainerEdgeIntent] = Field(default_factory=list)
     outputs: list[NodeOutputIntent] = Field(default_factory=list)
     is_parallel: bool = False
-    parallel_nums: int = Field(default=10, ge=1)
+    parallel_nums: int = Field(default=10, ge=1, le=10)
     error_handle_mode: str = "terminated"
     flatten_output: bool = True
 

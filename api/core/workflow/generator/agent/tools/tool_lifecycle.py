@@ -432,13 +432,15 @@ def _contract_report(context: ToolContext) -> dict[str, object] | None:
 
 def _bind_attempt_to_completion_context(attempt: AcceptanceAttempt, context: ToolContext) -> None:
     """Attach server-owned contract and run coordinates to sandbox evidence."""
+    attempt["candidate_base_hash"] = context.state.candidate_base_hash
+    for evidence in attempt.get("evidence") or []:
+        evidence["candidate_base_hash"] = attempt["candidate_base_hash"]
     if context.state.contract_protocol_version is None:
         return
     attempt["contract_revision"] = context.state.contract_revision
     if context.state.contract_hash is not None:
         attempt["contract_hash"] = context.state.contract_hash
     attempt["app_mode"] = context.env.mode
-    attempt["candidate_base_hash"] = context.state.candidate_base_hash
     attempt["validation_version"] = WORKFLOW_RECONCILIATION_VERSION
     if context.env.run_id is not None:
         attempt["run_id"] = context.env.run_id
@@ -449,7 +451,6 @@ def _bind_attempt_to_completion_context(attempt: AcceptanceAttempt, context: Too
         if "contract_hash" in attempt:
             evidence["contract_hash"] = attempt["contract_hash"]
         evidence["app_mode"] = attempt["app_mode"]
-        evidence["candidate_base_hash"] = attempt["candidate_base_hash"]
         evidence["validation_version"] = attempt["validation_version"]
         if "run_id" in attempt:
             evidence["run_id"] = attempt["run_id"]

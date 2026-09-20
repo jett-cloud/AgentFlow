@@ -364,6 +364,54 @@ def test_build_agent_node_does_not_write_sibling_knowledge_retrieval(tool_contex
     assert "ds-live" in str(node["data"].get("knowledge"))
 
 
+def test_build_agent_node_compiles_nested_declared_output_shape(tool_context: ToolContext) -> None:
+    _enable_catalogues(tool_context)
+    _start_query(tool_context)
+
+    result = dispatch(
+        _call(
+            "build_agent_node",
+            **_create_args(
+                outputs=[
+                    {
+                        "name": "result",
+                        "type": "object",
+                        "children": {
+                            "answer": {"type": "string"},
+                            "evidence": {
+                                "type": "array[object]",
+                                "children": {"source": {"type": "string"}},
+                            },
+                        },
+                    }
+                ]
+            ),
+        ),
+        tool_context,
+    )
+    node = find_node(tool_context.state.graph, "agent_1")
+
+    assert result["ok"] is True
+    assert node is not None
+    assert node["data"]["agent_declared_outputs"] == [
+        {
+            "name": "result",
+            "type": "object",
+            "children": [
+                {"name": "answer", "type": "string"},
+                {
+                    "name": "evidence",
+                    "type": "array",
+                    "array_item": {
+                        "type": "object",
+                        "children": [{"name": "source", "type": "string"}],
+                    },
+                },
+            ],
+        }
+    ]
+
+
 def test_build_agent_node_update_omits_knowledge_and_preserves_it(tool_context: ToolContext) -> None:
     _enable_catalogues(tool_context)
     _start_query(tool_context)

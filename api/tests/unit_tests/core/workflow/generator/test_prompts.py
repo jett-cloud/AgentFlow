@@ -155,7 +155,7 @@ class TestNodeBuilderPrompt:
         assert "__timeout" in human_input
         assert '"id": "webapp"' not in human_input
         assert "generator supplies ``start_node_id``" in iteration
-        assert "``parallel_nums`` must be at least 1" in iteration
+        assert "``parallel_nums`` must be from 1 to 10" in iteration
         assert "generator supplies ``start_node_id``" in loop
         assert "``loop_count`` must be an integer from 1 to 100" in loop
         assert "``loop_variables`` must be a list" in loop

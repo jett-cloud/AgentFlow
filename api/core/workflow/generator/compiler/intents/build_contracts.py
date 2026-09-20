@@ -96,7 +96,7 @@ class BuildIterationArgs(_BuildArgs):
     edges: list[ContainerEdgeIntent]
     outputs: list[NodeOutputIntent]
     is_parallel: bool
-    parallel_nums: int = Field(ge=1)
+    parallel_nums: int = Field(ge=1, le=10)
     error_handle_mode: str
     flatten_output: bool
 

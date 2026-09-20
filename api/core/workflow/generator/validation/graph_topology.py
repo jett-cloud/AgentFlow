@@ -106,6 +106,65 @@ def _collect_unreachable_node_errors(
     ]
 
 
+def _collect_terminal_bypass_errors(
+    *, nodes: list[dict[str, Any]], graph: GraphDict, mode: str
+) -> list[WorkflowGenerateErrorDict]:
+    """Reject an unconditional shortcut to a terminal around downstream work.
+
+    A normal node may fan out to parallel work, but a direct terminal edge plus
+    another path from the same node to that terminal lets the workflow finish
+    along a scaffold/bypass edge. Conditional nodes are excluded because their
+    separate handles intentionally represent alternative paths.
+    """
+    top_level_types: dict[str, str] = {}
+    for node in nodes:
+        node_id = node.get("id")
+        raw_data = node.get("data")
+        data = raw_data if isinstance(raw_data, dict) else {}
+        if isinstance(node_id, str) and node_id and not node.get("parentId") and not data.get("parentId"):
+            top_level_types[node_id] = str(data.get("type") or "")
+
+    terminal_type = BuiltinNodeTypes.ANSWER if mode == "advanced-chat" else BuiltinNodeTypes.END
+    terminal_ids = {node_id for node_id, node_type in top_level_types.items() if node_type == terminal_type}
+    successors: dict[str, set[str]] = {node_id: set() for node_id in top_level_types}
+    for edge in graph.get("edges", []):
+        source = edge.get("source")
+        target = edge.get("target")
+        if source in successors and target in top_level_types:
+            successors[source].add(target)
+
+    branch_types = {BuiltinNodeTypes.IF_ELSE, BuiltinNodeTypes.QUESTION_CLASSIFIER}
+    errors: list[WorkflowGenerateErrorDict] = []
+    for source, targets in successors.items():
+        if top_level_types[source] in branch_types:
+            continue
+        direct_terminals = targets & terminal_ids
+        if not direct_terminals:
+            continue
+        for terminal_id in sorted(direct_terminals):
+            pending = [target for target in targets if target != terminal_id]
+            seen: set[str] = set()
+            while pending:
+                current = pending.pop()
+                if current == terminal_id:
+                    errors.append(
+                        _err(
+                            WorkflowGenerateErrorCode.INVALID_SCHEMA,
+                            (
+                                f"Edge {source!r} -> {terminal_id!r} bypasses downstream work "
+                                f"on another path to the same terminal"
+                            ),
+                            node_id=source,
+                        )
+                    )
+                    break
+                if current in seen:
+                    continue
+                seen.add(current)
+                pending.extend(successors.get(current, set()))
+    return errors
+
+
 def _collect_dangling_id_refs(*, nodes: list[dict[str, Any]], known_ids: set[str]) -> list[WorkflowGenerateErrorDict]:
     """Flag ``parentId`` / ``start_node_id`` / ``iteration_id`` / ``loop_id`` pointing nowhere.
 

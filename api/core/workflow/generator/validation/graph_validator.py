@@ -28,6 +28,7 @@ from core.workflow.generator.validation.graph_resources import (
 from core.workflow.generator.validation.graph_topology import (
     _collect_dangling_id_refs,
     _collect_edge_cycle_errors,
+    _collect_terminal_bypass_errors,
     _collect_unreachable_node_errors,
 )
 from core.workflow.generator.validation.graph_validation_values import _CONTAINER_TYPES, _ID_FIELDS, _err
@@ -178,6 +179,7 @@ def _validate_structure(
     # container is the sanctioned way to iterate; its edges are internal.)
     errors.extend(_collect_edge_cycle_errors(graph=graph, known_ids=known_ids))
     errors.extend(_collect_unreachable_node_errors(nodes=nodes, graph=graph))
+    errors.extend(_collect_terminal_bypass_errors(nodes=nodes, graph=graph, mode=mode))
 
     # Dangling node-id references in node ``data`` (parentId, start_node_id, iteration_id, loop_id).
     errors.extend(_collect_dangling_id_refs(nodes=nodes, known_ids=known_ids))

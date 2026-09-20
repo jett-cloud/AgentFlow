@@ -1909,6 +1909,25 @@ def test_search_and_build_share_the_run_snapshot(tool_context) -> None:
     assert result["changed"] is False
 
 
+def test_dataset_discovery_distinguishes_no_match_from_empty_catalogue(tool_context: ToolContext) -> None:
+    entries = [{"id": "ds-beads", "name": "拼豆颜色.txt...", "description": "拼豆颜色资料"}]
+    _set_env(tool_context, knowledge_entries=entries, knowledge_available=True)
+
+    missed = dispatch(_call("search_datasets", query="rag 知识库 测试"), tool_context)
+    assert missed["content"]["hits"] == []
+    assert missed["content"]["catalogue_count"] == 1
+    listed = dispatch(_call("search_datasets", query=""), tool_context)
+    assert listed["content"]["hits"] == entries
+
+    _set_env(tool_context, knowledge_entries=[], knowledge_available=True)
+    empty = dispatch(_call("search_datasets", query=""), tool_context)
+    assert empty["content"]["catalogue_count"] == 0
+    _set_env(tool_context, knowledge_available=False)
+    unavailable = dispatch(_call("search_datasets", query=""), tool_context)
+    assert unavailable["content"]["available"] is False
+    assert unavailable["content"]["catalogue_count"] is None
+
+
 def test_unavailable_knowledge_catalogue_skips_membership_not_reject_all(tool_context) -> None:
     _set_env(tool_context, knowledge_available=False, installed_dataset_ids=None)
     search = dispatch(_call("search_datasets", query="anything"), tool_context)
@@ -2765,6 +2784,19 @@ def test_finish_with_runner_accepts_after_passing_acceptance(tool_context: ToolC
     result = dispatch(_call("finish", summary="已搭好"), tool_context)
     assert result["ok"] is True
     assert result["content"]["valid"] is True
+
+
+def test_legacy_acceptance_binds_candidate_base_hash_for_finish(tool_context: ToolContext) -> None:
+    tool_context.state.graph = _connected_start_end()
+    tool_context.state.candidate_base_hash = "b" * 64
+    _set_env(tool_context, acceptance_runner=_FakeAcceptanceRunner())
+
+    dispatch(_call("run_acceptance"), tool_context)
+    result = dispatch(_call("finish", summary="已搭好"), tool_context)
+
+    assert tool_context.state.contract_protocol_version is None
+    assert tool_context.state.attempts["att-1"]["candidate_base_hash"] == "b" * 64
+    assert result["ok"] is True
 
 
 def test_finish_is_idempotent_for_the_accepted_revision(tool_context: ToolContext) -> None:
