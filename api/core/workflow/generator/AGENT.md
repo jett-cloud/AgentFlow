@@ -143,7 +143,7 @@ There are two distinct graph types in this package:
    - Deliberately omits layout coordinates (`position`), dimensions (`width`/`height`), and visual edge IDs so type checkers prevent assuming ReactFlow fields exist before layout.
 2. **`GraphDict` (`types.py`)**:
    - The fully-hydrated, structurally-valid ReactFlow graph.
-   - Produced exclusively by [`graph_postprocessor.postprocess_graph`](file:///e:/study/project-2026/dify-main/api/core/workflow/generator/graph/graph_postprocessor.py).
+   - Produced exclusively by [`graph_postprocessor.postprocess_graph`](graph/graph_postprocessor.py).
    - Filled with layout coordinates, sanitized IDs, default viewports, and edge connection handles.
 
 ### Node Config Compilation Rules

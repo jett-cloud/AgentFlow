@@ -1,6 +1,6 @@
 # Providers
 
-This directory holds **optional workspace packages** that plug into Dify’s API core. Providers are responsible for implementing the interfaces and registering themselves to the API core. Provider mechanism allows building the software with selected set of providers so as to enhance the security and flexibility of distributions.
+This directory holds **optional workspace packages** inherited from Dify that plug into the AgentFlow API core. Providers implement the required interfaces and register themselves with the API core. The provider mechanism allows distributions to include only the integrations they need.
 
 ## Developing Providers
 

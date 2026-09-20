@@ -90,3 +90,7 @@ test-results/
 /docs/superpowers/
 /img/
 /docs/screenshots/work-assistant-result.png
+/api/AGENTS.md
+/api/ARCHITECTURE_GUIDE*.md
+/api/LEARNING_PATH.md
+/dify-agent/AGENTS.md
