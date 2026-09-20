@@ -238,6 +238,8 @@ services:
       PLUGIN_DAEMON_TIMEOUT: ${PLUGIN_DAEMON_TIMEOUT:-600.0}
       INNER_API_KEY_FOR_PLUGIN: ${PLUGIN_DIFY_INNER_API_KEY:-QaHbTe77CtuXmsfyhR7+vRjI/+XbV1AaFy691iy+kGDv2Jvy0/eAh8Y1}
       AGENT_BACKEND_BASE_URL: ${AGENT_BACKEND_BASE_URL:-http://agent_backend:5050}
+      AGENT_SHELL_ENABLED: ${AGENT_SHELL_ENABLED:-false}
+      WORKFLOW_ASSIST_CONTRACT_ROLLOUT: ${WORKFLOW_ASSIST_CONTRACT_ROLLOUT:-internal_samples}
     depends_on:
       init_permissions:
         condition: service_completed_successfully
@@ -308,6 +310,8 @@ services:
       PLUGIN_MAX_PACKAGE_SIZE: ${PLUGIN_MAX_PACKAGE_SIZE:-52428800}
       INNER_API_KEY_FOR_PLUGIN: ${PLUGIN_DIFY_INNER_API_KEY:-QaHbTe77CtuXmsfyhR7+vRjI/+XbV1AaFy691iy+kGDv2Jvy0/eAh8Y1}
       AGENT_BACKEND_BASE_URL: ${AGENT_BACKEND_BASE_URL:-http://agent_backend:5050}
+      AGENT_SHELL_ENABLED: ${AGENT_SHELL_ENABLED:-false}
+      WORKFLOW_ASSIST_CONTRACT_ROLLOUT: ${WORKFLOW_ASSIST_CONTRACT_ROLLOUT:-internal_samples}
     depends_on:
       init_permissions:
         condition: service_completed_successfully
