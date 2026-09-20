@@ -162,9 +162,11 @@
       <MiniMap
         v-if="showToolbar && showMiniMap"
         position="bottom-right"
+        :width="104"
+        :height="72"
         :pannable="true"
         :zoomable="true"
-        node-color="var(--workflow-minimap-block, rgba(152, 162, 179, 0.45))"
+        node-color="var(--workflow-minimap-block, #667085)"
         mask-color="var(--workflow-minimap-mask, rgba(242, 244, 247, 0.65))"
       />
     </VueFlow>
