@@ -347,8 +347,8 @@ class TestBuildToolCatalogue:
         # the workflow tool node will need (provider_name / provider_type /
         # plugin_id / tool_name).
         hardcoded = _make_builtin_provider(
-            "time",
-            [_make_tool("current_time", label_en="Current Time", description_llm="Return now.")],
+            "calculator",
+            [_make_tool("calculate", label_en="Calculate", description_llm="Calculate a value.")],
         )
         plugin = _make_plugin_provider(
             "google",
@@ -361,19 +361,19 @@ class TestBuildToolCatalogue:
 
         # Sorted alphabetically by provider_name.
         assert [(e["provider_name"], e["tool_name"]) for e in entries] == [
+            ("calculator", "calculate"),
             ("google", "search"),
-            ("time", "current_time"),
         ]
-        google = entries[0]
+        google = next(entry for entry in entries if entry["provider_name"] == "google")
         # Workflow tool nodes store plugin tools as builtin so the studio picker
         # and credential hydration path can resolve them.
         assert google["provider_type"] == "builtin"
         assert google["plugin_id"] == "langgenius/google"
         assert google["tool_label"] == "Google Search"
         assert google["description"] == "Search the web."
-        time_entry = entries[1]
-        assert time_entry["provider_type"] == "builtin"
-        assert time_entry["plugin_id"] == ""
+        calculator = next(entry for entry in entries if entry["provider_name"] == "calculator")
+        assert calculator["provider_type"] == "builtin"
+        assert calculator["plugin_id"] == ""
 
     @patch("services.workflow_assist.tool_catalogue_loader.isinstance", side_effect=_patched_isinstance)
     @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_builtin_providers")
@@ -525,12 +525,12 @@ class TestBuildToolCatalogue:
         # to label, we must continue (not raise) and leave it out of the
         # output rather than guessing at provider_type.
         unknown = _make_unknown_provider("mystery")
-        hardcoded = _make_builtin_provider("time", [_make_tool("now")])
+        hardcoded = _make_builtin_provider("calculator", [_make_tool("calculate")])
         mock_list.return_value = iter([unknown, hardcoded])
 
         entries = build_tool_catalogue("tenant-1")
 
-        assert [e["provider_name"] for e in entries] == ["time"]
+        assert [e["provider_name"] for e in entries] == ["calculator"]
 
     @patch("services.workflow_assist.tool_catalogue_loader.isinstance", side_effect=_patched_isinstance)
     @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_builtin_providers")
@@ -540,12 +540,12 @@ class TestBuildToolCatalogue:
         # per-provider try/except is what keeps generation usable in tenants
         # with broken installs.
         bad = _make_builtin_provider("broken", [], raises_on_get_tools=True)
-        good = _make_builtin_provider("time", [_make_tool("now")])
+        good = _make_builtin_provider("calculator", [_make_tool("calculate")])
         mock_list.return_value = iter([bad, good])
 
         entries = build_tool_catalogue("tenant-1")
 
-        assert [e["provider_name"] for e in entries] == ["time"]
+        assert [e["provider_name"] for e in entries] == ["calculator"]
 
     @patch("services.workflow_assist.tool_catalogue_loader.isinstance", side_effect=_patched_isinstance)
     @patch("services.workflow_assist.tool_catalogue_loader.ToolManager.list_builtin_providers")
