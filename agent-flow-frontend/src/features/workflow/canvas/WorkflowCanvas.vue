@@ -91,6 +91,8 @@
     <ChecklistPanel
       :open="showChecklist"
       :issues="checklistIssues"
+      :grouped-issues="checklistGroups"
+      :issue-count="checklistIssues.length"
       @close="showChecklist = false"
       @goto-node="focusChecklistNode"
     />
@@ -347,7 +349,7 @@ import { load as loadYaml } from 'js-yaml'
 import { getNodeTitle } from '../model/nodeMeta.js'
 import { normalizeNodeSelectorContext } from '../model/nodeSelectorContext.js'
 import { BlockEnum } from '../model/constants.js'
-import { buildWorkflowChecklist } from '../model/checklist.js'
+import { buildWorkflowChecklist, groupChecklistIssues } from '../model/checklist.js'
 import { isChatflowMode } from '../model/appModes.js'
 import { applyPanelExclusivity, PANEL_KEYS } from '../model/panelExclusivity.js'
 import { normalizeCanvasControlMode } from '../model/canvasChrome.js'
@@ -697,7 +699,8 @@ const effectiveRunError = computed(() => (
 
 /** Snapshot refreshed on content changes — never track live Vue Flow nodes in render. */
 const checklistIssues = ref([])
-const checklistCount = computed(() => checklistIssues.value.length)
+const checklistGroups = computed(() => groupChecklistIssues(checklistIssues.value))
+const checklistCount = computed(() => checklistGroups.value.length)
 let lastChecklistSignature = ''
 
 function refreshChecklistIssues(draftSignature = readDraftSignature()) {

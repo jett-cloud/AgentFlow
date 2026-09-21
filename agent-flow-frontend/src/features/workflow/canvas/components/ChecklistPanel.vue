@@ -3,7 +3,7 @@
     <header>
       <div>
         <h2>检查清单{{ groups.length ? ` (${groups.length})` : '' }}</h2>
-        <p>{{ groups.length ? '请修复以下问题后再发布' : '暂无问题' }}</p>
+        <p>{{ summary }}</p>
       </div>
       <button type="button" aria-label="关闭检查清单" @click="$emit('close')">×</button>
     </header>
@@ -16,8 +16,9 @@
         @click="onGroupClick(group)"
       >
         <div class="group-head">
-          <strong>{{ group.level === 'error' ? '错误' : '提示' }}</strong>
+          <span class="level-dot" aria-hidden="true"></span>
           <span class="group-title">{{ group.title }}</span>
+          <span class="group-count">{{ group.messages.length }} 个问题</span>
           <button
             v-if="group.canNavigate"
             type="button"
@@ -43,11 +44,23 @@ import { groupChecklistIssues } from '../../model/checklist.js'
 const props = defineProps({
   open: { type: Boolean, default: false },
   issues: { type: Array, default: () => [] },
+  groupedIssues: { type: Array, default: null },
+  issueCount: { type: Number, default: 0 },
 })
 
 const emit = defineEmits(['close', 'goto-node'])
 
-const groups = computed(() => groupChecklistIssues(props.issues))
+const groups = computed(() => (
+  Array.isArray(props.groupedIssues)
+    ? props.groupedIssues
+    : groupChecklistIssues(props.issues)
+))
+const summary = computed(() => {
+  if (!groups.value.length)
+    return '暂无问题'
+  const count = props.issueCount || props.issues.length
+  return `${groups.value.length} 个节点，共 ${count} 个问题`
+})
 
 function onGroupClick(group) {
   if (!group?.canNavigate || !group.id) return
@@ -137,6 +150,22 @@ header button:hover { background: #f2f4f7; }
   font-weight: 600;
   color: #101828;
 }
+.level-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: #f79009;
+}
+.group-count {
+  flex: none;
+  border-radius: 999px;
+  background: #f2f4f7;
+  padding: 2px 7px;
+  color: #667085;
+  font-size: 10px;
+  font-weight: 600;
+}
 .goto {
   border: 0;
   border-radius: 6px;
@@ -156,8 +185,8 @@ header button:hover { background: #f2f4f7; }
   color: #344054;
   line-height: 1.4;
 }
-.checklist-list > li[data-level='error'] .group-head strong { color: #b42318; }
-.checklist-list > li[data-level='warning'] .group-head strong { color: #b54708; }
+.checklist-list > li[data-level='error'] .level-dot { background: #f04438; }
+.checklist-list > li[data-level='warning'] .level-dot { background: #f79009; }
 .checklist-empty {
   padding: 24px 14px;
   text-align: center;

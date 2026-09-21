@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { parse, compileScript } from '@vue/compiler-sfc'
 import { computed, ref } from 'vue'
-import { buildWorkflowChecklist } from '../model/checklist.js'
+import { buildWorkflowChecklist, groupChecklistIssues } from '../model/checklist.js'
 import { buildDraftContentSignature } from '../model/draftSignature.js'
 import {
   needsFollowUpSave,
@@ -52,7 +52,7 @@ function createCanvas() {
     setRagPipelineVariables: value => { store.ragPipelineVariables = value },
   }
   const dependencies = {
-    ref, computed, buildWorkflowChecklist, buildDraftContentSignature, isChatflowMode,
+    ref, computed, buildWorkflowChecklist, groupChecklistIssues, buildDraftContentSignature, isChatflowMode,
     shouldRestartAutosaveTimer, nextDraftStatusOnSignature, needsFollowUpSave, shouldFlushDraftOnLeave,
     getNodes, getEdges, environmentVariables, conversationVariables, workflowName,
     draftStatus, assistPreviewing, store,
@@ -73,7 +73,7 @@ function createCanvas() {
     ${setupSource.slice(checklistStart, checklistEnd)}
     ${lifecycle}
     return { initializeDraft, pollDraftSignature, markDraftSaved, flushDraftIfNeeded,
-      checklistIssues, checklistCount, getNodes, getEdges, assistPreviewing, draftStatus, props, store,
+      checklistIssues, checklistGroups, checklistCount, getNodes, getEdges, assistPreviewing, draftStatus, props, store,
       pendingSave: () => autosaveTimer,
       setInFlightSignature: (value) => { inFlightSignature = value },
       readDraftSignature }
@@ -106,6 +106,18 @@ test('canvas shows checklist errors as soon as a draft loads without opening the
   canvas.initializeDraft({ graph: workflow({ missingModel: true }) })
   assert.equal(canvas.checklistCount.value, 1)
   assert.equal(canvas.checklistIssues.value[0].id, 'model-config-llm')
+})
+
+test('checklist badge counts affected nodes instead of individual errors', () => {
+  const canvas = createCanvas()
+  canvas.checklistIssues.value = [
+    { id: 'llm-model', level: 'error', message: '未配置模型', nodeId: 'llm', title: 'LLM' },
+    { id: 'llm-prompt', level: 'error', message: '未填写提示词', nodeId: 'llm', title: 'LLM' },
+    { id: 'agent-model', level: 'error', message: '未配置模型', nodeId: 'agent', title: 'Agent' },
+  ]
+  assert.equal(canvas.checklistIssues.value.length, 3)
+  assert.equal(canvas.checklistGroups.value.length, 2)
+  assert.equal(canvas.checklistCount.value, 2)
 })
 
 test('closed checklist updates when node configuration changes and clears after repair', () => {

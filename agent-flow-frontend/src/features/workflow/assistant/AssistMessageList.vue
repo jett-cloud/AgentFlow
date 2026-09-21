@@ -265,6 +265,14 @@ onBeforeUnmount(() => {
   margin-left: auto;
 }
 
+.message.is-assistant {
+  width: 92%;
+}
+
+.message.is-assistant > .bubble {
+  width: 100%;
+}
+
 .bubble {
   box-sizing: border-box;
   min-width: 0;

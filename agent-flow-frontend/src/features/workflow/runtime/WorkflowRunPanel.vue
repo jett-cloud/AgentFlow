@@ -21,11 +21,15 @@
     aria-label="工作流调试与预览"
   >
     <header class="panel-header">
-      <div>
+      <div class="panel-heading">
         <h2>{{ panelTitle }}</h2>
-        <p>{{ modeLabel }}</p>
+        <p><span class="mode-dot" aria-hidden="true" />{{ modeLabel }}</p>
       </div>
-      <button type="button" class="close-btn" aria-label="关闭" @click="$emit('close')">×</button>
+      <button type="button" class="close-btn" aria-label="关闭" @click="$emit('close')">
+        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <path d="m5 5 10 10M15 5 5 15" />
+        </svg>
+      </button>
     </header>
 
     <div class="tabs" role="tablist">
@@ -149,11 +153,15 @@ const panelTitle = computed(() => (
   bottom: 0;
   z-index: 48;
   display: flex;
-  width: min(420px, 100%);
+  width: min(480px, 100%);
   flex-direction: column;
-  border-left: 1px solid #eaecf0;
-  background: #fff;
-  box-shadow: -8px 0 24px rgb(16 24 40 / 6%);
+  overflow: hidden;
+  border: 1px solid rgb(16 24 40 / 8%);
+  border-right: 0;
+  border-radius: 16px 0 0 16px;
+  background: rgb(255 255 255 / 98%);
+  box-shadow: -12px 0 32px rgb(16 24 40 / 8%), -2px 0 8px rgb(16 24 40 / 4%);
+  backdrop-filter: blur(12px);
 }
 
 .panel-header {
@@ -161,8 +169,12 @@ const panelTitle = computed(() => (
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 12px 14px;
-  border-bottom: 1px solid #f2f4f7;
+  min-height: 64px;
+  padding: 16px 20px 12px;
+}
+
+.panel-heading {
+  min-width: 0;
 }
 
 .panel-header h2,
@@ -172,60 +184,122 @@ const panelTitle = computed(() => (
 
 .panel-header h2 {
   color: #101828;
-  font-size: 14px;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 22px;
 }
 
 .panel-header p {
-  margin-top: 2px;
-  color: #667085;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 1px;
+  color: #98a2b3;
   font-size: 11px;
+  line-height: 16px;
+}
+
+.mode-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #12b76a;
+  box-shadow: 0 0 0 3px rgb(18 183 106 / 10%);
 }
 
 .close-btn {
-  padding: 4px 8px;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
   color: #667085;
-  font-size: 18px;
   cursor: pointer;
+  transition: color 150ms ease, background 150ms ease;
+}
+
+.close-btn svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
 }
 
 .close-btn:hover {
   background: #f2f4f7;
+  color: #101828;
 }
 
 .tabs {
   display: flex;
-  gap: 2px;
-  padding: 8px 10px 0;
-  border-bottom: 1px solid #f2f4f7;
-  background: #fafafa;
+  min-height: 45px;
+  gap: 28px;
+  padding: 0 20px;
+  border-bottom: 1px solid #eaecf0;
+  background: #fff;
 }
 
 .tabs button {
-  flex: 1;
-  padding: 8px 4px;
+  position: relative;
+  padding: 0;
   border: 0;
-  border-radius: 8px 8px 0 0;
   background: transparent;
-  color: #667085;
-  font-size: 11px;
+  color: #98a2b3;
+  font-size: 12px;
   font-weight: 600;
+  letter-spacing: 0.02em;
   cursor: pointer;
+  transition: color 150ms ease;
+}
+
+.tabs button::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: #155eef;
+  content: '';
+  opacity: 0;
+  transform: scaleX(0.55);
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.tabs button:hover {
+  color: #475467;
 }
 
 .tabs button.active {
-  background: #fff;
-  color: #101828;
-  box-shadow: 0 -1px 0 #fff;
+  color: #344054;
+}
+
+.tabs button.active::after {
+  opacity: 1;
+  transform: scaleX(1);
 }
 
 .panel-body {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 12px;
   background: #fff;
+  scrollbar-color: #d0d5dd transparent;
+  scrollbar-width: thin;
+}
+
+@media (max-width: 640px) {
+  .workflow-run-panel {
+    top: 52px;
+    width: 100%;
+    border-left: 0;
+    border-radius: 0;
+  }
 }
 </style>

@@ -109,11 +109,12 @@ function formatError(error) {
 .list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
+.tracing-panel { padding: 12px; }
 .item {
   border: 1px solid #eaecf0;
-  border-radius: 10px;
+  border-radius: 12px;
   background: #fff;
   overflow: hidden;
 }
@@ -125,8 +126,8 @@ function formatError(error) {
   display: flex;
   width: 100%;
   align-items: center;
-  gap: 6px;
-  padding: 8px 10px;
+  gap: 8px;
+  padding: 10px 12px;
   border: 0;
   background: transparent;
   cursor: pointer;
@@ -143,21 +144,21 @@ function formatError(error) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: #101828;
 }
 .meta-chip {
   flex-shrink: 0;
-  padding: 1px 6px;
+  padding: 2px 7px;
   border-radius: 999px;
   background: #f2f4f7;
   color: #667085;
-  font-size: 10px;
+  font-size: 11px;
 }
 .status {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   color: #667085;
 }
@@ -167,7 +168,7 @@ function formatError(error) {
 .status[data-status='running'] { color: #0033ff; }
 .status[data-status='paused'] { color: #f79009; }
 .item-body {
-  padding: 0 10px 10px;
+  padding: 2px 12px 12px;
   border-top: 1px solid #f2f4f7;
 }
 .error {
@@ -180,30 +181,34 @@ function formatError(error) {
 }
 .grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-top: 8px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 10px;
 }
 h3 {
-  margin: 8px 0 4px;
+  margin: 8px 0 6px;
   color: #667085;
-  font-size: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
 }
 pre {
   margin: 0;
-  max-height: 140px;
+  max-height: 240px;
   overflow: auto;
-  padding: 8px;
-  border-radius: 7px;
-  background: #f2f4f7;
-  font: 10px/1.5 ui-monospace, Consolas, monospace;
+  padding: 12px;
+  border: 1px solid #eaecf0;
+  border-radius: 9px;
+  background: #f8fafc;
+  font: 12px/1.6 ui-monospace, Consolas, monospace;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .foot {
   margin-top: 8px;
   color: #98a2b3;
-  font-size: 10px;
+  font-size: 11px;
 }
 .empty {
   padding: 28px 12px;

@@ -305,6 +305,71 @@ async function onRemoteAdd() {
 </script>
 
 <style scoped>
+:where(input:not([type='checkbox']):not([type='file']), textarea, select) {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  outline: none;
+  background: #fff;
+  color: #101828;
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 4%);
+  transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
+}
+
+:where(input:not([type='checkbox']):not([type='file']), select) {
+  height: 38px;
+  padding: 0 10px;
+}
+
+textarea {
+  min-height: 88px;
+  padding: 9px 10px;
+  resize: none;
+}
+
+select {
+  padding-right: 30px;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 20 20' fill='none'%3E%3Cpath d='m6 8 4 4 4-4' stroke='%23667085' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-position: right 9px center;
+  background-repeat: no-repeat;
+}
+
+input[type='number'] {
+  appearance: textfield;
+}
+
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+:where(input:not([type='checkbox']):not([type='file']), textarea, select)::placeholder {
+  color: #98a2b3;
+}
+
+:where(input:not([type='checkbox']):not([type='file']), textarea, select):hover:not(:disabled) {
+  border-color: #98a2b3;
+}
+
+:where(input:not([type='checkbox']):not([type='file']), textarea, select):focus {
+  border-color: #528bff;
+  box-shadow: 0 0 0 3px rgb(21 94 239 / 10%), 0 1px 2px rgb(16 24 40 / 4%);
+}
+
+:where(input:not([type='checkbox']):not([type='file']), textarea, select):disabled {
+  border-color: #e4e7ec;
+  background: #f9fafb;
+  color: #667085;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
 .file-field {
   display: flex;
   flex-direction: column;
@@ -574,6 +639,20 @@ async function onRemoteAdd() {
 .checkbox-field {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #fff;
+  color: #344054;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 4%);
+}
+
+.checkbox-field input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #155eef;
 }
 </style>

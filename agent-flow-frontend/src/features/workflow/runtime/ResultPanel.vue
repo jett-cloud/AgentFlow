@@ -111,15 +111,17 @@ async function copyResult() {
 .result-panel {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
+  padding: 16px;
 }
 .meta {
   display: flex;
   align-items: center;
-  gap: 8px;
+  min-height: 28px;
+  gap: 10px;
 }
 .status {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: #667085;
 }
@@ -138,12 +140,12 @@ async function copyResult() {
 .copy-btn,
 .link-btn {
   margin-left: auto;
-  padding: 4px 8px;
+  padding: 6px 10px;
   border: 1px solid #eaecf0;
   border-radius: 6px;
   background: #fff;
   color: #344054;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
 }
 .link-btn {
@@ -190,19 +192,20 @@ async function copyResult() {
 h3 {
   margin: 0;
   color: #667085;
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
 }
 .body {
   margin: 0;
   min-height: 120px;
-  max-height: 360px;
-  overflow: auto;
-  padding: 10px;
-  border-radius: 8px;
-  background: #f2f4f7;
+  padding: 16px;
+  border: 1px solid #eaecf0;
+  border-radius: 10px;
+  background: #f8fafc;
   color: #101828;
-  font: 12px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font: 14px/1.7 ui-sans-serif, system-ui, -apple-system, sans-serif;
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;

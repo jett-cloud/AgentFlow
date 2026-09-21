@@ -249,3 +249,170 @@ onUnmounted(stopResize)
   display: none;
 }
 </style>
+
+<!--
+  Node panels are implemented by many independent components. Keep the form
+  control skin at the host boundary so every panel gets the same Dify-like
+  interaction states without duplicating CSS in each node implementation.
+-->
+<style>
+.node-panel-host .node-panel-content {
+  --node-form-border: #d0d5dd;
+  --node-form-border-hover: #98a2b3;
+  --node-form-border-focus: #528bff;
+  --node-form-focus-ring: rgb(21 94 239 / 10%);
+  --node-form-placeholder: #98a2b3;
+}
+
+.node-panel-host .node-panel-content .panel-body,
+.node-panel-host .node-panel-content .node-panel-body {
+  scrollbar-color: #d0d5dd transparent;
+  scrollbar-width: thin;
+}
+
+.node-panel-host .node-panel-content .form-section {
+  gap: 10px;
+}
+
+.node-panel-host .node-panel-content .section-label,
+.node-panel-host .node-panel-content .el-form-item__label {
+  color: #344054;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.node-panel-host .node-panel-content .el-form-item {
+  margin-bottom: 16px;
+}
+
+.node-panel-host .node-panel-content .el-input__wrapper,
+.node-panel-host .node-panel-content .el-select__wrapper,
+.node-panel-host .node-panel-content .el-input-number .el-input__wrapper {
+  min-height: 36px;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 0 0 1px var(--node-form-border) inset, 0 1px 2px rgb(16 24 40 / 4%);
+  transition: box-shadow 150ms ease, background 150ms ease;
+}
+
+.node-panel-host .node-panel-content .el-input__wrapper:hover,
+.node-panel-host .node-panel-content .el-select__wrapper:hover,
+.node-panel-host .node-panel-content .el-input-number .el-input__wrapper:hover {
+  box-shadow: 0 0 0 1px var(--node-form-border-hover) inset, 0 1px 2px rgb(16 24 40 / 4%);
+}
+
+.node-panel-host .node-panel-content .el-input__wrapper.is-focus,
+.node-panel-host .node-panel-content .el-select__wrapper.is-focused,
+.node-panel-host .node-panel-content .el-select__wrapper.is-focus,
+.node-panel-host .node-panel-content .el-input-number .el-input__wrapper.is-focus {
+  box-shadow: 0 0 0 1px var(--node-form-border-focus) inset, 0 0 0 3px var(--node-form-focus-ring);
+}
+
+.node-panel-host .node-panel-content .el-input__inner,
+.node-panel-host .node-panel-content .el-select__placeholder,
+.node-panel-host .node-panel-content .el-select__selected-item {
+  color: #101828;
+  font-size: 12px;
+}
+
+.node-panel-host .node-panel-content .el-input__inner::placeholder,
+.node-panel-host .node-panel-content .el-textarea__inner::placeholder {
+  color: var(--node-form-placeholder);
+}
+
+.node-panel-host .node-panel-content .el-textarea__inner {
+  min-height: 80px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 8px;
+  outline: none;
+  background: #fff;
+  color: #101828;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  resize: none;
+  box-shadow: 0 0 0 1px var(--node-form-border) inset, 0 1px 2px rgb(16 24 40 / 4%);
+  transition: box-shadow 150ms ease;
+}
+
+.node-panel-host .node-panel-content .el-textarea__inner:hover {
+  box-shadow: 0 0 0 1px var(--node-form-border-hover) inset, 0 1px 2px rgb(16 24 40 / 4%);
+}
+
+.node-panel-host .node-panel-content .el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px var(--node-form-border-focus) inset, 0 0 0 3px var(--node-form-focus-ring);
+}
+
+.node-panel-host .node-panel-content .el-input.is-disabled .el-input__wrapper,
+.node-panel-host .node-panel-content .el-select.is-disabled .el-select__wrapper,
+.node-panel-host .node-panel-content .el-textarea.is-disabled .el-textarea__inner {
+  background: #f9fafb;
+  box-shadow: 0 0 0 1px #e4e7ec inset;
+}
+
+.node-panel-host .node-panel-content input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not(.el-input__inner),
+.node-panel-host .node-panel-content textarea:not(.el-textarea__inner),
+.node-panel-host .node-panel-content select {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--node-form-border);
+  border-radius: 8px;
+  outline: none;
+  background: #fff;
+  color: #101828;
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 4%);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.node-panel-host .node-panel-content input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not(.el-input__inner),
+.node-panel-host .node-panel-content select {
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+.node-panel-host .node-panel-content textarea:not(.el-textarea__inner) {
+  min-height: 80px;
+  padding: 9px 10px;
+  resize: none;
+}
+
+.node-panel-host .node-panel-content input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not(.el-input__inner):hover:not(:disabled),
+.node-panel-host .node-panel-content textarea:not(.el-textarea__inner):hover:not(:disabled),
+.node-panel-host .node-panel-content select:hover:not(:disabled) {
+  border-color: var(--node-form-border-hover);
+}
+
+.node-panel-host .node-panel-content input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not(.el-input__inner):focus,
+.node-panel-host .node-panel-content textarea:not(.el-textarea__inner):focus,
+.node-panel-host .node-panel-content select:focus {
+  border-color: var(--node-form-border-focus);
+  box-shadow: 0 0 0 3px var(--node-form-focus-ring), 0 1px 2px rgb(16 24 40 / 4%);
+}
+
+.node-panel-host .node-panel-content input::placeholder,
+.node-panel-host .node-panel-content textarea::placeholder {
+  color: var(--node-form-placeholder);
+}
+
+.node-panel-host .node-panel-content .el-button {
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.node-panel-host .node-panel-content .el-button--primary:not(.is-link):not(.is-plain) {
+  border-color: #155eef;
+  background: #155eef;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 8%);
+}
+
+.node-panel-host .node-panel-content .el-switch.is-checked .el-switch__core {
+  border-color: #155eef;
+  background: #155eef;
+}
+</style>

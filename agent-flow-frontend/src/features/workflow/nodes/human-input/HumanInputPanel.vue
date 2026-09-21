@@ -14,11 +14,47 @@
     <div class="panel-body">
       <!-- 1. 交付通知渠道 (Delivery Methods) -->
       <div class="form-section">
-        <div class="section-label">交付/通知途径 (DELIVERY METHODS)</div>
-        <el-checkbox-group :model-value="deliveryMethods" :disabled="readOnly" class="checkbox-group" @change="onDeliveryMethodsChange">
-          <el-checkbox value="webapp" :disabled="readOnly || webAppAddDisabled">🤖 WebApp 弹窗与对话交互</el-checkbox>
-          <el-checkbox value="email">✉️ Email 邮件通知交互</el-checkbox>
-        </el-checkbox-group>
+        <div class="section-label">交付方式</div>
+        <div class="delivery-list">
+          <div class="delivery-item" :class="{ active: deliveryMethods.includes('webapp') }">
+            <span class="delivery-icon webapp-icon" aria-hidden="true">
+              <svg viewBox="0 0 20 20" fill="none">
+                <rect x="3.25" y="5.25" width="13.5" height="10.5" rx="2.25" />
+                <path d="M7 9h.01M13 9h.01M7.25 12.25h5.5M10 5.25V3.5M8.5 3.5h3" />
+              </svg>
+            </span>
+            <span class="delivery-copy">
+              <strong>WebApp</strong>
+              <small>在应用内展示表单并等待用户响应</small>
+            </span>
+            <el-switch
+              :model-value="deliveryMethods.includes('webapp')"
+              size="small"
+              :disabled="readOnly || (webAppAddDisabled && !deliveryMethods.includes('webapp'))"
+              aria-label="启用 WebApp 交付方式"
+              @change="setDeliveryMethod('webapp', $event)"
+            />
+          </div>
+          <div class="delivery-item" :class="{ active: deliveryMethods.includes('email') }">
+            <span class="delivery-icon email-icon" aria-hidden="true">
+              <svg viewBox="0 0 20 20" fill="none">
+                <rect x="2.75" y="4.25" width="14.5" height="11.5" rx="2.25" />
+                <path d="m4 6 6 4.5L16 6" />
+              </svg>
+            </span>
+            <span class="delivery-copy">
+              <strong>Email</strong>
+              <small>通过邮件发送通知并收集人工输入</small>
+            </span>
+            <el-switch
+              :model-value="deliveryMethods.includes('email')"
+              size="small"
+              :disabled="readOnly"
+              aria-label="启用 Email 交付方式"
+              @change="setDeliveryMethod('email', $event)"
+            />
+          </div>
+        </div>
         <HumanInputEmailConfig
           v-if="deliveryMethods.includes('email')"
           v-model="emailConfig"
@@ -232,6 +268,13 @@ function onDeliveryMethodsChange(types) {
   deliveryMethods.value = next
 }
 
+function setDeliveryMethod(type, enabled) {
+  const next = new Set(deliveryMethods.value)
+  if (enabled) next.add(type)
+  else next.delete(type)
+  onDeliveryMethodsChange([...next])
+}
+
 const nodeTitle = computed({
   get: () => props.nodeData?.title || '人机交互',
   set: (val) => emit('update:nodeData', { ...props.nodeData, title: val })
@@ -344,7 +387,39 @@ const outputType = type => ({
 .section-label { font-size: 11px; font-weight: 700; color: #64748b; letter-spacing: 0.5px; }
 .actions-group { display: flex; align-items: center; gap: 6px; }
 
-.checkbox-group { display: flex; flex-direction: column; gap: 6px; }
+.delivery-list { display: flex; flex-direction: column; gap: 8px; }
+.delivery-item {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 8px 10px;
+  border: 1px solid #eaecf0;
+  border-radius: 10px;
+  background: #fcfcfd;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 3%);
+  transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+}
+.delivery-item:hover { border-color: #d0d5dd; box-shadow: 0 2px 5px rgb(16 24 40 / 5%); }
+.delivery-item.active { border-color: #b2ccff; background: #f5f8ff; }
+.delivery-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 60%);
+  border-radius: 7px;
+  color: #fff;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 10%);
+}
+.delivery-icon svg { width: 18px; height: 18px; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.webapp-icon { background: #6172f3; }
+.email-icon { background: #2e90fa; }
+.delivery-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 1px; }
+.delivery-copy strong { color: #344054; font-size: 12px; font-weight: 600; line-height: 17px; }
+.delivery-copy small { overflow: hidden; color: #98a2b3; font-size: 10px; line-height: 14px; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 编辑与预览 */
 .editor-wrapper { display: flex; flex-direction: column; }

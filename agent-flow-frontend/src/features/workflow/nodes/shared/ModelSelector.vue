@@ -1,26 +1,20 @@
 <!-- panel/base/ModelSelector.vue -->
 <template>
-  <div class="model-selector">
-    <el-select
-      :model-value="selectedKey"
-      :placeholder="placeholder"
-      :disabled="disabled || readOnly || !modelStore.hasConfiguredModels"
-      filterable
-      clearable
-      default-first-option
-      :filter-method="onFilter"
-      class="w-full"
-      popper-class="workflow-model-select-popper"
-      @change="onSelect"
-      @visible-change="onVisibleChange"
-    >
-      <template v-if="selectedKey" #prefix>
-        <ModelIcon
-          :provider="modelValue?.provider || ''"
-          :model-name="modelValue?.name || ''"
-          size="sm"
-        />
-      </template>
+  <div class="model-selector" :class="{ 'has-selection': selectedKey }">
+    <div class="model-select-control">
+      <el-select
+        :model-value="selectedKey"
+        :placeholder="placeholder"
+        :disabled="disabled || readOnly || !modelStore.hasConfiguredModels"
+        filterable
+        clearable
+        default-first-option
+        :filter-method="onFilter"
+        class="w-full"
+        popper-class="workflow-model-select-popper"
+        @change="onSelect"
+        @visible-change="onVisibleChange"
+      >
       <el-option-group
         v-for="provider in filteredProviders"
         :key="provider.provider"
@@ -29,7 +23,7 @@
         <el-option
           v-for="m in provider.models"
           :key="provider.provider + '/' + m.model"
-          :label="optionSearchLabel(provider, m)"
+          :label="m.label || m.model"
           :value="provider.provider + '::' + m.model"
         >
           <div class="model-option">
@@ -50,9 +44,25 @@
       <template v-if="!filteredProviders.length && modelStore.hasConfiguredModels" #empty>
         <div class="empty-search">无匹配模型，试试模型名如 gpt-4o</div>
       </template>
-    </el-select>
+      </el-select>
+      <div v-if="selectedKey && !selectOpen" class="selected-model" aria-hidden="true">
+        <ModelIcon
+          :provider="modelValue?.provider || ''"
+          :model-name="modelValue?.name || ''"
+          size="sm"
+        />
+        <span class="selected-model-name">{{ selectedModelLabel }}</span>
+        <span v-if="selectedProviderLabel" class="selected-provider">{{ selectedProviderLabel }}</span>
+      </div>
+    </div>
     <p v-if="modelStore.loading" class="hint">正在加载工作区模型…</p>
     <p v-else-if="modelStore.loadError" class="hint error">{{ modelStore.loadError }}</p>
+    <p v-else-if="selectedUnavailable" class="hint warn">
+      已选择 {{ modelValue?.name }}，但当前工作区模型目录中不可用。
+    </p>
+    <p v-else-if="selectedIncompatible" class="hint warn">
+      当前模型不支持函数调用，请选择带 Tool 能力的模型。
+    </p>
     <p v-else-if="!modelStore.hasConfiguredModels" class="hint warn">
       工作区尚无可用模型。请先到
       <RouterLink :to="{ path: '/integrations', query: { tab: 'models' } }">工作区集成 → 模型提供商</RouterLink>
@@ -83,6 +93,7 @@ const emit = defineEmits(['update:modelValue', 'change'])
 
 const modelStore = useModelStore()
 const searchQuery = ref('')
+const selectOpen = ref(false)
 
 onMounted(() => {
   modelStore.hydrateModelWorkspace?.()
@@ -91,10 +102,30 @@ onMounted(() => {
 const selectedKey = computed(() => {
   const { provider, name } = props.modelValue || {}
   if (!provider || !name) return ''
-  if (props.requireToolCall && !supportsFunctionCalling(modelStore.getModelSpec(name, provider)))
-    return ''
   return `${provider}::${name}`
 })
+
+const selectedSpec = computed(() => modelStore.getModelSpec(
+  props.modelValue?.name,
+  props.modelValue?.provider,
+))
+const selectedProvider = computed(() => modelStore.getProvider?.(props.modelValue?.provider) || null)
+const selectedModelLabel = computed(() => (
+  selectedSpec.value?.label || props.modelValue?.name || props.placeholder
+))
+const selectedProviderLabel = computed(() => {
+  const label = selectedProvider.value?.label
+  if (typeof label === 'string') return label
+  return label?.zh_Hans || label?.en_US || props.modelValue?.provider || ''
+})
+const selectedUnavailable = computed(() => (
+  !!selectedKey.value && modelStore.loaded && !selectedSpec.value
+))
+const selectedIncompatible = computed(() => (
+  props.requireToolCall
+  && !!selectedSpec.value
+  && !supportsFunctionCalling(selectedSpec.value)
+))
 
 function optionSearchLabel(provider, model) {
   const label = String(model?.label || model?.model || '')
@@ -132,6 +163,7 @@ function onFilter(query) {
 }
 
 function onVisibleChange(open) {
+  selectOpen.value = open
   if (!open)
     searchQuery.value = ''
 }
@@ -178,6 +210,37 @@ function onSelect(key) {
 
 <style scoped>
 .model-selector { width: 100%; }
+.model-select-control { position: relative; width: 100%; }
+.selected-model {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: 42px;
+  left: 30px;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+.selected-model-name {
+  min-width: 0;
+  overflow: hidden;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.selected-provider {
+  min-width: 0;
+  overflow: hidden;
+  color: #98a2b3;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .model-option {
   display: flex;
   align-items: center;
@@ -219,15 +282,8 @@ function onSelect(key) {
 </style>
 
 <style>
-/* Selected value: keep icon + text aligned inside el-select */
-.model-selector .el-select__prefix {
-  display: inline-flex;
-  align-items: center;
-  margin-right: 4px;
-}
-.model-selector .el-select__selection .el-select__selected-item {
-  display: inline-flex;
-  align-items: center;
+.model-selector.has-selection .el-select__placeholder {
+  visibility: hidden;
 }
 .workflow-model-select-popper .el-select-dropdown__item {
   height: auto;

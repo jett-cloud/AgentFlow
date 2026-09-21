@@ -51,32 +51,53 @@
 
     <div v-if="tools.length" class="tool-list">
       <div v-for="tool in tools" :key="toolKey(tool)" class="tool-row">
-        <div class="tool-main">
-          <el-switch
-            :model-value="tool.enabled !== false"
-            size="small"
-            :disabled="readOnly"
-            @change="(val) => onToggle(tool, val)"
-          />
-          <span class="tool-icon sm" :style="iconStyle(resolveCatalog(tool) || tool)">
-            <img
-              v-if="iconMeta(resolveCatalog(tool) || tool)?.type === 'url'"
-              :src="iconMeta(resolveCatalog(tool) || tool).value"
-              alt=""
-              class="tool-icon-img"
+        <div class="tool-head">
+          <div class="tool-main">
+            <span class="tool-icon sm" :style="iconStyle(resolveCatalog(tool) || tool)">
+              <img
+                v-if="iconMeta(resolveCatalog(tool) || tool)?.type === 'url'"
+                :src="iconMeta(resolveCatalog(tool) || tool).value"
+                alt=""
+                class="tool-icon-img"
+              >
+              <span v-else>{{ iconMeta(resolveCatalog(tool) || tool)?.value || '?' }}</span>
+            </span>
+            <span class="tool-copy">
+              <strong class="tool-label">{{ labelFor(tool) }}</strong>
+              <span class="tool-meta">{{ toolMetaFor(tool) }}</span>
+            </span>
+          </div>
+          <div class="tool-head-actions">
+            <el-switch
+              :model-value="tool.enabled !== false"
+              size="small"
+              :disabled="readOnly"
+              :aria-label="`${labelFor(tool)} 启用状态`"
+              @change="(val) => onToggle(tool, val)"
+            />
+            <el-button
+              v-if="!readOnly"
+              class="remove-tool"
+              size="small"
+              text
+              circle
+              type="danger"
+              :aria-label="`删除 ${labelFor(tool)}`"
+              title="删除工具"
+              @click="onRemove(tool)"
             >
-            <span v-else>{{ iconMeta(resolveCatalog(tool) || tool)?.value || '?' }}</span>
-          </span>
-          <span class="tool-label">{{ labelFor(tool) }}</span>
+              <el-icon><Delete /></el-icon>
+            </el-button>
+          </div>
         </div>
-        <div class="tool-actions">
+        <div v-if="supportsCredentials(tool)" class="credential-row">
+          <span class="credential-label">凭证</span>
           <el-select
-            v-if="supportsCredentials(tool)"
             :model-value="tool.credential_ref?.id || ''"
             clearable
             size="small"
-            placeholder="凭证"
-            style="width: 140px"
+            placeholder="选择凭证"
+            class="credential-select"
             :disabled="readOnly"
             @change="(val) => onCredential(tool, val)"
             @visible-change="(open) => open && loadCredentials(tool)"
@@ -89,21 +110,16 @@
             />
           </el-select>
           <el-button
-            v-if="supportsCredentials(tool) && !readOnly"
+            v-if="!readOnly"
+            class="credential-add"
             size="small"
-            text
+            plain
+            circle
+            aria-label="新建凭证"
+            title="新建凭证"
             @click="openCredentialDialog(tool)"
           >
-            新建凭证
-          </el-button>
-          <el-button
-            v-if="!readOnly"
-            size="small"
-            text
-            type="danger"
-            @click="onRemove(tool)"
-          >
-            删除
+            <el-icon><Plus /></el-icon>
           </el-button>
         </div>
       </div>
@@ -120,6 +136,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import { Delete, Plus } from '@element-plus/icons-vue'
 import PanelSection from '../shared/PanelSection.vue'
 import BuiltinToolCredentialDialog from '../tool/BuiltinToolCredentialDialog.vue'
 import { useToolStore } from '@/features/integrations/state/useToolStore.js'
@@ -187,6 +204,13 @@ function toolKey(tool) {
 
 function labelFor(tool) {
   return difyToolLabel(tool, query => toolStore.findTool(query))
+}
+
+function toolMetaFor(tool) {
+  const catalog = resolveCatalog(tool) || tool
+  const provider = catalog?.provider_name || catalog?.provider_id || tool?.provider_id || 'Tool'
+  const name = catalog?.tool_name || tool?.tool_name
+  return name ? `${provider} · ${name}` : provider
 }
 
 function resolveCatalog(tool) {
@@ -293,17 +317,29 @@ function onCredentialCreated({ credentialId, credentials }) {
 .hint.error { color: #b42318; }
 .tool-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .tool-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 8px;
+  display: grid;
+  gap: 10px;
+  padding: 10px;
   border: 1px solid #eaecf0;
-  border-radius: 6px;
+  border-radius: 10px;
+  background: #fcfcfd;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 3%);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
 }
-.tool-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.tool-label { font-size: 12px; color: #344054; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tool-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.tool-row:hover { border-color: #d0d5dd; box-shadow: 0 2px 5px rgb(16 24 40 / 5%); }
+.tool-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.tool-main { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.tool-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 1px; }
+.tool-label { font-size: 12px; font-weight: 600; line-height: 17px; color: #344054; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-meta { overflow: hidden; color: #98a2b3; font-size: 10px; line-height: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.tool-head-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; }
+.remove-tool { opacity: 0; transition: opacity 150ms ease; }
+.tool-row:hover .remove-tool,
+.remove-tool:focus-visible { opacity: 1; }
+.credential-row { display: flex; min-width: 0; align-items: center; gap: 8px; padding-top: 8px; border-top: 1px solid #f2f4f7; }
+.credential-label { flex: 0 0 auto; color: #667085; font-size: 11px; font-weight: 500; }
+.credential-select { min-width: 0; flex: 1; }
+.credential-add { flex: 0 0 auto; }
 .tool-option {
   display: flex;
   align-items: center;

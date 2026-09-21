@@ -123,14 +123,15 @@ const executorLabel = computed(() => (
 .detail-panel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
+  padding: 16px;
 }
 .status-strip {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  padding: 10px;
-  border-radius: 10px;
+  gap: 12px 16px;
+  padding: 14px 16px;
+  border-radius: 12px;
   background: #f9fafb;
   border: 1px solid #eaecf0;
 }
@@ -141,21 +142,21 @@ const executorLabel = computed(() => (
   display: flex;
   flex-direction: column;
   gap: 2px;
-  font-size: 12px;
+  font-size: 13px;
   color: #101828;
 }
 .label {
   color: #98a2b3;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
 }
 .error {
-  padding: 8px 10px;
+  padding: 10px 12px;
   border-radius: 8px;
   background: #fef3f2;
   color: #b42318;
-  font-size: 12px;
+  font-size: 13px;
 }
 .hint-btn {
   align-self: flex-start;
@@ -163,24 +164,27 @@ const executorLabel = computed(() => (
   border: 0;
   background: transparent;
   color: #0033ff;
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
 }
 h3 {
-  margin: 4px 0 0;
+  margin: 6px 0 -6px;
   color: #667085;
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
 }
 .body {
   margin: 0;
-  max-height: 180px;
+  max-height: 260px;
   overflow: auto;
-  padding: 10px;
-  border-radius: 8px;
-  background: #f2f4f7;
+  padding: 14px;
+  border: 1px solid #eaecf0;
+  border-radius: 10px;
+  background: #f8fafc;
   color: #101828;
-  font: 11px/1.5 ui-monospace, Consolas, monospace;
+  font: 12px/1.65 ui-monospace, Consolas, monospace;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -188,13 +192,14 @@ h3 {
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  padding: 2px 0 8px;
 }
 .meta > div {
   display: grid;
   grid-template-columns: 90px 1fr;
   gap: 8px;
-  font-size: 12px;
+  font-size: 13px;
 }
 dt { color: #667085; margin: 0; }
 dd { margin: 0; color: #101828; word-break: break-all; }
