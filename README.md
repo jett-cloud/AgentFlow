@@ -8,45 +8,33 @@ AgentFlow 是一个面向 AI 应用开发的可视化 Agent 工作流平台，�
 
 ## Core Features
 
-- **Visual Workflow Builder** — 基于可视化节点构建和编排 AI 工作流
-- **Agent Execution** — 支持 Agent 运行与任务执行流程
-- **RAG / Knowledge Base** — 支持知识库与检索增强生成
-- **MCP Integration** — 接入 MCP Server 与外部工具
-- **Streaming Workflow Assist** — 基于 SSE 展示实时 Agent / Workflow 执行过程
-- **AI Tool Generator** — AI 辅助生成、校验和管理工具插件
-- **Docker Development Environment** — 提供完整的本地容器化开发环境
+- **Agent Workflow Generation** — 用自然语言描述需求，由 Agent 多轮调用工具生成、修改并校验工作流
 
-## Preview
+  ![Agent Workflow Generation](docs/screenshots/agentFlow.gif)
 
-### Visual Workflow
+- **Workflow Execution** — 在画布上运行工作流，查看节点执行过程与输出
 
-![Visual Workflow](docs/screenshots/work-flow.png)
+  ![Workflow Execution](docs/screenshots/flow.gif)
 
-### Workflow Assist
+- **Model & Tool Marketplace** — 接入大模型，并在工具插件市场浏览和安装插件
 
-![Workflow Assist](docs/screenshots/work-assistant.png)
+  ![Model and Tool Marketplace](docs/screenshots/market.gif)
 
-### AI Tool Generator
+- **AI Tool Plugin Generation** — 由 AI 生成、校验并发布自定义工具插件
 
-![AI Tool Generator](docs/screenshots/tool.png)
+  ![AI Tool Plugin Generation](docs/screenshots/tool-agent.gif)
 
-## What I Built
+- **MCP Integration** — 连接 MCP Server，把外部工具接入工作流
 
-AgentFlow 基于 Dify 的开源能力进行扩展和重新组织，项目重点聚焦于 AI Agent 工作流的可视化编排、运行过程展示以及 MCP 工具集成。
+  ![MCP Integration](docs/screenshots/mcp.gif)
 
-在现有开源基础上，本项目主要进行了以下开发和整合：
+- **RAG Knowledge Base** — 创建知识库、导入文档并构建可检索的数据
 
-- **独立 Vue 3 工作流前端** — 使用 Vue 3、Vite、Pinia、Vue Router 和 Vue Flow 构建独立的工作流管理界面。
-- **Visual Workflow Editor** — 实现可视化节点编排、节点状态管理、工作流 DSL 处理以及运行状态展示。
-- **Streaming Workflow Assist** — 实现基于 SSE 的流式消息处理、Agent 执行状态展示、会话管理以及运行事件展示。
-- **MCP Integration** — 集成 MCP Client、Tool Provider 管理、OAuth 回调以及 MCP 工具调用能力。
-- **AI Tool Generator** — 提供 AI 辅助工具插件生成、校验、测试、发布以及卸载相关能力。
-- **Dataset Management UI** — 提供知识库、文档、检索测试、数据管道和外部知识库相关管理界面。
-- **Local Development Environment** — 整合 Docker Compose、PostgreSQL、Redis、Vector Database、Sandbox 和 Agent Runtime，提供本地开发环境。
+  ![RAG Knowledge Base](docs/screenshots/rag.gif)
 
-> AgentFlow 不是从零重新实现 Dify，而是在其开源基础上进行学习、集成、裁剪和功能扩展。项目中来自上游 Dify 的代码及相关许可信息请参见 [LICENSE](LICENSE)。
 
-## Architecture
+
+### Architecture
 
 AgentFlow 采用前后端分离架构，并通过 Agent Runtime、数据库、缓存和向量数据库提供 AI Workflow 的运行能力。
 
@@ -81,15 +69,21 @@ AgentFlow 采用前后端分离架构，并通过 Agent Runtime、数据库、�
    PostgreSQL  Redis   Vector DB
 ```
 
+
+
 ### Tech Stack
 
-| Layer | Directory | Technologies |
-| --- | --- | --- |
-| Frontend | `agent-flow-frontend/` | Vue 3, Vite, Pinia, Vue Router, Vue Flow, Element Plus |
-| Backend API | `api/` | Python 3.12, Flask, Celery, SQLAlchemy, Pydantic, uv |
-| Agent SDK | `dify-agent/` | Python, Pydantic AI, HTTPX |
-| Agent Runtime | `dify-agent-runtime/` | Go |
-| Infrastructure | `docker/` | Docker Compose, PostgreSQL, Redis, Sandbox, Vector Database |
+
+| Layer          | Directory              | Technologies                                                |
+| -------------- | ---------------------- | ----------------------------------------------------------- |
+| Frontend       | `agent-flow-frontend/` | Vue 3, Vite, Pinia, Vue Router, Vue Flow, Element Plus      |
+| Backend API    | `api/`                 | Python 3.12, Flask, Celery, SQLAlchemy, Pydantic, uv        |
+| Agent SDK      | `dify-agent/`          | Python, Pydantic AI, HTTPX                                  |
+| Agent Runtime  | `dify-agent-runtime/`  | Go                                                          |
+| Infrastructure | `docker/`              | Docker Compose, PostgreSQL, Redis, Sandbox, Vector Database |
+
+
+
 
 ## Project Structure
 
@@ -103,13 +97,19 @@ AgentFlow/
 └── docs/                  # 项目文档与功能截图
 ```
 
+
+
 ## Requirements
 
 - Node.js 22 与 npm
 - Python 3.12
 - Docker Desktop 与 Docker Compose
 
+
+
 ## Quick Start
+
+
 
 ### 1. Prepare the environment
 
@@ -119,11 +119,15 @@ AgentFlow/
 python docker/prepare_dev_env.py
 ```
 
+
+
 ### 2. Start the backend
 
 ```bash
 docker compose -f docker/docker-compose.yaml -f docker/docker-compose.local.yaml up -d --build
 ```
+
+
 
 ### 3. Start the frontend
 
