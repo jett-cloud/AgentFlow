@@ -37,8 +37,6 @@ test('external datasets hide documents and pipeline tabs', () => {
   assert.deepEqual(names, [
     'dataset-hit-testing',
     'dataset-settings',
-    'dataset-access-config',
-    'dataset-api',
   ])
 })
 
@@ -54,6 +52,5 @@ test('access-config tab is hidden without capability', () => {
     'dataset-hit-testing',
     'dataset-settings',
     'dataset-pipeline',
-    'dataset-api',
   ])
 })

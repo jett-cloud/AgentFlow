@@ -82,17 +82,48 @@
           测试
         </el-button>
 
-        <div v-if="records.length" class="history">
-          <h3>历史查询</h3>
-          <button
-            v-for="item in records"
-            :key="item.id"
-            type="button"
-            class="hist-item"
-            @click="query = item.content || item.query || ''"
-          >
-            {{ item.content || item.query }}
-          </button>
+        <div class="history">
+          <div class="history-header">
+            <h3>历史查询</h3>
+            <span v-if="historyTotal">{{ historyTotal }} 条</span>
+          </div>
+          <div class="history-list" v-loading="historyLoading">
+            <button
+              v-for="item in historyRecords"
+              :key="item.id"
+              type="button"
+              class="hist-item"
+              :title="item.text"
+              @click="query = item.text"
+            >
+              <span class="hist-query">{{ item.text }}</span>
+              <time
+                v-if="item.createdAt"
+                :datetime="new Date(item.createdAt * 1000).toISOString()"
+                class="hist-time"
+              >
+                {{ new Date(item.createdAt * 1000).toLocaleString('zh-CN', {
+                  month: '2-digit',
+                  day: '2-digit',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  hour12: false,
+                }) }}
+              </time>
+            </button>
+            <p v-if="!historyRecords.length" class="history-empty">暂无历史查询</p>
+          </div>
+          <el-pagination
+            v-if="historyTotal > historyPageSize"
+            v-model:current-page="historyPage"
+            class="history-pagination"
+            small
+            background
+            layout="prev, pager, next"
+            :page-size="historyPageSize"
+            :total="historyTotal"
+            @current-change="loadHistory"
+          />
         </div>
       </section>
 
@@ -131,7 +162,7 @@ import {
   isExternalDataset,
   selectHitTestingApi,
 } from '@/features/datasets/model/hitTestingRequest.js'
-import { resolveHitTestingSearch } from '@/features/datasets/model/hitTestingState.js'
+import { normalizeHitTestingHistoryPage, resolveHitTestingSearch } from '@/features/datasets/model/hitTestingState.js'
 import {
   flattenModelCatalog,
   isRerankConfigValid,
@@ -152,7 +183,11 @@ const rerankModels = ref([])
 const running = ref(false)
 const tested = ref(false)
 const recordsHits = ref([])
-const records = ref([])
+const historyRecords = ref([])
+const historyPage = ref(1)
+const historyPageSize = 5
+const historyTotal = ref(0)
+const historyLoading = ref(false)
 const indexWarning = ref('')
 const isExternal = ref(false)
 const canRetrievalRecall = ref(true)
@@ -239,13 +274,21 @@ async function loadRetrievalState() {
   }
 }
 
-async function loadHistory() {
+async function loadHistory(page = historyPage.value) {
+  historyLoading.value = true
   try {
-    const res = await fetchHitTestingRecords(datasetId(), { page: 1, limit: 10 })
-    records.value = res.data || []
+    const res = await fetchHitTestingRecords(datasetId(), { page, limit: historyPageSize })
+    const history = normalizeHitTestingHistoryPage(res)
+    historyRecords.value = history.rows
+    historyPage.value = history.page
+    historyTotal.value = history.total
   }
   catch {
-    records.value = []
+    historyRecords.value = []
+    historyTotal.value = 0
+  }
+  finally {
+    historyLoading.value = false
   }
 }
 
@@ -282,7 +325,8 @@ async function runTest() {
         })
     const res = await request(datasetId(), body)
     recordsHits.value = res.records || res.data || []
-    await loadHistory()
+    historyPage.value = 1
+    await loadHistory(1)
   }
   catch (e) {
     ElMessage.error(e.message || '召回测试失败')
@@ -334,25 +378,69 @@ onMounted(() => {
 .params { margin: 12px 0; }
 .index-warning { margin-bottom: 12px; }
 .history { margin-top: 20px; }
+.history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.history-header span {
+  color: #98a2b3;
+  font-size: 12px;
+}
 .history h3, .result-panel h3 {
-  margin: 0 0 10px;
+  margin: 0;
   font-size: 14px;
   color: #344054;
 }
+.history-list {
+  border: 1px solid #eaecf0;
+  border-radius: 8px;
+}
 .hist-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   width: 100%;
   text-align: left;
-  border: 1px solid #eaecf0;
-  background: #f8fafc;
-  border-radius: 8px;
+  border: 0;
+  border-bottom: 1px solid #eaecf0;
+  background: #fff;
   padding: 8px 10px;
-  margin-bottom: 6px;
   cursor: pointer;
-  font-size: 12px;
   color: #475467;
 }
-.hist-item:hover { border-color: #b2ccff; }
+.hist-item:last-of-type { border-bottom: 0; }
+.hist-item:hover {
+  background: #f8faff;
+}
+.hist-query {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: #344054;
+  font-size: 13px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hist-time {
+  flex-shrink: 0;
+  color: #98a2b3;
+  font-size: 11px;
+}
+.history-pagination {
+  justify-content: center;
+  margin-top: 10px;
+}
+.history-empty {
+  margin: 0;
+  padding: 20px 12px;
+  color: #98a2b3;
+  font-size: 12px;
+  text-align: center;
+}
 .hit-card {
   border: 1px solid #eaecf0;
   border-radius: 10px;

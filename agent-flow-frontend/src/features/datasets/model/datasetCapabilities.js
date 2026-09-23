@@ -18,7 +18,7 @@ export function getDatasetCapabilities(permissionKeys) {
   }
 }
 
-export function visibleDatasetTabs({ datasetId, isExternal, canAccessConfig }) {
+export function visibleDatasetTabs({ datasetId, isExternal }) {
   const tabs = []
   if (!isExternal) {
     tabs.push({ name: 'dataset-documents', label: '文档', to: `/datasets/${datasetId}/documents` })
@@ -28,9 +28,5 @@ export function visibleDatasetTabs({ datasetId, isExternal, canAccessConfig }) {
   if (!isExternal) {
     tabs.push({ name: 'dataset-pipeline', label: '流水线', to: `/datasets/${datasetId}/pipeline` })
   }
-  if (canAccessConfig) {
-    tabs.push({ name: 'dataset-access-config', label: '访问控制', to: `/datasets/${datasetId}/access-config` })
-  }
-  tabs.push({ name: 'dataset-api', label: 'API', to: `/datasets/${datasetId}/api` })
   return tabs
 }

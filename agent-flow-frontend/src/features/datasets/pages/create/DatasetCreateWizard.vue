@@ -15,8 +15,12 @@
       <h2>数据来源</h2>
       <el-radio-group v-model="dataSourceType" class="source-tabs">
         <el-radio-button value="upload_file">导入已有文本</el-radio-button>
-        <el-radio-button value="notion_import">Notion</el-radio-button>
-        <el-radio-button value="website_crawl">网页</el-radio-button>
+        <el-radio-button v-if="remoteDataSourcesEnabled" value="notion_import">
+          Notion
+        </el-radio-button>
+        <el-radio-button v-if="remoteDataSourcesEnabled" value="website_crawl">
+          网页
+        </el-radio-button>
       </el-radio-group>
 
       <div v-if="dataSourceType === 'upload_file'" class="upload-box">
@@ -43,13 +47,13 @@
       </div>
 
       <NotionSourcePanel
-        v-else-if="dataSourceType === 'notion_import'"
+        v-else-if="remoteDataSourcesEnabled && dataSourceType === 'notion_import'"
         v-model="notionState"
         :dataset-id="resolvedDatasetIdForSource"
       />
 
       <WebsiteSourcePanel
-        v-else
+        v-else-if="remoteDataSourcesEnabled && dataSourceType === 'website_crawl'"
         v-model="websiteState"
       />
 
@@ -278,6 +282,7 @@ const datasetStore = useDatasetStore()
 
 const step = ref(1)
 const dataSourceType = ref('upload_file')
+const remoteDataSourcesEnabled = false
 const pendingFiles = ref([])
 const notionState = ref({ credentialId: '', pages: [] })
 const websiteState = ref({

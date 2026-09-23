@@ -27,7 +27,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useDatasetStore } from '@/features/datasets/state/useDatasetStore.js'
 import { isExternalDataset, shouldRedirectExternalDataset } from '@/features/datasets/model/hitTestingRequest.js'
-import { getDatasetCapabilities, visibleDatasetTabs } from '@/features/datasets/model/datasetCapabilities.js'
+import { visibleDatasetTabs } from '@/features/datasets/model/datasetCapabilities.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -36,12 +36,10 @@ const loading = ref(false)
 const dataset = computed(() => store.currentDataset)
 const isPipelineEditor = computed(() => route.name === 'dataset-pipeline')
 const isExternal = computed(() => isExternalDataset(dataset.value))
-const capabilities = computed(() => getDatasetCapabilities(dataset.value?.permission_keys))
 
 const tabs = computed(() => visibleDatasetTabs({
   datasetId: route.params.datasetId,
   isExternal: isExternal.value,
-  canAccessConfig: capabilities.value.canAccessConfig,
 }))
 
 function isActive(tab) {

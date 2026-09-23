@@ -1,6 +1,30 @@
 const VECTOR_SEARCH_METHODS = new Set(['semantic_search', 'hybrid_search'])
 const READY_STATUSES = new Set(['completed', 'available'])
 
+export function normalizeHitTestingHistory(records) {
+  return (Array.isArray(records) ? records : []).flatMap((record) => {
+    const queries = Array.isArray(record?.queries) ? record.queries : []
+    const textQuery = queries.find(item => item?.content_type === 'text_query' && item.content?.trim())
+    const imageQuery = queries.find(item => item?.content_type === 'image_query' && item.file_info?.name)
+    const text = textQuery?.content?.trim() || imageQuery?.file_info?.name || ''
+
+    return text
+      ? [{ id: record.id, text, createdAt: record.created_at }]
+      : []
+  })
+}
+
+export function normalizeHitTestingHistoryPage(response) {
+  const page = Number(response?.page)
+  const total = Number(response?.total)
+
+  return {
+    rows: normalizeHitTestingHistory(response?.data),
+    page: Number.isFinite(page) && page > 0 ? page : 1,
+    total: Number.isFinite(total) && total > 0 ? total : 0,
+  }
+}
+
 function documentStatus(document) {
   return String(document?.display_status || document?.indexing_status || '').toLowerCase()
 }
