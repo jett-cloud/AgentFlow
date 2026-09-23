@@ -5,6 +5,8 @@ import re
 
 import yaml
 
+from services.tool_plugin_generator.preview_mapper import sanitize_plugin_id_segment
+
 REQUIRED_PATHS: tuple[str, ...] = (
     "manifest.yaml",
     "main.py",
@@ -52,7 +54,12 @@ class ToolPluginValidationError(Exception):
         super().__init__("; ".join(errors))
 
 
-def validate_plugin_files(files: dict[str, str]) -> None:
+def validate_plugin_files(
+    files: dict[str, str],
+    *,
+    author: str | None = None,
+    plugin_name: str | None = None,
+) -> None:
     errors: list[str] = []
 
     for required_path in REQUIRED_PATHS:
@@ -103,6 +110,24 @@ def validate_plugin_files(files: dict[str, str]) -> None:
             ast.parse(content)
         except SyntaxError as exc:
             errors.append(f"Invalid Python syntax in {path}: {exc.msg} (line {exc.lineno})")
+
+    if author is not None and plugin_name is not None:
+        manifest_content = files.get("manifest.yaml") or files.get("manifest.yml") or ""
+        try:
+            manifest = yaml.safe_load(manifest_content) or {}
+        except yaml.YAMLError:
+            manifest = {}
+        if isinstance(manifest, dict):
+            actual_identity = (
+                sanitize_plugin_id_segment(str(manifest.get("author") or "")),
+                sanitize_plugin_id_segment(str(manifest.get("name") or "")),
+            )
+            expected_identity = (
+                sanitize_plugin_id_segment(author),
+                sanitize_plugin_id_segment(plugin_name),
+            )
+            if actual_identity != expected_identity:
+                errors.append("Manifest identity must match the server-owned studio session identity")
 
     if errors:
         raise ToolPluginValidationError(errors)

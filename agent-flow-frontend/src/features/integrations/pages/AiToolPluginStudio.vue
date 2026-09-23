@@ -118,6 +118,7 @@
 
     <el-dialog
       v-model="sandboxOpen"
+      class="tool-plugin-publish-dialog"
       title="发布插件"
       width="860px"
       destroy-on-close
@@ -166,6 +167,7 @@ import {
   isValidPluginIdentityName,
   isValidToolIdentityName,
   PLUGIN_IDENTITY_NAME_HINT,
+  prepareStudioSessionIdentity,
   TOOL_IDENTITY_NAME_HINT,
 } from '../tool-plugin/pluginIdentityHelpers.js'
 import { enrichPreviewToolFromFiles } from '../tool-plugin/previewFromFiles.js'
@@ -442,16 +444,15 @@ async function openSession(id) {
   statusError.value = false
 }
 
-async function handleNewSession() {
+async function handleNewSession(options = {}) {
+  const preparedIdentity = prepareStudioSessionIdentity(form, {
+    preserveIdentity: options?.preserveIdentity === true,
+  })
   try {
-    const detail = await createToolPluginSession({
-      author: form.author || '',
-      plugin_name: null,
-    })
+    const detail = await createToolPluginSession(preparedIdentity.createPayload)
     await refreshSessions()
     applySessionDetail(detail)
-    form.pluginName = ''
-    form.toolName = ''
+    Object.assign(form, preparedIdentity.formIdentity)
     sessionTitle.value = ''
     chatMessages.value = []
     files.value = {}
@@ -716,7 +717,7 @@ function handleStreamEvent(event) {
 async function ensureSession() {
   if (sessionId.value)
     return true
-  await handleNewSession()
+  await handleNewSession({ preserveIdentity: true })
   return Boolean(sessionId.value)
 }
 
@@ -910,6 +911,8 @@ function handleAskAgentToRepair() {
 async function handleDownload() {
   downloading.value = true
   try {
+    if (!ensureIdentityFields())
+      return
     if (!await validateFiles({ notify: false }))
       return
     const blob = await downloadToolPluginZip({
@@ -1179,5 +1182,26 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .studio-shell { grid-template-columns: 1fr; overflow: auto; }
   .split-main { grid-template-columns: 1fr; }
   .split-resizer { display: none; }
+}
+</style>
+
+<style>
+.tool-plugin-publish-dialog {
+  box-sizing: border-box;
+  display: flex;
+  height: min(760px, calc(100vh - 48px));
+  max-height: calc(100vh - 48px);
+  margin: 24px auto;
+  overflow: hidden;
+  flex-direction: column;
+}
+.tool-plugin-publish-dialog .el-dialog__header {
+  flex: none;
+}
+.tool-plugin-publish-dialog .el-dialog__body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
 }
 </style>

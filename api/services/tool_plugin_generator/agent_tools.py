@@ -318,7 +318,11 @@ def _validate(workspace: AgentWorkspace, _arguments: dict[str, Any]) -> str:
 
     workspace.files = normalize_plugin_source_files(workspace.files)
     try:
-        validate_plugin_files(workspace.files)
+        validate_plugin_files(
+            workspace.files,
+            author=workspace.author,
+            plugin_name=workspace.plugin_name,
+        )
     except ToolPluginValidationError as exc:
         return json.dumps({"ok": False, "errors": exc.errors})
     return json.dumps({"ok": True, "errors": []})

@@ -19,6 +19,30 @@ export const PLUGIN_FIELD_HELP = '整个插件包的名字（一个插件可含�
 export const TOOL_FIELD_HELP = '单个工具的英文标识，用下划线，不要用连字符'
 
 /**
+ * Capture the identity used when opening a Studio session. An implicit
+ * first-send session must preserve what the user already entered; only the
+ * explicit blank-session action clears plugin and tool names.
+ * @param {{ author?: unknown, pluginName?: unknown, toolName?: unknown }} form
+ * @param {{ preserveIdentity?: boolean }} [options]
+ */
+export function prepareStudioSessionIdentity(form, { preserveIdentity = false } = {}) {
+  const author = String(form?.author || '').trim()
+  const pluginName = String(form?.pluginName || '').trim()
+  const toolName = String(form?.toolName || '').trim()
+  return {
+    createPayload: {
+      author,
+      plugin_name: preserveIdentity ? pluginName : null,
+    },
+    formIdentity: {
+      author,
+      pluginName: preserveIdentity ? pluginName : '',
+      toolName: preserveIdentity ? toolName : '',
+    },
+  }
+}
+
+/**
  * Sanitize one org/plugin/provider segment / identity field.
  * Invalid chars become "-" so "Remove.bg" → "remove-bg" (`.` never retained).
  * Used for file-path / legacy data normalization — not for live input.

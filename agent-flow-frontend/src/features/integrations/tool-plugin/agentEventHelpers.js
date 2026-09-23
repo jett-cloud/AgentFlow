@@ -103,7 +103,60 @@ export function mergePersistedMessagesWithThinking(persistedMessages, liveMessag
   const thinking = Array.isArray(liveMessages)
     ? liveMessages.filter(message => message.role === 'thinking')
     : []
-  return [...persisted, ...thinking]
+  const pending = [...thinking]
+  const displayed = []
+  for (const message of persisted) {
+    displayed.push(message)
+    if (message.role !== 'tool')
+      continue
+    const callIds = new Set((message.tool_calls || [])
+      .map(call => String(call.id || call.call_id || '').trim())
+      .filter(Boolean))
+    if (!callIds.size)
+      continue
+    for (let index = 0; index < pending.length;) {
+      if (callIds.has(String(pending[index].call_id || '').trim()))
+        displayed.push(...pending.splice(index, 1))
+      else
+        index += 1
+    }
+  }
+  return [...displayed, ...pending]
+}
+
+/**
+ * A compact reactive dependency for any visible streaming text, including a
+ * thinking card that is no longer the last message after a tool row appears.
+ */
+export function agentStreamScrollVersion(messages) {
+  if (!Array.isArray(messages))
+    return ''
+  return messages.map((message, index) => {
+    if (message?.role !== 'thinking' && message?.role !== 'assistant')
+      return `${index}:${message?.role || ''}`
+    return [
+      index,
+      message.role,
+      message.call_id || '',
+      String(message.content || '').length,
+      message.done === true ? 1 : 0,
+    ].join(':')
+  }).join('|')
+}
+
+export function isAgentConversationPinned(container, threshold = 48) {
+  if (!container)
+    return true
+  return container.scrollHeight - container.scrollTop - container.clientHeight <= threshold
+}
+
+export function scrollAgentConversationToLatest(container, { scrollOuter = true } = {}) {
+  if (!container)
+    return
+  for (const detail of container.querySelectorAll?.('.thinking-card[open] .thinking-detail') || [])
+    detail.scrollTop = detail.scrollHeight
+  if (scrollOuter)
+    container.scrollTop = container.scrollHeight
 }
 
 export function upsertToolEventMessage(messages, event) {

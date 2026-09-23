@@ -592,11 +592,17 @@ async function handleDirectPublish() {
 
 <style scoped>
 .sandbox {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  flex-direction: column;
   border-top: 1px solid #eaecf0;
   background: #f9fafb;
 }
 .sandbox-header {
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -617,12 +623,15 @@ async function handleDirectPublish() {
 .sandbox-content {
   display: grid;
   grid-template-columns: minmax(280px, 1fr) minmax(300px, 1fr);
+  flex: 1;
   gap: 16px;
+  min-height: 0;
+  overflow: hidden;
   padding: 16px;
 }
 .node-preview {
   display: grid;
-  min-height: 220px;
+  min-height: 0;
   place-items: center;
   border: 1px dashed #d0d5dd;
   border-radius: 12px;
@@ -681,6 +690,10 @@ async function handleDirectPublish() {
   white-space: nowrap;
 }
 .parameter-panel {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   border: 1px solid #eaecf0;
   border-radius: 12px;
   background: #fff;
@@ -857,6 +870,11 @@ async function handleDirectPublish() {
 .authorization-error { margin: 12px 0 0; color: #b42318; font-size: 12px; }
 .authorization-error a { color: var(--af-brand-strong); }
 @media (max-width: 760px) {
-  .sandbox-content { grid-template-columns: 1fr; }
+  .sandbox-content {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+  .node-preview { min-height: 220px; }
+  .parameter-panel { overflow: visible; }
 }
 </style>

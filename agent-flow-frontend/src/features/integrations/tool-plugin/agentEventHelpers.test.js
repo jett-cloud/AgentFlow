@@ -7,6 +7,7 @@ import {
   upsertThinkingEvent,
   upsertToolEventMessage,
 } from './agentEventHelpers.js'
+import * as agentEventHelpers from './agentEventHelpers.js'
 
 test('tool result updates the matching call message', () => {
   const messages = []
@@ -155,4 +156,63 @@ test('completed stream merge keeps persisted tool calls and temporary thinking c
   const displayed = mergePersistedMessagesWithThinking(persisted, live)
 
   assert.deepEqual(displayed.map(message => message.role), ['tool', 'thinking'])
+})
+
+test('completed stream keeps thinking beside its tool and before the final answer', () => {
+  const persisted = [
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{ id: 'call-1', name: 'bootstrap_scaffold', result: '{"ok": true}' }],
+    },
+    { role: 'assistant', content: '最终答复' },
+  ]
+  const live = [{ role: 'thinking', call_id: 'call-1', content: '构建过程', done: true }]
+
+  const displayed = mergePersistedMessagesWithThinking(persisted, live)
+
+  assert.deepEqual(displayed.map(message => message.role), ['tool', 'thinking', 'assistant'])
+  assert.equal(displayed[2].content, '最终答复')
+})
+
+test('stream scroll version changes when a non-last thinking card receives a delta', () => {
+  assert.equal(typeof agentEventHelpers.agentStreamScrollVersion, 'function')
+  const messages = [
+    { role: 'thinking', call_id: 'call-1', content: '第一段', done: false },
+    { role: 'tool', content: '工具执行中' },
+  ]
+  const before = agentEventHelpers.agentStreamScrollVersion(messages)
+  messages[0].content += '第二段'
+
+  assert.notEqual(agentEventHelpers.agentStreamScrollVersion(messages), before)
+})
+
+test('scroll helper advances both the conversation and open thinking details', () => {
+  assert.equal(typeof agentEventHelpers.scrollAgentConversationToLatest, 'function')
+  const thinkingDetail = { scrollTop: 0, scrollHeight: 700 }
+  const conversation = {
+    scrollTop: 0,
+    scrollHeight: 1200,
+    querySelectorAll: () => [thinkingDetail],
+  }
+
+  agentEventHelpers.scrollAgentConversationToLatest(conversation, { scrollOuter: true })
+
+  assert.equal(thinkingDetail.scrollTop, 700)
+  assert.equal(conversation.scrollTop, 1200)
+})
+
+test('conversation auto-scroll pauses after the user moves away from the bottom', () => {
+  assert.equal(typeof agentEventHelpers.isAgentConversationPinned, 'function')
+
+  assert.equal(agentEventHelpers.isAgentConversationPinned({
+    scrollHeight: 1000,
+    scrollTop: 400,
+    clientHeight: 400,
+  }), false)
+  assert.equal(agentEventHelpers.isAgentConversationPinned({
+    scrollHeight: 1000,
+    scrollTop: 570,
+    clientHeight: 400,
+  }), true)
 })

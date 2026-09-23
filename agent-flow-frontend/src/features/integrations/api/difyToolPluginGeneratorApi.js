@@ -1,6 +1,7 @@
 import difyClient, { CSRF_HEADER_NAME, DIFY_API_PREFIX, getCsrfToken } from '../../../shared/http/difyClient.js'
 import { consumeSseText, parseSseBlock, shouldConsumeAsSse } from '../../../shared/http/difyProtocol.js'
 import { refreshAccessTokenOrReLogin } from '../../../shared/auth/difyRefreshToken.js'
+import { readBlobErrorMessage } from '../tool-plugin/downloadResponseHelpers.js'
 
 const LONG_TIMEOUT = { timeout: 600000 }
 
@@ -105,13 +106,22 @@ export async function agentTurnToolPluginStream(payload, { onEvent = () => {}, s
 }
 
 export async function downloadToolPluginZip(payload) {
-  const response = await difyClient.post('/workspaces/current/tool-plugin/download', payload, {
-    responseType: 'blob',
-    transformResponse: [data => data],
-  })
-  if (response instanceof Blob)
-    return response
-  return new Blob([response], { type: 'application/zip' })
+  try {
+    const response = await difyClient.post('/workspaces/current/tool-plugin/download', payload, {
+      responseType: 'blob',
+      transformResponse: [data => data],
+      silent: true,
+    })
+    if (response instanceof Blob)
+      return response
+    return new Blob([response], { type: 'application/zip' })
+  }
+  catch (error) {
+    const message = await readBlobErrorMessage(error.response?.data)
+    if (message)
+      error.message = message
+    throw error
+  }
 }
 
 export function listToolPluginSessions({ includeHidden = false } = {}) {

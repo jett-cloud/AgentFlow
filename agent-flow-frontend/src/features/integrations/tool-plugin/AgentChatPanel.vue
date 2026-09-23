@@ -83,7 +83,7 @@
       </label>
     </div>
 
-    <div ref="scrollEl" class="messages-scroll">
+    <div ref="scrollEl" class="messages-scroll" @scroll="onMessageScroll">
       <div v-if="!messages.length && !running" class="greeting">
         <h2>需要我帮你做什么？</h2>
         <p>描述工具能力、粘贴 API；空仓库时 Agent 会自动 bootstrap 脚手架。</p>
@@ -200,6 +200,11 @@ import {
   pluginIdentityFieldError,
   toolIdentityFieldError,
 } from './pluginIdentityHelpers.js'
+import {
+  agentStreamScrollVersion,
+  isAgentConversationPinned,
+  scrollAgentConversationToLatest,
+} from './agentEventHelpers.js'
 
 const props = defineProps({
   form: { type: Object, required: true },
@@ -224,6 +229,7 @@ const emit = defineEmits([
 const configOpen = ref(false)
 const scrollEl = ref(null)
 const expanded = reactive({})
+let scrollPinned = true
 const modelStore = useModelStore()
 const authorPlaceholder = AUTHOR_FIELD_PLACEHOLDER
 const pluginPlaceholder = PLUGIN_FIELD_PLACEHOLDER
@@ -245,13 +251,16 @@ const modelReady = computed(() => Boolean(
 const canSend = computed(() => Boolean(props.input.trim()) && props.identityReady && modelReady.value)
 
 watch(
-  () => [props.messages.length, props.running, props.messages.at(-1)?.content],
+  () => [props.messages.length, props.running, agentStreamScrollVersion(props.messages)],
   async () => {
     await nextTick()
-    if (scrollEl.value)
-      scrollEl.value.scrollTop = scrollEl.value.scrollHeight
+    scrollAgentConversationToLatest(scrollEl.value, { scrollOuter: scrollPinned })
   },
 )
+
+function onMessageScroll() {
+  scrollPinned = isAgentConversationPinned(scrollEl.value)
+}
 
 function patchForm(key, value) {
   emit('patch-form', { key, value })

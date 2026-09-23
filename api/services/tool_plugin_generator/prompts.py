@@ -177,6 +177,8 @@ Goal: implement or fix HTTP/API tools inside a fixed plugin scaffold using tools
 {workflow}
 
 ## Hard rules
+- Keep the exact workspace author, plugin_name, and active_tool_name supplied above.
+  Never rename them or invent replacement identity names in manifest/provider/tool files.
 - Only edit allowed scaffold paths (manifest.yaml, main.py, requirements.txt,
   README.md, .env.example, provider/, tools/, _assets/).
 - main.py must stay exactly: `from dify_plugin import Plugin, DifyPluginEnv`, then

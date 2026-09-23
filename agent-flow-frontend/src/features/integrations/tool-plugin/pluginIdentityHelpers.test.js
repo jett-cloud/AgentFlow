@@ -12,6 +12,7 @@ import {
   toolIdentityFieldError,
 } from './pluginIdentityHelpers.js'
 import { normalizePluginProviderId } from './previewFromFiles.js'
+import * as identityHelpers from './pluginIdentityHelpers.js'
 
 describe('sanitizePluginIdentityName', () => {
   it('maps illegal chars to hyphen and lowercases', () => {
@@ -67,5 +68,40 @@ describe('sanitizePluginIdSegment + normalizePluginProviderId', () => {
       normalizePluginProviderId('ghy/remove.bg/remove-bg'),
       'ghy/remove-bg/remove-bg',
     )
+  })
+})
+
+describe('new studio session identity', () => {
+  it('keeps the author, plugin name, and tool name entered before the first send', () => {
+    assert.equal(typeof identityHelpers.prepareStudioSessionIdentity, 'function')
+
+    const prepared = identityHelpers.prepareStudioSessionIdentity({
+      author: 'ghy',
+      pluginName: 'ark_image',
+      toolName: 'generate_image',
+    }, { preserveIdentity: true })
+
+    assert.deepEqual(prepared.createPayload, {
+      author: 'ghy',
+      plugin_name: 'ark_image',
+    })
+    assert.deepEqual(prepared.formIdentity, {
+      author: 'ghy',
+      pluginName: 'ark_image',
+      toolName: 'generate_image',
+    })
+  })
+
+  it('clears plugin and tool names only for an explicit blank session', () => {
+    assert.equal(typeof identityHelpers.prepareStudioSessionIdentity, 'function')
+
+    const prepared = identityHelpers.prepareStudioSessionIdentity({
+      author: 'ghy',
+      pluginName: 'old_plugin',
+      toolName: 'old_tool',
+    }, { preserveIdentity: false })
+
+    assert.deepEqual(prepared.createPayload, { author: 'ghy', plugin_name: null })
+    assert.deepEqual(prepared.formIdentity, { author: 'ghy', pluginName: '', toolName: '' })
   })
 })

@@ -78,3 +78,13 @@ def test_validator_rejects_non_object_yaml_root():
         validate_plugin_files(files)
 
     assert any("yaml root must be an object" in error.lower() for error in exc_info.value.errors)
+
+
+def test_validator_rejects_manifest_identity_changed_by_agent():
+    files = _base_files(tool_py="pass\n")
+    files["manifest.yaml"] = "author: agent\nname: invented_name\n"
+
+    with pytest.raises(ToolPluginValidationError) as exc_info:
+        validate_plugin_files(files, author="ghy", plugin_name="user_plugin")
+
+    assert any("session identity" in error.lower() for error in exc_info.value.errors)
