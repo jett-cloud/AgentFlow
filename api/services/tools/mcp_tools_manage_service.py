@@ -172,7 +172,9 @@ class MCPToolManageService:
             tools=connection_result.tools if connection_result else EMPTY_TOOLS_JSON,
             icon=(
                 connection_result.server_icon
-                if connection_result and connection_result.server_icon
+                if connection_result
+                and connection_result.server_icon
+                and len(connection_result.server_icon) <= _MCP_ICON_MAX_LEN
                 else self._prepare_icon(icon, icon_type, icon_background)
             ),
             server_identifier=server_identifier,
