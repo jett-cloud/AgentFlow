@@ -1,57 +1,12 @@
-"""Default execution classes, overridden only by a service-approved live trial scope."""
+"""Acceptance execution policy; node classification lives in the generator core."""
 
 from __future__ import annotations
 
-from typing import Literal
-
+from core.workflow.generator.acceptance.effects import EffectClass, classify_effect, classify_node_effect
 from core.workflow.generator.acceptance.evidence import AcceptanceMode, FailedNodeTrace
 from core.workflow.generator.graph.types import MinimalGraphDict
 
-EffectClass = Literal["local_execute", "metered", "simulate_always"]
-
-_LOCAL_EXECUTE = frozenset(
-    {
-        "start",
-        "end",
-        "answer",
-        "code",
-        "if-else",
-        "iteration",
-        "iteration-start",
-        "loop",
-        "loop-start",
-        "loop-end",
-        "template-transform",
-        "assigner",
-        "variable-aggregator",
-        "list-operator",
-    }
-)
-_METERED = frozenset({"llm", "knowledge-retrieval", "tool", "agent"})
-
-
-def classify_effect(node_type: str) -> EffectClass:
-    """Return the execution class for one node type."""
-    if node_type in _LOCAL_EXECUTE:
-        return "local_execute"
-    if node_type in _METERED:
-        if node_type == "tool":
-            return "simulate_always"
-        return "metered"
-    return "simulate_always"
-
-
-def classify_node_effect(node: object) -> EffectClass:
-    """Classify one graph node, failing closed for tools with unknown effects."""
-    if not isinstance(node, dict):
-        return "simulate_always"
-    data = node.get("data")
-    if not isinstance(data, dict):
-        return "simulate_always"
-    node_type = str(data.get("type") or "")
-    if node_type == "agent" and data.get("dify_tools"):
-        return "simulate_always"
-    return classify_effect(node_type)
+__all__ = ["EffectClass", "classify_effect", "classify_node_effect", "execution_policy_errors"]
 
 
 def execution_policy_errors(
