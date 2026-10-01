@@ -6,7 +6,13 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from core.workflow.generator.acceptance.evidence import AcceptanceAttempt, AcceptanceRunner
+from core.workflow.generator.acceptance.authorization import ExecutionConsentMode
+from core.workflow.generator.acceptance.evidence import (
+    AcceptanceAttempt,
+    AcceptanceMode,
+    AcceptanceRunner,
+    GraphExecutionTrace,
+)
 from core.workflow.generator.compiler.node_builder import BuilderInput
 from core.workflow.generator.graph.types import MinimalGraphDict
 from core.workflow.generator.model_io.llm_response import LLMJsonClient
@@ -38,6 +44,9 @@ class PendingPlanNode:
     iterator_input_type: str | None = None
 
 
+GraphExecuteFn = Callable[[MinimalGraphDict, AcceptanceMode, Mapping[str, object]], GraphExecutionTrace]
+
+
 @dataclass(frozen=True)
 class ToolEnv:
     """Read-only inputs for one agent run.
@@ -65,6 +74,10 @@ class ToolEnv:
 
     ``contract_rollout_stage`` is a service-owned snapshot. Core uses it only
     to keep edit contracts disabled until that rollout phase is reached.
+
+    ``execute_graph`` runs one prepared graph once for ``run_workflow`` / ``run_node``.
+    ``execution_consent_mode`` and ``live_consent_declined_hash`` are service-owned
+    snapshots; the execution tools, not the model, decide whether a live run may start.
     """
 
     tenant_id: str
@@ -88,6 +101,9 @@ class ToolEnv:
     run_id: str | None = None
     run_epoch: int | None = None
     contract_rollout_stage: str = "default"
+    execution_consent_mode: ExecutionConsentMode = "always_ask"
+    execute_graph: GraphExecuteFn | None = None
+    live_consent_declined_hash: str | None = None
 
 
 @dataclass
@@ -121,6 +137,7 @@ class ToolTurnState:
     contract_hash: str | None = None
     candidate_base_hash: str | None = None
     user_turn_evidence: Mapping[str, str] = field(default_factory=dict)
+    last_node_outputs: dict[str, dict[str, object]] = field(default_factory=dict)
 
 
 @dataclass

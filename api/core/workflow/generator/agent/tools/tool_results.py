@@ -91,7 +91,15 @@ RETRYABLE_BY_ERROR_CODE: dict[str, bool] = {
     "UNSUPPORTED_NODE_TYPE": False,
     "CAPABILITY_UNAVAILABLE": False,
     "LIVE_RUN_REQUIRES_CONSENT": True,
+    "EXECUTION_CONSENT_DENIED": False,
+    "INVALID_MOCK_OUTPUT": True,
+    "MOCK_UNSUPPORTED_NODE": False,
+    "NODE_PROBE_UNSUPPORTED": False,
 }
+
+SELF_REVISING_TOOLS = frozenset({"finish", "run_acceptance", "run_workflow", "run_node"})
+("""Tools that hydrate/lay out and advance ``candidate_revision`` themselves; """
+ """dispatch and the reducer must not re-bump it.""")
 
 
 def retryable(error_code: str) -> bool:

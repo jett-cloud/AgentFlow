@@ -81,7 +81,7 @@ from core.workflow.generator.agent.tools.tool_read import (
     search_datasets,
     search_tools,
 )
-from core.workflow.generator.agent.tools.tool_results import RETRYABLE_BY_ERROR_CODE, error
+from core.workflow.generator.agent.tools.tool_results import RETRYABLE_BY_ERROR_CODE, SELF_REVISING_TOOLS, error
 from core.workflow.generator.agent.types import ToolCall, ToolResult
 from core.workflow.generator.compiler.intents.build_contracts import (
     BuildAgentNodeArgs,
@@ -568,7 +568,7 @@ def dispatch(call: ToolCall, context: ToolContext) -> ToolResult:
     ``changed`` is true, or when a successful no-op still copies the graph
     (callers may rely on identity of an unchanged graph remaining the same
     object except where graph_ops returns a deepcopy). A successful mutation
-    other than ``finish`` or ``run_acceptance`` also runs canvas layout so
+    other than a ``SELF_REVISING_TOOLS`` member also runs canvas layout so
     streamed candidates are not stacked at the origin. ``run_acceptance``
     hydrates and lays out before hashing Evidence; a later layout here would
     invalidate that hash. Layout failure is logged and does not turn a
@@ -581,11 +581,8 @@ def dispatch(call: ToolCall, context: ToolContext) -> ToolResult:
     if plan_error is not None:
         return plan_error
     result = handler(call, context)
-    # finish consumes last_mutation_changed inside its own hydrate+validate.
-    # Re-setting it from finish.changed would make the next validate look like
-    # a repeated repair even when nothing ran in between. Finish still runs a
-    # final layout pass after hydrate (loop-start and similar).
-    # run_acceptance hydrates/lays out before Evidence; skip a second layout.
-    if result["changed"] and call["name"] not in {"finish", "run_acceptance"}:
+    # Self-revising tools hydrate/layout before observing the graph; a second
+    # mutation note here would bump or invalidate their revision-bound evidence.
+    if result["changed"] and call["name"] not in SELF_REVISING_TOOLS:
         note_graph_mutation(context)
     return result

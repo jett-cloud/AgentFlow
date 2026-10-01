@@ -68,3 +68,12 @@ def build_live_acceptance_request(graph: MinimalGraphDict | GraphDict, *, revisi
         candidate_revision=revision,
         nodes=nodes,
     )
+
+
+ExecutionConsentMode = Literal["always_ask", "always_execute"]
+EXECUTION_CONSENT_MODES: tuple[ExecutionConsentMode, ...] = ("always_ask", "always_execute")
+
+
+def normalize_execution_consent_mode(value: object) -> ExecutionConsentMode:
+    """Anything but an explicit ``always_execute`` keeps the safe default."""
+    return "always_execute" if value == "always_execute" else "always_ask"

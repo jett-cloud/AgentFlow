@@ -132,6 +132,65 @@ def validate_graph(call: ToolCall, context: ToolContext) -> ToolResult:
     return ok(call, changed=False, content=content)
 
 
+def prepare_candidate_for_execution(
+    call: ToolCall, context: ToolContext, *, purpose: str
+) -> tuple[ToolResult | None, bool]:
+    """Validate, hydrate and lay out the candidate before an execution observes it.
+
+    Returns ``(rejection, changed)``. When hydrate or layout rebinds the graph,
+    ``candidate_revision`` is already advanced here, so callers belong to
+    ``SELF_REVISING_TOOLS`` and must not add another revision.
+    """
+    try:
+        preflight = validation_content(context)
+    except Exception:
+        logger.exception("Workflow agent: %s preflight failed", purpose)
+        return error(call, "CAPABILITY_UNAVAILABLE", f"{purpose.capitalize()} preflight failed"), False
+    if not preflight["valid"]:
+        return _invalid_for_execution(call, preflight, f"Repair graph validation errors before {purpose}", False), False
+    try:
+        hydrate_changed = _apply_hydrate(context)
+    except Exception as exc:
+        mapped = _hydrate_failure(call, exc)
+        if mapped is not None:
+            return mapped, False
+        logger.exception("Workflow agent: graph hydrate failed")
+        return error(call, "CAPABILITY_UNAVAILABLE", "Graph hydrate failed"), False
+    try:
+        before_preparation = canonical_graph_hash(context.state.graph)
+        layout_changed = relayout_graph(context)
+        preparation_changed = layout_changed or before_preparation != canonical_graph_hash(context.state.graph)
+        if preparation_changed and not hydrate_changed:
+            context.state.candidate_revision += 1
+        hydrate_changed = hydrate_changed or preparation_changed
+        prepared_validation = validation_content(context)
+    except Exception:
+        logger.exception("Workflow agent: %s graph preparation failed", purpose)
+        return error(call, "CAPABILITY_UNAVAILABLE", f"{purpose.capitalize()} graph preparation failed"), False
+    if not prepared_validation["valid"]:
+        rejection = _invalid_for_execution(
+            call, prepared_validation, f"Repair prepared graph before {purpose}", hydrate_changed
+        )
+        return rejection, hydrate_changed
+    binding_error = _unhydrated_binding_error(context)
+    if binding_error is not None:
+        return error(call, str(binding_error["code"]), binding_error["detail"]), hydrate_changed
+    return None, hydrate_changed
+
+
+def _invalid_for_execution(call: ToolCall, content: dict[str, Any], message: str, changed: bool) -> ToolResult:
+    return {
+        "tool_call_id": call["id"],
+        "name": call["name"],
+        "ok": False,
+        "changed": changed,
+        "content": content,
+        "error": message,
+        "error_code": "INVALID_NODE_CONFIG",
+        "retryable": True,
+    }
+
+
 def run_acceptance(call: ToolCall, context: ToolContext) -> ToolResult:
     if context.env.acceptance_runner is None:
         return error(call, "CAPABILITY_UNAVAILABLE", "Acceptance runner is not available")
@@ -151,55 +210,9 @@ def run_acceptance(call: ToolCall, context: ToolContext) -> ToolResult:
         case_ids = [str(item) for item in case_ids_raw]
     else:
         return error(call, "INVALID_ARGUMENT", "case_ids must be a list of strings")
-    try:
-        preflight = validation_content(context)
-    except Exception:
-        logger.exception("Workflow agent: acceptance preflight failed")
-        return error(call, "CAPABILITY_UNAVAILABLE", "Acceptance preflight failed")
-    if not preflight["valid"]:
-        return {
-            "tool_call_id": call["id"],
-            "name": call["name"],
-            "ok": False,
-            "changed": False,
-            "content": preflight,
-            "error": "Repair graph validation errors before acceptance",
-            "error_code": "INVALID_NODE_CONFIG",
-            "retryable": True,
-        }
-    try:
-        hydrate_changed = _apply_hydrate(context)
-    except Exception as exc:
-        mapped = _hydrate_failure(call, exc)
-        if mapped is not None:
-            return mapped
-        logger.exception("Workflow agent: graph hydrate failed")
-        return error(call, "CAPABILITY_UNAVAILABLE", "Graph hydrate failed")
-    try:
-        before_preparation = canonical_graph_hash(context.state.graph)
-        layout_changed = relayout_graph(context)
-        preparation_changed = layout_changed or before_preparation != canonical_graph_hash(context.state.graph)
-        if preparation_changed and not hydrate_changed:
-            context.state.candidate_revision += 1
-        hydrate_changed = hydrate_changed or preparation_changed
-        prepared_validation = validation_content(context)
-    except Exception:
-        logger.exception("Workflow agent: acceptance graph preparation failed")
-        return error(call, "CAPABILITY_UNAVAILABLE", "Acceptance graph preparation failed")
-    if not prepared_validation["valid"]:
-        return {
-            "tool_call_id": call["id"],
-            "name": call["name"],
-            "ok": False,
-            "changed": hydrate_changed,
-            "content": prepared_validation,
-            "error": "Repair prepared graph before acceptance",
-            "error_code": "INVALID_NODE_CONFIG",
-            "retryable": True,
-        }
-    binding_error = _unhydrated_binding_error(context)
-    if binding_error is not None:
-        return error(call, str(binding_error["code"]), binding_error["detail"])
+    rejection, hydrate_changed = prepare_candidate_for_execution(call, context, purpose="acceptance")
+    if rejection is not None:
+        return rejection
     graph_hash = canonical_graph_hash(context.state.graph)
     context.state.graph_hash = graph_hash
     if mode == "live":

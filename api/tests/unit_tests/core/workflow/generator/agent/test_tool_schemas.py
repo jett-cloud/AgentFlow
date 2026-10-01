@@ -381,6 +381,9 @@ def test_tool_context_requires_every_field_a_tool_may_touch():
         "run_id",
         "run_epoch",
         "contract_rollout_stage",
+        "execution_consent_mode",
+        "execute_graph",
+        "live_consent_declined_hash",
     }
     state_names = {
         "graph",
@@ -399,6 +402,7 @@ def test_tool_context_requires_every_field_a_tool_may_touch():
         "contract_hash",
         "candidate_base_hash",
         "user_turn_evidence",
+        "last_node_outputs",
     }
     assert set(env_fields) == env_required | env_optional
     assert set(state_fields) == state_names
@@ -423,6 +427,10 @@ def test_tool_context_requires_every_field_a_tool_may_touch():
     assert state_fields["contract_hash"].default is None
     assert state_fields["candidate_base_hash"].default is None
     assert state_fields["pending_plan_nodes"].default == ()
+    assert env_fields["execution_consent_mode"].default == "always_ask"
+    assert env_fields["execute_graph"].default is None
+    assert env_fields["live_consent_declined_hash"].default is None
+    assert state_fields["last_node_outputs"].default_factory is dict
 
 
 def test_tool_context_graph_is_rebindable(tool_context: ToolContext):
@@ -449,3 +457,12 @@ def test_tool_context_treats_none_as_the_catalogue_unavailable_sentinel(tool_con
 
     assert tool_context.env.installed_tools == {("langgenius/google", "google_search")}
     assert tool_context.env.installed_dataset_ids == {"dataset-1"}
+
+
+def test_execution_consent_mode_normalizes_unknown_values_to_always_ask() -> None:
+    from core.workflow.generator.acceptance.authorization import normalize_execution_consent_mode
+
+    assert normalize_execution_consent_mode("always_execute") == "always_execute"
+    assert normalize_execution_consent_mode("always_ask") == "always_ask"
+    assert normalize_execution_consent_mode(None) == "always_ask"
+    assert normalize_execution_consent_mode("yolo") == "always_ask"

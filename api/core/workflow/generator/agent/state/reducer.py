@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from core.workflow.generator.agent.tools.tool_results import SELF_REVISING_TOOLS
 from core.workflow.generator.agent.tools.tools import (
     ToolContext,
     dispatch,
@@ -105,7 +106,7 @@ def _apply_revision(session: AgentSession, context: ToolContext, name: str, resu
     session.contract_hash = context.state.contract_hash
     if name == "submit_workflow_plan" and result["ok"]:
         session.last_acceptance = None
-    if name in {"finish", "run_acceptance"}:
+    if name in SELF_REVISING_TOOLS:
         session.candidate_revision = context.state.candidate_revision
         session.candidate_graph = context.state.graph
         _remember_validation(session, context, name, result)
