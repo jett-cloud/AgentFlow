@@ -3,10 +3,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from core.workflow.generator.acceptance.mocks import build_mocked_graph, build_node_probe_graph
+from core.workflow.generator.compiler.node_builder import assemble_graph
 from core.workflow.generator.graph.graph_ops import connect, empty_graph, upsert_node
 from core.workflow.generator.graph.graph_postprocessor import postprocess_graph
 from core.workflow.generator.validation.graph_validator import validate_graph
-from core.workflow.generator.compiler.node_builder import assemble_graph
 from graphon.enums import BuiltinNodeTypes, WorkflowNodeExecutionStatus
 from graphon.graph_events import (
     GraphRunAbortedEvent,
@@ -308,3 +309,85 @@ def test_build_acceptance_runner_injects_executor() -> None:
     runner = build_acceptance_runner(tenant_id="t", app_id="a", user_id="u")
     assert runner._execute_graph is not None
     assert build_acceptance_graph_executor(tenant_id="t", app_id="a", user_id="u") is not None
+
+
+def _local_python(*, language, code, inputs):
+    namespace: dict[str, object] = {}
+    exec(code, namespace)  # noqa: S102 -- stands in for the code sandbox service
+    return namespace["main"](**inputs)
+
+
+def _prepared_llm_to_code():
+    graph = upsert_node(
+        empty_graph(), node_id="start", node_type="start", title="开始", desc="", config={"variables": []}
+    )
+    graph = upsert_node(
+        graph,
+        node_id="llm",
+        node_type="llm",
+        title="分析",
+        desc="",
+        config={
+            "model": {"provider": "openai", "name": "gpt-4o", "mode": "chat", "completion_params": {}},
+            "prompt_template": [{"role": "user", "text": "hi"}],
+            "context": {"enabled": False, "variable_selector": []},
+        },
+    )
+    graph = upsert_node(
+        graph,
+        node_id="format",
+        node_type="code",
+        title="格式化",
+        desc="",
+        config={
+            "code_language": "python3",
+            "code": "def main(text: str) -> dict:\n    return {'result': text.upper()}",
+            "variables": [{"variable": "text", "value_selector": ["llm", "text"]}],
+            "outputs": {"result": {"type": "string", "children": None}},
+        },
+    )
+    graph = upsert_node(
+        graph,
+        node_id="end",
+        node_type="end",
+        title="结束",
+        desc="",
+        config={"outputs": [{"variable": "result", "value_selector": ["format", "result"], "value_type": "string"}]},
+    )
+    graph = connect(graph, source="start", target="llm")
+    graph = connect(graph, source="llm", target="format")
+    graph = connect(graph, source="format", target="end")
+    return postprocess_graph(graph=graph, mode="workflow")
+
+
+def test_mocked_graph_runs_through_real_engine(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "core.helper.code_executor.code_executor.CodeExecutor.execute_workflow_code_template", _local_python
+    )
+    mocked, _ = build_mocked_graph(_prepared_llm_to_code(), {"llm": {"text": "bad review"}})
+
+    traces = execute_acceptance_graph(mocked, tenant_id="tenant", app_id="app", user_id="user", mode="simulated")
+
+    assert traces == []
+    assert traces.graph_outputs == {"result": "BAD REVIEW"}
+
+
+def test_node_probe_graph_runs_target_without_descendants(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "core.helper.code_executor.code_executor.CodeExecutor.execute_workflow_code_template", _local_python
+    )
+    probe, _ = build_node_probe_graph(
+        _prepared_llm_to_code(), "format", upstream_outputs={"llm": {"text": "ok"}}, observed_outputs={}
+    )
+
+    traces = execute_acceptance_graph(
+        postprocess_graph(graph=probe, mode="workflow"),
+        tenant_id="tenant",
+        app_id="app",
+        user_id="user",
+        mode="simulated",
+    )
+
+    assert traces == []
+    assert traces.node_outputs["format"] == {"result": "OK"}
+    assert "end" not in traces.executed_node_ids

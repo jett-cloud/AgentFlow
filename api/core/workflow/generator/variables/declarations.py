@@ -369,6 +369,11 @@ def declared_outputs(node: dict[str, Any]) -> list[str]:
     return _declared_outputs(node)
 
 
+def declared_output_schema(node: dict[str, Any], output_name: str) -> dict[str, Any]:
+    """Return the declared schema of one output; unknown shapes fall back to ``{"type": "object"}``."""
+    return _declared_output_schema(node, output_name)
+
+
 def declared_output_type(node: dict[str, Any], output_name: str) -> str | None:
     """Return the declared top-level output type when the runtime contract exposes it."""
     if output_name not in _declared_outputs(node):
