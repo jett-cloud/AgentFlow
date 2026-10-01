@@ -54,6 +54,9 @@ _LEVEL1_TOOLS = frozenset(
         "validate_graph",
         "run_acceptance",
         "inspect_attempt",
+        "run_workflow",
+        "run_node",
+        "inspect_mock_targets",
     }
 )
 _NEVER_SLIM_TOOLS = frozenset(
@@ -476,6 +479,13 @@ def _level1_template(name: str, payload: dict[str, Any], call: AgentMessage | No
     if name == "validate_graph":
         valid = content_dict.get("valid")
         return f"[COMPRESSED] validation; valid={valid}; codes evicted; call validate_graph to reload"
+    if name in {"run_workflow", "run_node"}:
+        return (
+            f"[COMPRESSED] {name} level={content_dict.get('verification_level')} "
+            f"passed={content_dict.get('passed')}; outputs evicted; rerun with level=mock to reload"
+        )
+    if name == "inspect_mock_targets":
+        return "[COMPRESSED] mock targets evicted; call inspect_mock_targets to reload"
     if name == "run_acceptance":
         passed = content_dict.get("passed")
         attempt_id = content_dict.get("attempt_id") or "?"

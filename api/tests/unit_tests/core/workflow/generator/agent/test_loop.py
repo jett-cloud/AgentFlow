@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from core.workflow.generator.acceptance.evidence import GraphExecutionTrace
 from core.workflow.generator.agent.compaction import TokenLimits
 from core.workflow.generator.agent.loop import iter_agent_events
 from core.workflow.generator.agent.protocol.turn import _parse_turn
@@ -2685,6 +2686,27 @@ def test_failed_acceptance_trace_then_repair_then_finish(loop_harness) -> None:
     assert first_accept.get("failed_nodes")[0]["id"] == "end"
     assert "missing output" in str(first_accept.get("failed_nodes"))
     assert loop_harness.session.last_acceptance["passed"] is True
+
+
+def test_successful_run_workflow_is_an_observation_not_completion(loop_harness) -> None:
+    loop_harness.context.state.graph = _connected_start_end()
+    loop_harness.session.candidate_graph = loop_harness.context.state.graph
+    loop_harness.context.env = replace(
+        loop_harness.context.env, execute_graph=lambda graph, mode, inputs: GraphExecutionTrace()
+    )
+    loop_harness.invoker.queue_tool_calls([{"id": "r1", "name": "run_workflow", "arguments": {"level": "mock"}}])
+    loop_harness.invoker.queue_tool_calls([{"id": "f1", "name": "finish", "arguments": {"summary": "已测试"}}])
+
+    events = list(iter_agent_events(**loop_harness.kwargs))
+
+    run_index = next(
+        index
+        for index, (name, payload) in enumerate(events)
+        if name == "tool_result" and payload.get("name") == "run_workflow"
+    )
+    assert events[run_index][1]["ok"] is True
+    assert "done" not in [name for name, _ in events[: run_index + 1]]
+    assert loop_harness.session.candidate_revision == loop_harness.context.state.candidate_revision
 
 
 def _activate_call(call_id: str, *names: str) -> dict[str, Any]:

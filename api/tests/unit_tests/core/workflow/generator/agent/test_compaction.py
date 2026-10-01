@@ -709,3 +709,31 @@ def _session_over_trigger_messages() -> list[AgentMessage]:
             },
         ),
     ]
+
+
+def test_slim_segment_compresses_execution_outputs() -> None:
+    session = _session(
+        [
+            _message(1, "message", "user", {"text": "测试"}),
+            _message(
+                2, "tool_call", "assistant", {"id": "call_run", "name": "run_workflow", "arguments": {"level": "mock"}}
+            ),
+            _message(
+                3,
+                "tool_result",
+                "assistant",
+                {
+                    "tool_call_id": "call_run",
+                    "name": "run_workflow",
+                    "content": {
+                        "passed": True,
+                        "verification_level": "mock",
+                        "node_outputs": {"code": {"result": "very long output"}},
+                    },
+                },
+            ),
+        ]
+    )
+    rendered = str(slim_segment(session.messages))
+    assert "[COMPRESSED] run_workflow level=mock passed=True" in rendered
+    assert "very long output" not in rendered

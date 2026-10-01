@@ -50,6 +50,7 @@ from core.workflow.generator.agent.tools.tool_build_tool import (
     compile_build_tool_node,
 )
 from core.workflow.generator.agent.tools.tool_context import PendingPlanNode, ToolContext, ToolEnv, ToolTurnState
+from core.workflow.generator.agent.tools.tool_execute import run_workflow
 from core.workflow.generator.agent.tools.tool_lifecycle import (
     ask_user,
     fail,
@@ -483,6 +484,27 @@ TOOL_SCHEMAS: list[ToolSchema] = [
         "parameters": _obj({"attempt_id": _STRING}, ["attempt_id"]),
     },
     {
+        "name": "run_workflow",
+        "description": (
+            "Execute the whole current candidate once and return per-node outputs and failures. "
+            "Use only after the graph is complete and validate_graph passes; activate test-and-evaluate first. "
+            "level=mock (default) replaces model, tool, HTTP and other external nodes with the fixtures in "
+            "mocks (omitted outputs get typed placeholders) and costs nothing. level=live calls real providers: "
+            "LIVE_RUN_REQUIRES_CONSENT means ask_user with question id live_run_consent; "
+            "EXECUTION_CONSENT_DENIED means stay on mock while this graph remains in always_ask. "
+            "passed=true only means the engine ran without "
+            "failures; judge the outputs against the user's request yourself. Never completes the run."
+        ),
+        "parameters": _obj(
+            {
+                "level": {"type": "string", "enum": ["mock", "live"]},
+                "start_inputs": {"type": "object"},
+                "mocks": {"type": "object"},
+            },
+            [],
+        ),
+    },
+    {
         "name": "ask_user",
         "description": (
             "Ask the user one or more questions and suspend until they answer. "
@@ -554,6 +576,7 @@ _HANDLERS: dict[str, Callable[[ToolCall, ToolContext], ToolResult]] = {
     "inspect_tool": inspect_tool,
     "run_acceptance": run_acceptance,
     "inspect_attempt": inspect_attempt,
+    "run_workflow": run_workflow,
     "ask_user": ask_user,
     "fail": fail,
     "finish": finish,
