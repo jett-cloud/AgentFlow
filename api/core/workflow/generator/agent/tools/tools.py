@@ -50,7 +50,7 @@ from core.workflow.generator.agent.tools.tool_build_tool import (
     compile_build_tool_node,
 )
 from core.workflow.generator.agent.tools.tool_context import PendingPlanNode, ToolContext, ToolEnv, ToolTurnState
-from core.workflow.generator.agent.tools.tool_execute import run_node, run_workflow
+from core.workflow.generator.agent.tools.tool_execute import inspect_mock_targets, run_node, run_workflow
 from core.workflow.generator.agent.tools.tool_lifecycle import (
     ask_user,
     fail,
@@ -524,6 +524,16 @@ TOOL_SCHEMAS: list[ToolSchema] = [
         ),
     },
     {
+        "name": "inspect_mock_targets",
+        "description": (
+            "Describe what a fixture must look like. Without node_id, covers every external node; with node_id, "
+            "that node (use it for run_node upstream_outputs). Returns output_schema (enum values included), a "
+            "typed placeholder, the instruction excerpt and downstream consumers with their if-else conditions. "
+            "Read-only. Activate prepare-mock-data for the method."
+        ),
+        "parameters": _obj({"node_id": _STRING}, []),
+    },
+    {
         "name": "ask_user",
         "description": (
             "Ask the user one or more questions and suspend until they answer. "
@@ -597,6 +607,7 @@ _HANDLERS: dict[str, Callable[[ToolCall, ToolContext], ToolResult]] = {
     "inspect_attempt": inspect_attempt,
     "run_workflow": run_workflow,
     "run_node": run_node,
+    "inspect_mock_targets": inspect_mock_targets,
     "ask_user": ask_user,
     "fail": fail,
     "finish": finish,

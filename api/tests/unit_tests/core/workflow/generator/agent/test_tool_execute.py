@@ -249,3 +249,19 @@ def test_run_node_reports_probe_errors(prepared: ToolContext) -> None:
     assert dispatch(_call("run_node"), prepared)["error_code"] == "INVALID_ARGUMENT"
     assert dispatch(_call("run_node", node_id="ghost"), prepared)["error_code"] == "NODE_NOT_FOUND"
     assert dispatch(_call("run_node", node_id="start"), prepared)["error_code"] == "NODE_PROBE_UNSUPPORTED"
+
+
+def test_inspect_mock_targets_lists_external_nodes_by_default(tool_context: ToolContext) -> None:
+    tool_context.state.graph = _graph()
+    result = dispatch(_call("inspect_mock_targets"), tool_context)
+    assert result["ok"] is True
+    assert result["changed"] is False
+    assert [target["node_id"] for target in result["content"]["targets"]] == ["llm"]
+    assert "text" in result["content"]["targets"][0]["output_schema"]
+
+
+def test_inspect_mock_targets_describes_one_node_or_reports_it_missing(tool_context: ToolContext) -> None:
+    tool_context.state.graph = _graph()
+    one = dispatch(_call("inspect_mock_targets", node_id="code"), tool_context)
+    assert one["content"]["targets"][0]["external"] is False
+    assert dispatch(_call("inspect_mock_targets", node_id="ghost"), tool_context)["error_code"] == "NODE_NOT_FOUND"

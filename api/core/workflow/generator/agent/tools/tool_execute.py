@@ -27,6 +27,7 @@ from core.workflow.generator.acceptance.mocks import (
     MockGraphError,
     build_mocked_graph,
     build_node_probe_graph,
+    describe_mock_target,
 )
 from core.workflow.generator.agent.tools.tool_context import GraphExecuteFn, ToolContext
 from core.workflow.generator.agent.tools.tool_lifecycle import prepare_candidate_for_execution
@@ -170,6 +171,19 @@ def run_node(call: ToolCall, context: ToolContext) -> ToolResult:
         "upstream_outputs": _clip_node_outputs(applied)[0],
     }
     return ok(call, changed=changed, content=content)
+
+
+def inspect_mock_targets(call: ToolCall, context: ToolContext) -> ToolResult:
+    node_id = call["arguments"].get("node_id")
+    if node_id is not None and (not isinstance(node_id, str) or not node_id):
+        return error(call, "INVALID_ARGUMENT", "node_id must be a non-empty string")
+    graph = context.state.graph
+    target_ids = [node_id] if node_id else external_node_ids(graph)
+    try:
+        targets = [describe_mock_target(graph, target_id) for target_id in target_ids]
+    except MockGraphError as exc:
+        return error(call, exc.code, exc.detail)
+    return ok(call, changed=False, content={"targets": targets})
 
 
 def _parse_level_and_inputs(call: ToolCall) -> tuple[str, dict[str, object]] | str:
