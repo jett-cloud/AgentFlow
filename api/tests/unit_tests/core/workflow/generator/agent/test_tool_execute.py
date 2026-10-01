@@ -9,6 +9,7 @@ from core.workflow.generator.acceptance.evidence import (
     GraphExecutionTrace,
     canonical_graph_hash,
 )
+from core.workflow.generator.acceptance.mocks import PROBE_END_ID
 from core.workflow.generator.agent.tools import tool_execute
 from core.workflow.generator.agent.tools.tools import ToolContext, dispatch
 from core.workflow.generator.agent.types import ToolCall
@@ -204,3 +205,47 @@ def test_large_outputs_are_clipped(prepared: ToolContext) -> None:
     set_env(prepared, execute_graph=_FakeExecutor(node_outputs={"code": {"result": "x" * 5000}}))
     content = dispatch(_call("run_workflow"), prepared)["content"]
     assert content["node_outputs"]["code"]["result"]["truncated"] is True
+
+
+def test_run_node_probes_a_local_target_with_upstream_fixtures(prepared: ToolContext) -> None:
+    executor = _FakeExecutor(node_outputs={"code": {"result": "好评!"}})
+    set_env(prepared, execute_graph=executor)
+    result = dispatch(_call("run_node", node_id="code", upstream_outputs={"llm": {"text": "好评"}}), prepared)
+    assert result["ok"] is True
+    sent = executor.calls[0]
+    assert sent["mode"] == "simulated"
+    sent_graph = sent["graph"]
+    assert isinstance(sent_graph, dict)
+    assert {node["id"] for node in sent_graph["nodes"]} == {"start", "llm", "code", PROBE_END_ID}
+    content = result["content"]
+    assert content["verification_level"] == "local_only"
+    assert content["outputs"] == {"result": "好评!"}
+    assert content["upstream_outputs"]["llm"]["text"] == "好评"
+
+
+def test_run_node_defaults_upstream_to_the_last_run(prepared: ToolContext) -> None:
+    set_env(prepared, execute_graph=_FakeExecutor())
+    dispatch(_call("run_workflow", mocks={"llm": {"text": "差评"}}), prepared)
+    result = dispatch(_call("run_node", node_id="code"), prepared)
+    assert result["content"]["upstream_outputs"]["llm"]["text"] == "差评"
+
+
+def test_run_node_on_external_target_follows_the_consent_gate(prepared: ToolContext) -> None:
+    executor = _FakeExecutor()
+    set_env(prepared, execute_graph=executor)
+    assert dispatch(_call("run_node", node_id="llm", level="live"), prepared)["error_code"] == (
+        "LIVE_RUN_REQUIRES_CONSENT"
+    )
+    assert dispatch(_call("run_node", node_id="llm", level="mock"), prepared)["error_code"] == "INVALID_ARGUMENT"
+    assert executor.calls == []
+    set_env(prepared, execution_consent_mode="always_execute")
+    result = dispatch(_call("run_node", node_id="llm", level="live"), prepared)
+    assert result["content"]["verification_level"] == "live"
+    assert executor.calls[0]["mode"] == "live"
+
+
+def test_run_node_reports_probe_errors(prepared: ToolContext) -> None:
+    set_env(prepared, execute_graph=_FakeExecutor())
+    assert dispatch(_call("run_node"), prepared)["error_code"] == "INVALID_ARGUMENT"
+    assert dispatch(_call("run_node", node_id="ghost"), prepared)["error_code"] == "NODE_NOT_FOUND"
+    assert dispatch(_call("run_node", node_id="start"), prepared)["error_code"] == "NODE_PROBE_UNSUPPORTED"

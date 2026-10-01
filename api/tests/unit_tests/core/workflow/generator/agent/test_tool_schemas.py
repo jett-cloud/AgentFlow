@@ -36,6 +36,7 @@ _EXPECTED = {
     "run_acceptance",
     "inspect_attempt",
     "run_workflow",
+    "run_node",
     "ask_user",
     "fail",
     "finish",
@@ -52,7 +53,7 @@ def _schema(name: str) -> dict[str, Any]:
 def test_tool_names_match_the_declared_schemas():
     assert TOOL_NAMES == _EXPECTED
     assert {schema["name"] for schema in TOOL_SCHEMAS} == _EXPECTED
-    assert len(TOOL_SCHEMAS) == 24
+    assert len(TOOL_SCHEMAS) == 25
 
 
 def test_workflow_plan_schema_exposes_structured_resources_but_not_verified_claims() -> None:

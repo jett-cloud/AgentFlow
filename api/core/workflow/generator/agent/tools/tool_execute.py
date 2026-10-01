@@ -20,14 +20,21 @@ import logging
 from collections.abc import Mapping
 from typing import cast
 
-from core.workflow.generator.acceptance.effects import external_node_ids
+from core.workflow.generator.acceptance.effects import classify_node_effect, external_node_ids
 from core.workflow.generator.acceptance.evidence import AcceptanceMode, GraphExecutionTrace, canonical_graph_hash
-from core.workflow.generator.acceptance.mocks import Fixtures, MockGraphError, build_mocked_graph
+from core.workflow.generator.acceptance.mocks import (
+    Fixtures,
+    MockGraphError,
+    build_mocked_graph,
+    build_node_probe_graph,
+)
 from core.workflow.generator.agent.tools.tool_context import GraphExecuteFn, ToolContext
 from core.workflow.generator.agent.tools.tool_lifecycle import prepare_candidate_for_execution
-from core.workflow.generator.agent.tools.tool_results import error, ok
+from core.workflow.generator.agent.tools.tool_results import error, ok, require_str
 from core.workflow.generator.agent.types import ToolCall, ToolResult
+from core.workflow.generator.graph.graph_postprocessor import postprocess_graph
 from core.workflow.generator.graph.types import MinimalGraphDict
+from core.workflow.generator.types import GraphDict
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +93,81 @@ def run_workflow(call: ToolCall, context: ToolContext) -> ToolResult:
         "node_outputs": clipped,
         "node_outputs_truncated": truncated,
         "mocked_outputs": _clip_node_outputs(mocked)[0],
+    }
+    return ok(call, changed=changed, content=content)
+
+
+def run_node(call: ToolCall, context: ToolContext) -> ToolResult:
+    execute_graph = context.env.execute_graph
+    if execute_graph is None:
+        return error(call, "CAPABILITY_UNAVAILABLE", "Workflow execution is not available")
+    node_id = require_str(call["arguments"], "node_id")
+    if node_id is None:
+        return error(call, "INVALID_ARGUMENT", "node_id is required")
+    parsed = _parse_level_and_inputs(call)
+    if isinstance(parsed, str):
+        return error(call, "INVALID_ARGUMENT", parsed)
+    level, start_inputs = parsed
+    upstream = call["arguments"].get("upstream_outputs") or {}
+    if not _is_fixtures(upstream):
+        return error(call, "INVALID_ARGUMENT", "upstream_outputs must map upstream node ids to output objects")
+    rejection, changed = prepare_candidate_for_execution(call, context, purpose="execution")
+    if rejection is not None:
+        return rejection
+    graph = context.state.graph
+    try:
+        probe, applied = build_node_probe_graph(
+            graph,
+            node_id,
+            upstream_outputs=cast(Mapping[str, Mapping[str, object]], upstream),
+            observed_outputs=context.state.last_node_outputs,
+        )
+    except MockGraphError as exc:
+        return error(call, exc.code, exc.detail)
+    target = next(node for node in graph["nodes"] if node["id"] == node_id)
+    external = classify_node_effect(target) != "local_execute"
+    graph_hash = canonical_graph_hash(graph)
+    context.state.graph_hash = graph_hash
+    engine_mode: AcceptanceMode = "simulated"
+    if external:
+        if level == "mock":
+            return error(
+                call,
+                "INVALID_ARGUMENT",
+                f"{node_id} calls external providers; level=mock would only echo a fixture. "
+                "Use level=live, or run_workflow(level=mock) to test its consumers",
+            )
+        denied = _live_gate(call, context, graph_hash)
+        if denied is not None:
+            return denied
+        engine_mode = "live"
+    try:
+        prepared_probe = cast(
+            MinimalGraphDict,
+            postprocess_graph(
+                graph=cast(GraphDict, probe),
+                mode=context.env.mode,
+                tool_entries=context.env.tool_entries if context.env.tools_available else None,
+            ),
+        )
+    except Exception:
+        logger.exception("Workflow agent: probe graph preparation failed")
+        return error(call, "CAPABILITY_UNAVAILABLE", "Probe graph preparation failed")
+    trace = _execute(call, execute_graph, prepared_probe, engine_mode, start_inputs)
+    if not isinstance(trace, list):
+        return trace
+    node_outputs = _node_outputs(trace)
+    if node_id in node_outputs:
+        context.state.last_node_outputs[node_id] = node_outputs[node_id]
+    content: dict[str, object] = {
+        "passed": not trace,
+        "verification_level": "live" if external else "local_only",
+        "node_id": node_id,
+        "revision": context.state.candidate_revision,
+        "graph_hash": graph_hash,
+        "outputs": _clip_mapping(node_outputs.get(node_id, {})),
+        "failed_nodes": list(trace),
+        "upstream_outputs": _clip_node_outputs(applied)[0],
     }
     return ok(call, changed=changed, content=content)
 

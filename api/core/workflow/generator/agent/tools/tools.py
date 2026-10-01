@@ -50,7 +50,7 @@ from core.workflow.generator.agent.tools.tool_build_tool import (
     compile_build_tool_node,
 )
 from core.workflow.generator.agent.tools.tool_context import PendingPlanNode, ToolContext, ToolEnv, ToolTurnState
-from core.workflow.generator.agent.tools.tool_execute import run_workflow
+from core.workflow.generator.agent.tools.tool_execute import run_node, run_workflow
 from core.workflow.generator.agent.tools.tool_lifecycle import (
     ask_user,
     fail,
@@ -505,6 +505,25 @@ TOOL_SCHEMAS: list[ToolSchema] = [
         ),
     },
     {
+        "name": "run_node",
+        "description": (
+            "Execute one top-level node after a repair, feeding it fixed upstream outputs. Ancestors become "
+            "fixtures from upstream_outputs, else the last run_workflow outputs, else typed placeholders; "
+            "downstream nodes do not run. Local nodes (code, template, if-else, assigner...) run free at any "
+            "level. Model, tool and HTTP targets need level=live and follow the run_workflow consent rules. "
+            "Nodes inside a loop or iteration cannot run alone."
+        ),
+        "parameters": _obj(
+            {
+                "node_id": _STRING,
+                "level": {"type": "string", "enum": ["mock", "live"]},
+                "upstream_outputs": {"type": "object"},
+                "start_inputs": {"type": "object"},
+            },
+            ["node_id"],
+        ),
+    },
+    {
         "name": "ask_user",
         "description": (
             "Ask the user one or more questions and suspend until they answer. "
@@ -577,6 +596,7 @@ _HANDLERS: dict[str, Callable[[ToolCall, ToolContext], ToolResult]] = {
     "run_acceptance": run_acceptance,
     "inspect_attempt": inspect_attempt,
     "run_workflow": run_workflow,
+    "run_node": run_node,
     "ask_user": ask_user,
     "fail": fail,
     "finish": finish,
