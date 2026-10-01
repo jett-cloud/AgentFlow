@@ -290,6 +290,18 @@ def ask_user(call: ToolCall, context: ToolContext) -> ToolResult:
     if not isinstance(questions, list) or not questions:
         return error(call, "INVALID_ARGUMENT", "questions is required")
     if any(isinstance(question, dict) and question.get("id") == LIVE_CONSENT_QUESTION_ID for question in questions):
+        if context.env.execution_consent_mode == "always_execute":
+            return error(
+                call,
+                "INVALID_ARGUMENT",
+                "Real calls are pre-approved in this session; call run_workflow or run_node with level=live",
+            )
+        if context.env.live_consent_declined_hash == canonical_graph_hash(context.state.graph):
+            return error(
+                call,
+                "EXECUTION_CONSENT_DENIED",
+                "The user did not approve live execution for this candidate; test with level=mock",
+            )
         try:
             request = build_live_acceptance_request(context.state.graph, revision=context.state.candidate_revision)
         except Exception:

@@ -265,3 +265,28 @@ def test_inspect_mock_targets_describes_one_node_or_reports_it_missing(tool_cont
     one = dispatch(_call("inspect_mock_targets", node_id="code"), tool_context)
     assert one["content"]["targets"][0]["external"] is False
     assert dispatch(_call("inspect_mock_targets", node_id="ghost"), tool_context)["error_code"] == "NODE_NOT_FOUND"
+
+
+def _consent_call() -> ToolCall:
+    return _call("ask_user", questions=[{"id": "live_run_consent", "question": "run?", "kind": "text"}])
+
+
+def test_ask_user_consent_is_rejected_when_calls_are_pre_approved(tool_context: ToolContext) -> None:
+    tool_context.state.graph = _graph()
+    set_env(tool_context, execution_consent_mode="always_execute")
+    result = dispatch(_consent_call(), tool_context)
+    assert result["error_code"] == "INVALID_ARGUMENT"
+    assert "level=live" in result["error"]
+
+
+def test_ask_user_consent_is_not_repeated_for_a_declined_candidate(tool_context: ToolContext) -> None:
+    tool_context.state.graph = _graph()
+    set_env(tool_context, live_consent_declined_hash=canonical_graph_hash(tool_context.state.graph))
+    assert dispatch(_consent_call(), tool_context)["error_code"] == "EXECUTION_CONSENT_DENIED"
+
+
+def test_ask_user_consent_still_builds_a_server_request_by_default(tool_context: ToolContext) -> None:
+    tool_context.state.graph = _graph()
+    result = dispatch(_consent_call(), tool_context)
+    assert result["ok"] is True
+    assert result["content"]["questions"][0]["kind"] == "live_acceptance"
