@@ -11,14 +11,7 @@ import { createServer as createViteServer } from 'vite'
 const projectRoot = fileURLToPath(new URL('../../../..', import.meta.url))
 
 test('workflow minimap renders its SVG and nodes inside the visible panel', async t => {
-  const vite = await createViteServer({
-    configFile: false,
-    root: projectRoot,
-    appType: 'custom',
-    plugins: [vue()],
-    resolve: { alias: { '@': `${projectRoot}/src` } },
-    server: { middlewareMode: true, hmr: false },
-  })
+  let vite
   const server = createServer((request, response) => {
     if (request.url === '/favicon.ico') {
       response.writeHead(204)
@@ -42,6 +35,14 @@ test('workflow minimap renders its SVG and nodes inside the visible panel', asyn
       response.statusCode = 404
       response.end('not found')
     })
+  })
+  vite = await createViteServer({
+    configFile: false,
+    root: projectRoot,
+    appType: 'custom',
+    plugins: [vue()],
+    resolve: { alias: { '@': `${projectRoot}/src` } },
+    server: { middlewareMode: true, hmr: { server } },
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 

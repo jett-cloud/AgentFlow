@@ -11,18 +11,7 @@ import { createServer as createViteServer } from 'vite'
 const projectRoot = fileURLToPath(new URL('../../../../..', import.meta.url))
 
 test('a visible add affordance preserves drag-to-connect and keyboard activation', async t => {
-  const vite = await createViteServer({
-    configFile: false,
-    root: projectRoot,
-    appType: 'custom',
-    plugins: [vue()],
-    resolve: {
-      alias: {
-        '@': `${projectRoot}/src`,
-      },
-    },
-    server: { middlewareMode: true },
-  })
+  let vite
   const server = createServer((request, response) => {
     if (request.url === '/favicon.ico') {
       response.writeHead(204)
@@ -46,6 +35,18 @@ test('a visible add affordance preserves drag-to-connect and keyboard activation
       response.statusCode = 404
       response.end('not found')
     })
+  })
+  vite = await createViteServer({
+    configFile: false,
+    root: projectRoot,
+    appType: 'custom',
+    plugins: [vue()],
+    resolve: {
+      alias: {
+        '@': `${projectRoot}/src`,
+      },
+    },
+    server: { middlewareMode: true, hmr: { server } },
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 
