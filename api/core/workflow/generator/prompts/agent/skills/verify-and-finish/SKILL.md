@@ -31,5 +31,6 @@ description: Use when construction or repair is ready for graph validation, acce
 5. Call finish with an evidence-grounded summary. Inspect a rejection's
    content.valid, contract_report, and acceptance even without an error_code.
    Return to repair-validation or the necessary verification step on failure.
-   Complete only when finish.ok=true. Report actual execution coverage and whether
+   Complete only when finish.ok=true. Report actual execution coverage, the level run_workflow
+   reached (live, mock or local_only), and whether
    business outcomes remain unverified. The service performs Apply separately.

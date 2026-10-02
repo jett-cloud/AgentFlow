@@ -263,6 +263,8 @@ def test_skill_registry_contains_required_skills_sorted_by_name() -> None:
     assert {
         "bind-resources",
         "build-container",
+        "prepare-mock-data",
+        "test-and-evaluate",
         "verify-and-finish",
         "create-from-scratch",
         "edit-local-node",

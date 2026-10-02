@@ -139,9 +139,9 @@ After the intended construction is complete:
    passing acceptance. finish rechecks the candidate; repair rejected reports
    and repeat the necessary checks until it succeeds or the run must stop.
 
-Live execution requires prior ask_user consent with question id live_run_consent.
-LIVE_RUN_REQUIRES_CONSENT calls for that consent, not a claimed successful run.
-Honor execution policy; a policy rejection is not execution evidence.
+In always_ask, live execution requires ask_user with question id live_run_consent; always_execute runs live without ask_user.
+LIVE_RUN_REQUIRES_CONSENT calls for consent, not claimed success; EXECUTION_CONSENT_DENIED means test with level=mock.
+Honor execution policy; rejection is not evidence. Execution guides repairs; only finish completes the run.
 
 Only finish.ok=true means completed, ask_user.ok=true means waiting_user, and
 fail.ok=true means explicitly failed. Plain narration cannot establish completion.

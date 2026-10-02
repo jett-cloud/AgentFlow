@@ -584,3 +584,25 @@ def test_render_active_skills_keeps_activation_order() -> None:
     assert "read_graph" in text
     assert "referenced_tools" in text
     assert render_active_skills(()) == ""
+
+
+def test_execution_skill_only_triggers_after_the_graph_is_complete() -> None:
+    from core.workflow.generator.prompts.loader import skill_body, skill_summaries
+
+    descriptions = {item["name"]: item["description"] for item in skill_summaries()}
+    assert "Use only after the workflow is fully built" in descriptions["test-and-evaluate"]
+    assert "Never use while nodes are still being created" in descriptions["test-and-evaluate"]
+    body = skill_body("test-and-evaluate") or ""
+    assert "validate_graph returned content.valid=true" in body
+    assert "EXECUTION_CONSENT_DENIED" in body
+    assert "passed=true only means" in body
+    assert "inspect_mock_targets" in (skill_body("prepare-mock-data") or "")
+
+
+def test_system_prompt_keeps_consent_rule_and_names_execution_denial() -> None:
+    from core.workflow.generator.agent.loop import SYSTEM_PROMPT
+
+    assert "question id live_run_consent" in SYSTEM_PROMPT
+    assert "always_execute runs live without ask_user" in SYSTEM_PROMPT
+    assert "EXECUTION_CONSENT_DENIED" in SYSTEM_PROMPT
+    assert "only finish completes the run" in SYSTEM_PROMPT
