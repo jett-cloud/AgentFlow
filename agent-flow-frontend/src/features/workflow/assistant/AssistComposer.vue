@@ -67,6 +67,17 @@
         :placeholder="copy.selectModel"
         @update:model-value="emit('update:modelValue', $event)"
       />
+      <select
+        class="consent-mode-select"
+        :value="executionConsentMode"
+        :disabled="disabled"
+        :title="copy.executionConsentHint"
+        :aria-label="copy.executionConsentLabel"
+        @change="emit('update:executionConsentMode', $event.target.value)"
+      >
+        <option value="always_ask">{{ copy.executionConsentAlwaysAsk }}</option>
+        <option value="always_execute">{{ copy.executionConsentAlwaysExecute }}</option>
+      </select>
       <div class="composer-actions">
         <button
           :type="running ? 'button' : 'submit'"
@@ -107,6 +118,7 @@ const props = defineProps({
   running: { type: Boolean, default: false },
   awaitingClarification: { type: Boolean, default: false },
   language: { type: String, default: 'zh-Hans' },
+  executionConsentMode: { type: String, default: 'always_ask' },
   modelValue: {
     type: Object,
     default: () => ({ provider: '', name: '', mode: 'chat', completion_params: {} }),
@@ -115,7 +127,7 @@ const props = defineProps({
   currentGraph: { type: Object, default: () => ({ nodes: [], edges: [] }) },
 })
 
-const emit = defineEmits(['send', 'update:modelValue', 'add-target-node', 'remove-target-node', 'cancel'])
+const emit = defineEmits(['send', 'update:modelValue', 'update:executionConsentMode', 'add-target-node', 'remove-target-node', 'cancel'])
 const instructionRef = ref(null)
 const modelSelectorRef = ref(null)
 const hasEditorContent = ref(false)
@@ -533,6 +545,16 @@ defineExpose({ focusInstruction, focusModelSelector, insertResource })
 
 .composer-footer {
   justify-content: space-between;
+}
+
+.consent-mode-select {
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--el-border-color, #dcdfe6);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
 }
 
 .composer-actions button {

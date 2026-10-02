@@ -159,6 +159,8 @@
       :target-nodes="targetNodes"
       :current-graph="currentGraph"
       @update:model-value="assistStore.setSelectedModel"
+      :execution-consent-mode="assistStore.executionConsentMode"
+      @update:execution-consent-mode="assistStore.setExecutionConsentMode"
       @add-target-node="addTargetNodes([$event.id])"
       @remove-target-node="removeTargetNode"
       @send="submitMessage"
