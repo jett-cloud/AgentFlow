@@ -2,7 +2,35 @@ import { defineStore } from 'pinia'
 
 const LEGACY_MODEL_STORAGE_KEY = 'workflow-assist:model'
 const PREFERENCES_STORAGE_KEY = 'workflow-assist:prefs'
+const EXECUTION_CONSENT_STORAGE_KEY = 'workflow-assist:execution-consent'
+const EXECUTION_CONSENT_MODES = ['always_ask', 'always_execute']
 const COORDINATION_STORAGE_PREFIX = 'workflow-assist:v2:'
+
+function normalizeExecutionConsentMode(value) {
+  return EXECUTION_CONSENT_MODES.includes(value) ? value : 'always_ask'
+}
+
+function readStoredExecutionConsentMode() {
+  if (typeof localStorage === 'undefined')
+    return 'always_ask'
+  try {
+    return normalizeExecutionConsentMode(localStorage.getItem(EXECUTION_CONSENT_STORAGE_KEY))
+  }
+  catch {
+    return 'always_ask'
+  }
+}
+
+function writeStoredExecutionConsentMode(mode) {
+  if (typeof localStorage === 'undefined')
+    return
+  try {
+    localStorage.setItem(EXECUTION_CONSENT_STORAGE_KEY, mode)
+  }
+  catch {
+    // ignore quota / private mode
+  }
+}
 
 function emptyCoordination() {
   return {
@@ -150,6 +178,7 @@ export const useWorkflowAssistStore = defineStore('workflowAssist', {
       panelOpen: false,
       panelWidth: 420,
       selectedModel: readStoredModel(),
+      executionConsentMode: readStoredExecutionConsentMode(),
       toolCatalogue: null,
       toolCatalogueError: '',
       knowledgeCatalogue: null,
@@ -269,6 +298,12 @@ export const useWorkflowAssistStore = defineStore('workflowAssist', {
       writeStoredModel(next)
     },
 
+    setExecutionConsentMode(mode) {
+      const next = normalizeExecutionConsentMode(mode)
+      this.executionConsentMode = next
+      writeStoredExecutionConsentMode(next)
+    },
+
     setToolCatalogue(payload) {
       this.toolCatalogue = payload
       this.toolCatalogueError = ''
@@ -327,6 +362,8 @@ export const useWorkflowAssistStore = defineStore('workflowAssist', {
 
 export {
   COORDINATION_STORAGE_PREFIX,
+  EXECUTION_CONSENT_MODES,
+  EXECUTION_CONSENT_STORAGE_KEY,
   PREFERENCES_STORAGE_KEY,
   emptyCoordination,
   emptyModel,

@@ -51,6 +51,8 @@ export function workflowAssistTurnBody(input) {
     body.selected_node = input.selected_node
   if (Array.isArray(input?.references) && input.references.length)
     body.references = input.references
+  if (input?.execution_consent_mode === 'always_ask' || input?.execution_consent_mode === 'always_execute')
+    body.execution_consent_mode = input.execution_consent_mode
   return body
 }
 

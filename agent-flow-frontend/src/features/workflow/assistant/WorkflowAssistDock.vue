@@ -406,6 +406,7 @@ const assistController = useWorkflowAssistController({
     ...(turn.live_acceptance_request_id ? { live_acceptance_request_id: turn.live_acceptance_request_id } : {}),
     mode: props.appMode,
     model_config: assistStore.selectedModel,
+    execution_consent_mode: assistStore.executionConsentMode,
     ...(session.value.targetNodeIds[0] ? { selected_node: session.value.targetNodeIds[0] } : {}),
     ...(Array.isArray(turn.references) && turn.references.length ? { references: turn.references } : {}),
   }),

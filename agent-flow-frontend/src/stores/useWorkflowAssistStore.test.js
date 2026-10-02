@@ -56,14 +56,51 @@ test('active run coordinates persist until a terminal or stop', () => {
   setActivePinia(createPinia())
   const store = useWorkflowAssistStore()
 
-  store.setActiveRun('conv-1', { runId: 'run-1', epoch: 2, cursor: 3 })
-  assert.deepEqual(store.getActiveRun('conv-1'), { runId: 'run-1', epoch: 2, cursor: 3 })
+  store.setAppCoordination('app-1', { conversation_id: 'conv-1', run_id: 'run-1', epoch: 2, cursor: 3 })
+  assert.deepEqual(store.getAppCoordination('app-1'), {
+    conversation_id: 'conv-1',
+    run_id: 'run-1',
+    epoch: 2,
+    cursor: 3,
+  })
 
-  store.advanceRunCursor('conv-1', 5)
-  assert.equal(store.getActiveRun('conv-1').cursor, 5)
-  store.advanceRunCursor('conv-1', 4)
-  assert.equal(store.getActiveRun('conv-1').cursor, 5)
+  store.advanceAppCursor('app-1', 5)
+  assert.equal(store.getAppCoordination('app-1').cursor, 5)
+  store.advanceAppCursor('app-1', 4)
+  assert.equal(store.getAppCoordination('app-1').cursor, 5)
 
-  store.clearActiveRun('conv-1')
-  assert.equal(store.getActiveRun('conv-1'), null)
+  store.clearAppCoordination('app-1')
+  assert.deepEqual(store.getAppCoordination('app-1'), {
+    conversation_id: '',
+    run_id: '',
+    epoch: null,
+    cursor: 0,
+  })
+})
+
+test('execution consent mode defaults to always ask and persists only known values', () => {
+  const stored = new Map()
+  const originalLocalStorage = globalThis.localStorage
+  globalThis.localStorage = {
+    getItem: key => stored.get(key) ?? null,
+    setItem: (key, value) => stored.set(key, value),
+  }
+
+  try {
+    setActivePinia(createPinia())
+    const store = useWorkflowAssistStore()
+    assert.equal(store.executionConsentMode, 'always_ask')
+
+    store.setExecutionConsentMode('always_execute')
+    assert.equal(stored.get('workflow-assist:execution-consent'), 'always_execute')
+
+    setActivePinia(createPinia())
+    assert.equal(useWorkflowAssistStore().executionConsentMode, 'always_execute')
+
+    store.setExecutionConsentMode('sometimes')
+    assert.equal(store.executionConsentMode, 'always_ask')
+  }
+  finally {
+    globalThis.localStorage = originalLocalStorage
+  }
 })

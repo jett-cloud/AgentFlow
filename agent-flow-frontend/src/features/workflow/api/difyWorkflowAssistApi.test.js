@@ -293,3 +293,26 @@ test('feature API no longer exports legacy stream, patch, validation, or catalog
   ])
     assert.equal(removed in workflowAssistApi, false, `${removed} must not remain in the v2 API`)
 })
+
+test('turn body forwards only a known execution consent mode', async () => {
+  const bodies = []
+  await withClientMethod('post', async (_path, payload) => {
+    bodies.push(payload)
+    return { run_id: 'run-1', epoch: 1 }
+  }, async () => {
+    await workflowAssistApi.postWorkflowAssistTurn('app-1', 'conv-1', {
+      message: 'm',
+      mode: 'workflow',
+      model_config: {},
+      execution_consent_mode: 'always_execute',
+    })
+    await workflowAssistApi.postWorkflowAssistTurn('app-1', 'conv-1', {
+      message: 'm',
+      mode: 'workflow',
+      model_config: {},
+      execution_consent_mode: 'yolo',
+    })
+  })
+  assert.equal(bodies[0].execution_consent_mode, 'always_execute')
+  assert.equal('execution_consent_mode' in bodies[1], false)
+})
