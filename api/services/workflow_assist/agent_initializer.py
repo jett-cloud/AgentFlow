@@ -26,6 +26,7 @@ from configs import dify_config
 from core.app.app_config.entities import ModelConfig
 from core.db.session_factory import session_factory
 from core.model_manager import ModelManager
+from core.workflow.generator.acceptance.authorization import normalize_execution_consent_mode
 from core.workflow.generator.agent.compaction import COMPACTED_STATE_KEYS, TokenLimits, compute_input_limit
 from core.workflow.generator.agent.loop import SYSTEM_PROMPT, iter_agent_events
 from core.workflow.generator.agent.session import WorkflowAssistMessageRow, apply_user_turn, restore_session
@@ -57,9 +58,15 @@ from graphon.model_runtime.entities.message_entities import (
 from graphon.model_runtime.entities.model_entities import ModelFeature, ModelType
 from models import Account, App
 from models.workflow_assist import WorkflowAssistConversation, WorkflowAssistMessage
+from services.workflow_assist.graph_executor import build_acceptance_graph_executor
 from services.workflow_assist.hydrate import hydrate_agent_bindings
 from services.workflow_assist.knowledge_catalogue_loader import build_knowledge_catalogue
-from services.workflow_assist.live_acceptance import bind_live_authorizer
+from services.workflow_assist.live_acceptance import (
+    bind_live_authorizer,
+    declined_live_graph_hash,
+    executor_live_authorized,
+    live_grant,
+)
 from services.workflow_assist.model_catalogue import build_agent_model_catalogue
 from services.workflow_assist.run_types import AGENT_RESPONSE_OUTBOX_KEY, RunLease, RunOwner
 from services.workflow_assist.sandbox import build_acceptance_runner
@@ -716,6 +723,8 @@ def run_workflow_assist_agent(
         with session_factory.create_session() as db_session:
             environment_variables, conversation_variables = _draft_namespace_names(context.app_model, db_session)
             draft_workflow_id = _draft_workflow_id(context.app_model, db_session)
+        live_record = getattr(context.run, "live_acceptance", None)
+        consent_mode = normalize_execution_consent_mode(getattr(context.run, "execution_consent_mode", None))
         tool_context = ToolContext(
             env=ToolEnv(
                 require_resource_context=True,
@@ -748,7 +757,7 @@ def run_workflow_assist_agent(
                     app_id=str(context.app_model.id),
                     user_id=str(context.account.id),
                     workflow_id=draft_workflow_id,
-                    live_authorized=isinstance(getattr(context.run, "live_acceptance", None), dict),
+                    live_authorized=live_grant(live_record) is not None,
                 ),
                 authorize_live_acceptance=_durable_live_authorizer(context),
                 environment_variables=environment_variables,
@@ -756,6 +765,17 @@ def run_workflow_assist_agent(
                 run_id=str(context.run.id),
                 run_epoch=context.run.epoch,
                 contract_rollout_stage=str(getattr(context.run, "contract_rollout_stage", None) or "default"),
+                execution_consent_mode=consent_mode,
+                execute_graph=build_acceptance_graph_executor(
+                    tenant_id=str(context.app_model.tenant_id),
+                    app_id=str(context.app_model.id),
+                    user_id=str(context.account.id),
+                    workflow_id=draft_workflow_id,
+                    live_authorized=executor_live_authorized(live_record, consent_mode),
+                ),
+                live_consent_declined_hash=(
+                    None if consent_mode == "always_execute" else declined_live_graph_hash(live_record)
+                ),
             ),
             state=ToolTurnState(
                 graph=cast(MinimalGraphDict, graph),
@@ -807,7 +827,7 @@ def _serialize_agent_message(message: AgentMessage) -> dict[str, Any]:
 
 
 def _durable_live_authorizer(context: DurableAgentRunContext) -> Callable[[int, str], bool] | None:
-    if not isinstance(getattr(context.run, "live_acceptance", None), dict):
+    if live_grant(getattr(context.run, "live_acceptance", None)) is None:
         return None
     run = context.run
     return bind_live_authorizer(

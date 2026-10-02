@@ -48,6 +48,11 @@ def declined_live_graph_hash(record: object) -> str | None:
     return None
 
 
+def executor_live_authorized(record: object, execution_consent_mode: str) -> bool:
+    """Whether the injected engine may run live at all; the tools still gate every call."""
+    return execution_consent_mode == "always_execute" or live_grant(record) is not None
+
+
 def _pending_live_request(
     session: Session, conversation: WorkflowAssistConversation
 ) -> LiveAcceptanceRequest | None:
