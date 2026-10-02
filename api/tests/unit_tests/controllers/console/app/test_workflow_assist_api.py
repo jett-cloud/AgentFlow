@@ -267,7 +267,18 @@ def test_turn_payload_accepts_only_the_exact_v2_shape() -> None:
         "selected_node": "node-1",
         "references": None,
         "live_acceptance_request_id": None,
+        "execution_consent_mode": "always_ask",
     }
+
+
+def test_turn_payload_accepts_only_known_execution_consent_modes() -> None:
+    base = {"message": "Build it", "mode": "workflow", "model_config": {}}
+    parsed = workflow_assist_module.WorkflowAssistTurnPayload.model_validate(
+        {**base, "execution_consent_mode": "always_execute"}
+    )
+    assert parsed.execution_consent_mode == "always_execute"
+    with pytest.raises(ValidationError):
+        workflow_assist_module.WorkflowAssistTurnPayload.model_validate({**base, "execution_consent_mode": "yolo"})
 
 
 def test_turn_payload_drops_malformed_references_and_rejects_more_than_eight() -> None:
@@ -358,6 +369,7 @@ def test_turn_controller_returns_exact_202_contract(app: Flask, monkeypatch: pyt
         selected_node="node-1",
         references=None,
         live_acceptance_request_id=None,
+        execution_consent_mode="always_ask",
     )
 
 

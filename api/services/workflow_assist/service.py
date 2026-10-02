@@ -70,6 +70,7 @@ class WorkflowAssistService:
         selected_node: str | None = None,
         references: list[dict[str, Any]] | None = None,
         live_acceptance_request_id: str | None = None,
+        execution_consent_mode: str = "always_ask",
     ) -> WorkflowAssistRun:
         """Commit a durable turn before dispatching its worker task."""
         try:
@@ -106,6 +107,7 @@ class WorkflowAssistService:
                 selected_node=selected_node,
                 references=bound_references,
                 live_acceptance_request_id=live_acceptance_request_id,
+                execution_consent_mode=execution_consent_mode,
             )
         except (ValueError, UnknownTurnReferenceError) as exc:
             raise WorkflowAssistInvalidTurnError(str(exc)) from exc

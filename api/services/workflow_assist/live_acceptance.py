@@ -17,8 +17,40 @@ def resolve_live_approval(
     conversation: WorkflowAssistConversation,
     request_id: str | None,
 ) -> dict[str, object] | None:
+    """Return a one-shot grant, a decline marker for a consent card left unapproved, or ``None``."""
+    request = _pending_live_request(session, conversation)
     if request_id is None:
-        return None
+        if request is None:
+            return None
+        return {"declined": True, "graph_hash": request.graph_hash, "candidate_revision": request.candidate_revision}
+    if request is None:
+        raise ValueError("No pending live execution request")
+    if (
+        request.request_id != request_id
+        or conversation.candidate_revision != request.candidate_revision
+        or not isinstance(conversation.candidate_graph, dict)
+        or canonical_graph_hash(conversation.candidate_graph) != request.graph_hash
+    ):
+        raise ValueError("Live execution request is stale")
+    return {**request.model_dump(mode="json"), "consumed": False}
+
+
+def live_grant(record: object) -> dict[str, object] | None:
+    """Return ``record`` only when it is an approval grant, never a decline marker."""
+    if isinstance(record, dict) and "consumed" in record and not record.get("declined"):
+        return record
+    return None
+
+
+def declined_live_graph_hash(record: object) -> str | None:
+    if isinstance(record, dict) and record.get("declined") is True and isinstance(record.get("graph_hash"), str):
+        return record["graph_hash"]
+    return None
+
+
+def _pending_live_request(
+    session: Session, conversation: WorkflowAssistConversation
+) -> LiveAcceptanceRequest | None:
     latest = session.scalar(
         select(WorkflowAssistMessage)
         .where(
@@ -36,23 +68,19 @@ def resolve_live_approval(
         or latest.event_type != "tool_call"
         or latest.payload.get("name") != "ask_user"
     ):
-        raise ValueError("No pending live execution request")
+        return None
     questions = (latest.payload.get("arguments") or {}).get("questions") or []
     if (
         len(questions) != 1
+        or not isinstance(questions[0], dict)
         or questions[0].get("id") != LIVE_CONSENT_QUESTION_ID
         or questions[0].get("kind") != "live_acceptance"
     ):
-        raise ValueError("No pending live execution request")
-    request = LiveAcceptanceRequest.model_validate(questions[0].get("execution_request"))
-    if (
-        request.request_id != request_id
-        or conversation.candidate_revision != request.candidate_revision
-        or not isinstance(conversation.candidate_graph, dict)
-        or canonical_graph_hash(conversation.candidate_graph) != request.graph_hash
-    ):
-        raise ValueError("Live execution request is stale")
-    return {**request.model_dump(mode="json"), "consumed": False}
+        return None
+    try:
+        return LiveAcceptanceRequest.model_validate(questions[0].get("execution_request"))
+    except ValueError:
+        return None
 
 
 def bind_live_authorizer(lease: RunLease) -> Callable[[int, str], bool]:

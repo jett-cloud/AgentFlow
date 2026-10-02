@@ -102,10 +102,15 @@ class RunCoordinator:
         selected_node: str | None = None,
         references: list[dict[str, Any]] | None = None,
         live_acceptance_request_id: str | None = None,
+        execution_consent_mode: str = "always_ask",
     ) -> WorkflowAssistRun:
         """Atomically supersede an active run and create one queued user turn."""
         normalized_message = prepare_run_input(message)
         normalized_mode = self._normalize_mode(mode)
+        from core.workflow.generator.acceptance.authorization import EXECUTION_CONSENT_MODES
+
+        if execution_consent_mode not in EXECUTION_CONSENT_MODES:
+            raise ValueError("execution_consent_mode must be always_ask or always_execute")
         prepared_model_config = prepare_model_config(model_config)
         normalized_selected_node = self._normalize_optional_text(
             selected_node, field_name="selected_node", max_length=255
@@ -118,7 +123,22 @@ class RunCoordinator:
                 conversation = self._lock_conversation(owner)
                 from services.workflow_assist.live_acceptance import resolve_live_approval
 
-                live_acceptance = resolve_live_approval(self.session, conversation, live_acceptance_request_id)
+                latest_live_record = self._latest_live_record(owner, conversation.latest_run_id)
+                resolved_live_record = resolve_live_approval(
+                    self.session, conversation, live_acceptance_request_id
+                )
+                if execution_consent_mode == "always_execute":
+                    live_acceptance = None
+                elif resolved_live_record is not None:
+                    live_acceptance = resolved_live_record
+                else:
+                    live_acceptance = _retained_decline(
+                        latest_live_record,
+                        execution_consent_mode=execution_consent_mode,
+                        graph_hash=canonical_graph_hash(conversation.candidate_graph)
+                        if isinstance(conversation.candidate_graph, dict)
+                        else None,
+                    )
                 if conversation.active_run_id is not None:
                     active_run = self._lock_run(
                         owner,
@@ -158,6 +178,7 @@ class RunCoordinator:
                     contract_protocol_version=conversation.contract_protocol_version,
                     contract_rollout_stage=str(dify_config.WORKFLOW_ASSIST_CONTRACT_ROLLOUT),
                     live_acceptance=live_acceptance,
+                    execution_consent_mode=execution_consent_mode,
                     next_event_sequence=1,
                     candidate_revision=conversation.candidate_revision,
                 )
@@ -248,6 +269,14 @@ class RunCoordinator:
                     references=list(failed_run.references) if failed_run.references else None,
                     contract_protocol_version=failed_run.contract_protocol_version,
                     contract_rollout_stage=failed_run.contract_rollout_stage,
+                    live_acceptance=_retained_decline(
+                        failed_run.live_acceptance,
+                        execution_consent_mode=failed_run.execution_consent_mode,
+                        graph_hash=canonical_graph_hash(conversation.candidate_graph)
+                        if isinstance(conversation.candidate_graph, dict)
+                        else None,
+                    ),
+                    execution_consent_mode=failed_run.execution_consent_mode,
                     next_event_sequence=1,
                     candidate_revision=conversation.candidate_revision,
                 )
@@ -962,6 +991,16 @@ class RunCoordinator:
             raise WorkflowAssistConversationNotFound()
         return conversation
 
+    def _latest_live_record(self, owner: RunOwner, run_id: str | None) -> object:
+        if run_id is None:
+            return None
+        return self.session.scalar(
+            select(WorkflowAssistRun.live_acceptance).where(
+                *self._run_owner_predicates(owner),
+                WorkflowAssistRun.id == run_id,
+            )
+        )
+
     def _lock_current_conversation(
         self, owner: RunOwner, *, run_id: str, epoch: int
     ) -> WorkflowAssistConversation | None:
@@ -1496,3 +1535,14 @@ class RunCoordinator:
             WorkflowAssistRunEvent.created_by == owner.account_id,
             WorkflowAssistRunEvent.conversation_id == owner.conversation_id,
         )
+
+
+def _retained_decline(
+    record: object, *, execution_consent_mode: str, graph_hash: str | None
+) -> dict[str, object] | None:
+    """Keep an always-ask decline only while it still names the current graph."""
+    from services.workflow_assist.live_acceptance import declined_live_graph_hash
+
+    if execution_consent_mode != "always_ask" or graph_hash is None:
+        return None
+    return dict(record) if declined_live_graph_hash(record) == graph_hash and isinstance(record, dict) else None

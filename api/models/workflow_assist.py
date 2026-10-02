@@ -224,6 +224,9 @@ class WorkflowAssistRun(DefaultFieldsMixin, Base):
     contract_protocol_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     contract_rollout_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
     live_acceptance: Mapped[dict[str, Any] | None] = mapped_column(AdjustedJSON(), nullable=True)
+    execution_consent_mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="always_ask", server_default=sa.text("'always_ask'")
+    )
     next_event_sequence: Mapped[int] = mapped_column(
         Integer,
         nullable=False,

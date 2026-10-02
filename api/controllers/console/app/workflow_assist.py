@@ -124,6 +124,7 @@ class WorkflowAssistTurnPayload(_WorkflowAssistPayload):
     selected_node: str | None = Field(default=None, min_length=1, max_length=255)
     references: list[dict[str, Any]] | None = Field(default=None)
     live_acceptance_request_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+    execution_consent_mode: Literal["always_ask", "always_execute"] = "always_ask"
 
     @field_validator("message")
     @classmethod
@@ -613,6 +614,7 @@ class WorkflowAssistTurnApi(Resource):
                 selected_node=payload.selected_node,
                 references=payload.references,
                 live_acceptance_request_id=payload.live_acceptance_request_id,
+                execution_consent_mode=payload.execution_consent_mode,
             )
         except (ValidationError, WorkflowAssistInvalidTurnError) as exc:
             raise BadRequest(str(exc)) from exc

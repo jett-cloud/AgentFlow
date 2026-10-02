@@ -68,10 +68,7 @@ TABLES = (
 )
 
 
-@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
-def test_live_approval_is_bound_to_pending_graph_and_consumed_once(sqlite_session: Session) -> None:
-    from dataclasses import replace
-
+def _pending_live_consent(sqlite_session: Session):
     from core.workflow.generator.acceptance.authorization import build_live_acceptance_request
     from services.workflow_assist.run_values import sanitize_payload
 
@@ -109,6 +106,14 @@ def test_live_approval_is_bound_to_pending_graph_and_consumed_once(sqlite_sessio
         )
     )
     sqlite_session.flush()
+    return conversation, request
+
+
+@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
+def test_live_approval_is_bound_to_pending_graph_and_consumed_once(sqlite_session: Session) -> None:
+    from dataclasses import replace
+
+    _, request = _pending_live_consent(sqlite_session)
     coordinator = RunCoordinator(sqlite_session)
     with pytest.raises(ValueError, match="stale"):
         coordinator.start_turn(
@@ -143,6 +148,67 @@ def test_live_approval_is_bound_to_pending_graph_and_consumed_once(sqlite_sessio
             model_config={},
             live_acceptance_request_id=request.request_id,
         )
+
+
+@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
+def test_unapproved_live_consent_survives_same_graph_turns_and_retry(sqlite_session: Session) -> None:
+    _, request = _pending_live_consent(sqlite_session)
+    coordinator = RunCoordinator(sqlite_session)
+
+    run = coordinator.start_turn(owner=_owner(), message="用模拟数据测", mode="workflow", model_config={})
+
+    assert run.live_acceptance == {"declined": True, "graph_hash": request.graph_hash, "candidate_revision": 2}
+    assert run.execution_consent_mode == "always_ask"
+    followup = coordinator.start_turn(owner=_owner(), message="继续测试", mode="workflow", model_config={})
+    assert followup.live_acceptance == run.live_acceptance
+    lease = coordinator.claim(owner=_owner(), run_id=followup.id, epoch=followup.epoch, worker_id="worker-1")
+    assert lease is not None
+    assert not coordinator.consume_live_acceptance(lease=lease, revision=2, graph_hash=request.graph_hash)
+    _terminate_error(coordinator, lease)
+    retried = coordinator.retry_failed_step(
+        owner=_owner(), run_id=followup.id, epoch=followup.epoch, failed_step_id="error:provider"
+    )
+    assert retried.live_acceptance == followup.live_acceptance
+
+
+@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
+def test_decline_expires_when_candidate_hash_changes(sqlite_session: Session) -> None:
+    conversation, _ = _pending_live_consent(sqlite_session)
+    coordinator = RunCoordinator(sqlite_session)
+    declined = coordinator.start_turn(owner=_owner(), message="先用 mock", mode="workflow", model_config={})
+    assert declined.live_acceptance is not None
+
+    conversation.candidate_graph = {"nodes": [{"id": "code", "data": {"type": "code"}}], "edges": []}
+    conversation.candidate_revision += 1
+    changed = coordinator.start_turn(owner=_owner(), message="图已经修改", mode="workflow", model_config={})
+
+    assert changed.live_acceptance is None
+
+
+@pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
+def test_execution_consent_mode_is_validated_persisted_and_retried(sqlite_session: Session) -> None:
+    _pending_live_consent(sqlite_session)
+    coordinator = RunCoordinator(sqlite_session)
+    with pytest.raises(ValueError, match="execution_consent_mode"):
+        coordinator.start_turn(
+            owner=_owner(), message="hi", mode="workflow", model_config={}, execution_consent_mode="sometimes"
+        )
+
+    run = coordinator.start_turn(
+        owner=_owner(), message="hi", mode="workflow", model_config={}, execution_consent_mode="always_execute"
+    )
+
+    assert run.execution_consent_mode == "always_execute"
+    # The pending consent would have become a decline in always_ask; switching mode clears it.
+    assert run.live_acceptance is None
+    lease = coordinator.claim(owner=_owner(), run_id=run.id, epoch=run.epoch, worker_id="worker-1")
+    assert lease is not None
+    _terminate_error(coordinator, lease)
+    retried = coordinator.retry_failed_step(
+        owner=_owner(), run_id=run.id, epoch=run.epoch, failed_step_id="error:provider"
+    )
+    assert retried.execution_consent_mode == "always_execute"
+    assert retried.live_acceptance is None
 
 
 @pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
@@ -837,7 +903,7 @@ def test_start_turn_requests_a_conversation_row_lock() -> None:
         app_id="app-1",
         account_id="account-1",
     )
-    session.scalar.side_effect = [conversation, 0]
+    session.scalar.side_effect = [conversation, None, 0]
 
     RunCoordinator(session).start_turn(
         owner=_owner(),
