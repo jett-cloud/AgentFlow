@@ -40,6 +40,7 @@ from graphon.graph_events import (
     NodeRunSucceededEvent,
 )
 from graphon.runtime import GraphRuntimeState, VariablePool
+from graphon.workflow_type_encoder import WorkflowRuntimeTypeConverter
 from services.workflow_assist.acceptance_bindings import AcceptanceSessionStore, CandidateBindingResolver
 from services.workflow_assist.effect_policy import execution_policy_errors
 
@@ -170,7 +171,8 @@ def failed_traces_from_events(events: Iterable[GraphEngineEvent]) -> GraphExecut
 def _plain_outputs(outputs: object) -> dict[str, object]:
     if not isinstance(outputs, Mapping):
         return {}
-    return {str(key): value for key, value in outputs.items()}
+    converted = WorkflowRuntimeTypeConverter().to_json_encodable(outputs)
+    return {str(key): value for key, value in converted.items()}
 
 
 def _failure_category(error: str) -> str:

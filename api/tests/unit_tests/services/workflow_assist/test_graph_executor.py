@@ -18,6 +18,7 @@ from graphon.graph_events import (
     NodeRunSucceededEvent,
 )
 from graphon.node_events import NodeRunResult
+from graphon.variables.segments import ArrayFileSegment
 from services.workflow_assist.graph_executor import (
     build_acceptance_graph_executor,
     execute_acceptance_graph,
@@ -153,6 +154,30 @@ def test_execution_trace_captures_node_and_terminal_outputs() -> None:
 
     assert traces.node_outputs == {"code": {"result": 42}}
     assert traces.graph_outputs == {"answer": 42}
+
+
+def test_execution_trace_converts_runtime_segments_to_json_values() -> None:
+    files = ArrayFileSegment(value=[])
+    node_result = NodeRunResult(
+        status=WorkflowNodeExecutionStatus.SUCCEEDED,
+        outputs={"files": files},
+    )
+
+    traces = failed_traces_from_events(
+        [
+            NodeRunSucceededEvent(
+                id="exec",
+                node_id="code",
+                node_type=BuiltinNodeTypes.CODE,
+                start_at=datetime.now(UTC).replace(tzinfo=None),
+                node_run_result=node_result,
+            ),
+            GraphRunSucceededEvent(outputs={"files": files}),
+        ]
+    )
+
+    assert traces.node_outputs == {"code": {"files": []}}
+    assert traces.graph_outputs == {"files": []}
 
 
 @pytest.mark.parametrize(
