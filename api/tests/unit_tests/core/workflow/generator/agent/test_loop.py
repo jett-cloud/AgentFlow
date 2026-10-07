@@ -8,13 +8,14 @@ from typing import Any
 
 import pytest
 
-from core.workflow.generator.acceptance.evidence import GraphExecutionTrace
+from core.workflow.generator.acceptance.evidence import GraphExecutionTrace, canonical_graph_hash
 from core.workflow.generator.agent.compaction import TokenLimits
 from core.workflow.generator.agent.loop import iter_agent_events
 from core.workflow.generator.agent.protocol.turn import _parse_turn
 from core.workflow.generator.agent.scheduling import creates as create_scheduler
 from core.workflow.generator.agent.state import reducer as state_reducer
-from core.workflow.generator.agent.state.reducer import _graph_diff, _summary
+from core.workflow.generator.agent.state.reducer import _graph_diff, _summary, _verification_payload
+from core.workflow.generator.agent.tools.tool_context import WorkflowExecutionRecord
 from core.workflow.generator.agent.tools.tool_mutate import CompiledBuildNode
 from core.workflow.generator.agent.tools.tools import ToolContext, compile_build_node
 from core.workflow.generator.agent.tools.tools import dispatch as real_dispatch
@@ -1910,9 +1911,49 @@ def test_accepted_finish_yields_done_with_diff(loop_harness) -> None:
     assert set(payload["diff"]) >= {"added", "removed", "updated"}
     assert "validation" in payload
     assert payload["validation"]["ok"] is True
+    assert payload["verification"] == {
+        "structure": "passed",
+        "runtime": "not_run",
+        "business": "unverified",
+    }
     start = next(node for node in payload["graph"]["nodes"] if node["id"] == "start")
     end = next(node for node in payload["graph"]["nodes"] if node["id"] == "end")
     assert start["position"]["x"] < end["position"]["x"]
+
+
+def test_completion_reports_live_workflow_observation_separately_from_simulated_acceptance(loop_harness) -> None:
+    graph = _connected_start_end()
+    graph_hash = canonical_graph_hash(graph)
+    loop_harness.context.state.graph = graph
+    loop_harness.context.state.candidate_revision = 4
+    loop_harness.context.state.graph_hash = graph_hash
+    loop_harness.context.state.last_workflow_execution = WorkflowExecutionRecord(
+        revision=4,
+        graph_hash=graph_hash,
+        passed=True,
+        verification_level="live",
+    )
+    loop_harness.context.state.attempts["simulated-acceptance"] = {
+        "attempt_id": "simulated-acceptance",
+        "revision": 4,
+        "graph_hash": graph_hash,
+        "case_id": "default",
+        "mode": "simulated",
+        "passed": True,
+        "executed": True,
+        "status": "simulated",
+        "failed_nodes": [],
+        "evidence": [],
+        "trace_summary": "ok",
+        "unverified_nodes": [],
+        "business_verified": False,
+    }
+
+    assert _verification_payload(loop_harness.context, structure_ok=True) == {
+        "structure": "passed",
+        "runtime": "live_passed",
+        "business": "unverified",
+    }
 
 
 def test_user_abort_is_aborted_not_done(loop_harness) -> None:
@@ -2694,7 +2735,7 @@ def test_successful_run_workflow_is_an_observation_not_completion(loop_harness) 
     loop_harness.context.env = replace(
         loop_harness.context.env, execute_graph=lambda graph, mode, inputs: GraphExecutionTrace()
     )
-    loop_harness.invoker.queue_tool_calls([{"id": "r1", "name": "run_workflow", "arguments": {"level": "mock"}}])
+    loop_harness.invoker.queue_tool_calls([{"id": "r1", "name": "run_workflow", "arguments": {}}])
     loop_harness.invoker.queue_tool_calls([{"id": "f1", "name": "finish", "arguments": {"summary": "已测试"}}])
 
     events = list(iter_agent_events(**loop_harness.kwargs))

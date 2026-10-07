@@ -96,10 +96,10 @@ def test_invalid_graph_is_rejected_before_execution(tool_context: ToolContext) -
     assert executor.calls == []
 
 
-def test_live_run_requires_consent_in_always_ask(prepared: ToolContext) -> None:
+def test_run_workflow_requires_consent_for_external_nodes_in_always_ask(prepared: ToolContext) -> None:
     executor = _FakeExecutor()
     set_env(prepared, execute_graph=executor)
-    result = dispatch(_call("run_workflow", level="live"), prepared)
+    result = dispatch(_call("run_workflow"), prepared)
     assert result["error_code"] == "LIVE_RUN_REQUIRES_CONSENT"
     assert result["retryable"] is True
     assert executor.calls == []
@@ -113,7 +113,7 @@ def test_live_run_reserves_the_grant_for_the_current_hash(prepared: ToolContext)
         execute_graph=executor,
         authorize_live_acceptance=lambda revision, graph_hash: reserved.append((revision, graph_hash)) or True,
     )
-    result = dispatch(_call("run_workflow", level="live", start_inputs={"q": "hi"}), prepared)
+    result = dispatch(_call("run_workflow", start_inputs={"q": "hi"}), prepared)
     assert result["ok"] is True
     assert reserved == [(prepared.state.candidate_revision, canonical_graph_hash(prepared.state.graph))]
     assert executor.calls[0]["mode"] == "live"
@@ -130,29 +130,35 @@ def test_always_execute_runs_live_without_a_grant_and_ignores_stale_decline(prep
         execution_consent_mode="always_execute",
         live_consent_declined_hash=canonical_graph_hash(prepared.state.graph),
     )
-    result = dispatch(_call("run_workflow", level="live"), prepared)
+    result = dispatch(_call("run_workflow"), prepared)
     assert result["ok"] is True
     assert executor.calls[0]["mode"] == "live"
 
 
-def test_declined_hash_denies_live_in_always_ask_even_with_a_grant(prepared: ToolContext) -> None:
-    executor = _FakeExecutor()
+def test_declined_hash_falls_back_to_mock_without_consuming_a_grant(prepared: ToolContext) -> None:
+    executor = _FakeExecutor(node_outputs={"llm": {"text": "差评"}, "code": {"result": "差评!"}})
+    reserved: list[tuple[int, str]] = []
     set_env(
         prepared,
         execute_graph=executor,
-        authorize_live_acceptance=lambda revision, graph_hash: True,
+        authorize_live_acceptance=lambda revision, graph_hash: reserved.append((revision, graph_hash)) or True,
         live_consent_declined_hash=canonical_graph_hash(prepared.state.graph),
     )
-    result = dispatch(_call("run_workflow", level="live"), prepared)
-    assert result["error_code"] == "EXECUTION_CONSENT_DENIED"
-    assert result["retryable"] is False
-    assert executor.calls == []
+    result = dispatch(_call("run_workflow", mocks={"llm": {"text": "差评"}}), prepared)
+    assert result["ok"] is True
+    assert reserved == []
+    assert executor.calls[0]["mode"] == "simulated"
+    assert result["content"]["verification_level"] == "mock"
 
 
-def test_mock_run_rewrites_external_nodes_and_stays_simulated(prepared: ToolContext) -> None:
+def test_declined_run_rewrites_external_nodes_and_stays_simulated(prepared: ToolContext) -> None:
     executor = _FakeExecutor(node_outputs={"llm": {"text": "差评"}, "code": {"result": "差评!"}})
-    set_env(prepared, execute_graph=executor)
-    result = dispatch(_call("run_workflow", level="mock", mocks={"llm": {"text": "差评"}}), prepared)
+    set_env(
+        prepared,
+        execute_graph=executor,
+        live_consent_declined_hash=canonical_graph_hash(prepared.state.graph),
+    )
+    result = dispatch(_call("run_workflow", mocks={"llm": {"text": "差评"}}), prepared)
     assert result["ok"] is True
     sent = executor.calls[0]
     assert sent["mode"] == "simulated"
@@ -171,7 +177,7 @@ def test_local_only_graph_skips_the_gate(prepared: ToolContext) -> None:
     prepared.state.graph = _graph(with_llm=False)
     executor = _FakeExecutor()
     set_env(prepared, execute_graph=executor)
-    result = dispatch(_call("run_workflow", level="live"), prepared)
+    result = dispatch(_call("run_workflow"), prepared)
     assert result["ok"] is True
     assert executor.calls[0]["mode"] == "simulated"
     assert result["content"]["verification_level"] == "local_only"
@@ -181,7 +187,7 @@ def test_engine_failure_is_returned_to_the_agent_not_completed(prepared: ToolCon
     failed: list[FailedNodeTrace] = [
         {"id": "code", "type": "code", "error": "Acceptance execution failed (runtime)", "category": "runtime"}
     ]
-    set_env(prepared, execute_graph=_FakeExecutor(failed=failed))
+    set_env(prepared, execute_graph=_FakeExecutor(failed=failed), execution_consent_mode="always_execute")
     result = dispatch(_call("run_workflow"), prepared)
     assert result["ok"] is True
     assert result["content"]["passed"] is False
@@ -189,12 +195,13 @@ def test_engine_failure_is_returned_to_the_agent_not_completed(prepared: ToolCon
 
 
 def test_mock_errors_and_bad_arguments_are_reported(prepared: ToolContext) -> None:
-    set_env(prepared, execute_graph=_FakeExecutor())
-    assert dispatch(_call("run_workflow", level="fast"), prepared)["error_code"] == "INVALID_ARGUMENT"
-    assert (
-        dispatch(_call("run_workflow", level="live", mocks={"llm": {"text": "x"}}), prepared)["error_code"]
-        == "INVALID_ARGUMENT"
+    set_env(
+        prepared,
+        execute_graph=_FakeExecutor(),
+        live_consent_declined_hash=canonical_graph_hash(prepared.state.graph),
     )
+    assert dispatch(_call("run_workflow", level="fast"), prepared)["error_code"] == "INVALID_ARGUMENT"
+    assert dispatch(_call("run_workflow", level="mock"), prepared)["error_code"] == "INVALID_ARGUMENT"
     assert (
         dispatch(_call("run_workflow", mocks={"llm": {"text": 3}}), prepared)["error_code"]
         == "INVALID_MOCK_OUTPUT"
@@ -202,7 +209,11 @@ def test_mock_errors_and_bad_arguments_are_reported(prepared: ToolContext) -> No
 
 
 def test_large_outputs_are_clipped(prepared: ToolContext) -> None:
-    set_env(prepared, execute_graph=_FakeExecutor(node_outputs={"code": {"result": "x" * 5000}}))
+    set_env(
+        prepared,
+        execute_graph=_FakeExecutor(node_outputs={"code": {"result": "x" * 5000}}),
+        execution_consent_mode="always_execute",
+    )
     content = dispatch(_call("run_workflow"), prepared)["content"]
     assert content["node_outputs"]["code"]["result"]["truncated"] is True
 
@@ -224,7 +235,11 @@ def test_run_node_probes_a_local_target_with_upstream_fixtures(prepared: ToolCon
 
 
 def test_run_node_defaults_upstream_to_the_last_run(prepared: ToolContext) -> None:
-    set_env(prepared, execute_graph=_FakeExecutor())
+    set_env(
+        prepared,
+        execute_graph=_FakeExecutor(),
+        live_consent_declined_hash=canonical_graph_hash(prepared.state.graph),
+    )
     dispatch(_call("run_workflow", mocks={"llm": {"text": "差评"}}), prepared)
     result = dispatch(_call("run_node", node_id="code"), prepared)
     assert result["content"]["upstream_outputs"]["llm"]["text"] == "差评"
@@ -276,7 +291,7 @@ def test_ask_user_consent_is_rejected_when_calls_are_pre_approved(tool_context: 
     set_env(tool_context, execution_consent_mode="always_execute")
     result = dispatch(_consent_call(), tool_context)
     assert result["error_code"] == "INVALID_ARGUMENT"
-    assert "level=live" in result["error"]
+    assert "call run_workflow" in result["error"]
 
 
 def test_ask_user_consent_is_not_repeated_for_a_declined_candidate(tool_context: ToolContext) -> None:

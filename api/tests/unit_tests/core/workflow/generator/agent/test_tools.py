@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from core.workflow.generator.acceptance.evidence import canonical_graph_hash
+from core.workflow.generator.acceptance.evidence import AcceptanceMode, GraphExecutionTrace, canonical_graph_hash
 from core.workflow.generator.agent.tools.tool_build_tool import CompiledToolNode
 from core.workflow.generator.agent.tools.tool_mutate import CompiledBuildNode, pending_plan_nodes_from_calls
 from core.workflow.generator.agent.tools.tools import (
@@ -137,6 +137,7 @@ def test_retryable_is_table_driven() -> None:
     assert RETRYABLE_BY_ERROR_CODE["UNSUPPORTED_NODE_TYPE"] is False
     assert RETRYABLE_BY_ERROR_CODE["CAPABILITY_UNAVAILABLE"] is False
     assert RETRYABLE_BY_ERROR_CODE["LIVE_RUN_REQUIRES_CONSENT"] is True
+    assert RETRYABLE_BY_ERROR_CODE["WORKFLOW_EXECUTION_REQUIRED"] is True
 
 
 def test_read_node_returns_config_without_edges(tool_context: ToolContext) -> None:
@@ -2673,10 +2674,78 @@ class _FakeAcceptanceRunner:
         ]
 
 
+class _PassingGraphExecutor:
+    def __call__(self, graph, mode: AcceptanceMode, start_inputs) -> GraphExecutionTrace:
+        trace = GraphExecutionTrace()
+        trace.executed_node_ids = {node["id"] for node in graph["nodes"]}
+        return trace
+
+
+class _FailingGraphExecutor:
+    def __call__(self, graph, mode: AcceptanceMode, start_inputs) -> GraphExecutionTrace:
+        trace = GraphExecutionTrace()
+        trace.append({"id": "end", "type": "end", "error": "boom", "category": "runtime"})
+        return trace
+
+
 def test_run_acceptance_without_runner_is_unavailable(tool_context: ToolContext) -> None:
     result = dispatch(_call("run_acceptance"), tool_context)
     assert result["ok"] is False
     assert result["error_code"] == "CAPABILITY_UNAVAILABLE"
+
+
+def test_run_acceptance_requires_current_workflow_execution_when_executor_is_available(
+    tool_context: ToolContext,
+) -> None:
+    tool_context.state.graph = _connected_start_end()
+    runner = _FakeAcceptanceRunner()
+    _set_env(tool_context, acceptance_runner=runner, execute_graph=_PassingGraphExecutor())
+
+    result = dispatch(_call("run_acceptance"), tool_context)
+
+    assert result["ok"] is False
+    assert result["error_code"] == "WORKFLOW_EXECUTION_REQUIRED"
+    assert runner.calls == []
+
+
+def test_run_acceptance_allows_a_current_passing_workflow_execution(tool_context: ToolContext) -> None:
+    tool_context.state.graph = _connected_start_end()
+    runner = _FakeAcceptanceRunner()
+    _set_env(tool_context, acceptance_runner=runner, execute_graph=_PassingGraphExecutor())
+
+    execution = dispatch(_call("run_workflow"), tool_context)
+    result = dispatch(_call("run_acceptance"), tool_context)
+
+    assert execution["content"]["passed"] is True
+    assert result["ok"] is True
+    assert len(runner.calls) == 1
+
+
+def test_run_acceptance_rejects_a_current_failed_workflow_execution(tool_context: ToolContext) -> None:
+    tool_context.state.graph = _connected_start_end()
+    runner = _FakeAcceptanceRunner()
+    _set_env(tool_context, acceptance_runner=runner, execute_graph=_FailingGraphExecutor())
+
+    execution = dispatch(_call("run_workflow"), tool_context)
+    result = dispatch(_call("run_acceptance"), tool_context)
+
+    assert execution["content"]["passed"] is False
+    assert result["error_code"] == "WORKFLOW_EXECUTION_REQUIRED"
+    assert runner.calls == []
+
+
+def test_graph_mutation_invalidates_workflow_execution_for_acceptance(tool_context: ToolContext) -> None:
+    tool_context.state.graph = _connected_start_end()
+    runner = _FakeAcceptanceRunner()
+    _set_env(tool_context, acceptance_runner=runner, execute_graph=_PassingGraphExecutor())
+    assert dispatch(_call("run_workflow"), tool_context)["content"]["passed"] is True
+    tool_context.state.graph["nodes"][1]["data"]["title"] = "新结束"
+    tool_context.state.candidate_revision += 1
+
+    result = dispatch(_call("run_acceptance"), tool_context)
+
+    assert result["error_code"] == "WORKFLOW_EXECUTION_REQUIRED"
+    assert runner.calls == []
 
 
 def test_live_acceptance_without_consent_does_not_run(tool_context: ToolContext) -> None:

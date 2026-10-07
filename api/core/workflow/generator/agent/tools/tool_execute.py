@@ -4,13 +4,11 @@ Execution is an observation. These tools prepare the candidate exactly like
 ``run_acceptance`` (validate, hydrate, layout), never record acceptance
 Evidence and never complete the run; only ``finish`` does.
 
-Consent is enforced here, not by the model. ``level=live`` on a graph with
-external nodes runs in ``always_execute`` mode without consulting an older
-decline, or when ``authorize_live_acceptance`` reserves the current revision
-and graph hash in ``always_ask`` mode. An unapproved consent for the current
-hash returns ``EXECUTION_CONSENT_DENIED`` only while the mode remains
-``always_ask``. ``level=mock`` swaps external nodes for fixed-output code nodes
-and always runs the engine in simulated mode.
+Consent is enforced here, not by the model. ``run_workflow`` selects its own
+strategy: local-only graphs run simulated, ``always_execute`` or a one-shot
+grant runs external nodes live, and a decline for the current graph falls back
+to a simulated mock graph. ``run_node`` keeps an explicit level because an
+external target cannot be meaningfully tested by echoing its own fixture.
 """
 
 from __future__ import annotations
@@ -18,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping
-from typing import cast
+from typing import Literal, cast
 
 from core.workflow.generator.acceptance.effects import classify_node_effect, external_node_ids
 from core.workflow.generator.acceptance.evidence import AcceptanceMode, GraphExecutionTrace, canonical_graph_hash
@@ -29,7 +27,12 @@ from core.workflow.generator.acceptance.mocks import (
     build_node_probe_graph,
     describe_mock_target,
 )
-from core.workflow.generator.agent.tools.tool_context import GraphExecuteFn, ToolContext
+from core.workflow.generator.agent.tools.tool_context import (
+    GraphExecuteFn,
+    ToolContext,
+    WorkflowExecutionRecord,
+    WorkflowVerificationLevel,
+)
 from core.workflow.generator.agent.tools.tool_lifecycle import prepare_candidate_for_execution
 from core.workflow.generator.agent.tools.tool_results import error, ok, require_str
 from core.workflow.generator.agent.types import ToolCall, ToolResult
@@ -40,6 +43,7 @@ from core.workflow.generator.types import GraphDict
 logger = logging.getLogger(__name__)
 
 _LEVELS = ("live", "mock")
+_WorkflowExecutionStrategy = Literal["local_only", "live", "mock", "requires_consent"]
 _MAX_VALUE_CHARS = 2000
 _MAX_NODE_OUTPUT_CHARS = 16000
 
@@ -48,15 +52,14 @@ def run_workflow(call: ToolCall, context: ToolContext) -> ToolResult:
     execute_graph = context.env.execute_graph
     if execute_graph is None:
         return error(call, "CAPABILITY_UNAVAILABLE", "Workflow execution is not available")
-    parsed = _parse_level_and_inputs(call)
-    if isinstance(parsed, str):
-        return error(call, "INVALID_ARGUMENT", parsed)
-    level, start_inputs = parsed
+    if "level" in call["arguments"]:
+        return error(call, "INVALID_ARGUMENT", "run_workflow execution strategy is selected by the system")
+    start_inputs = _parse_start_inputs(call)
+    if isinstance(start_inputs, str):
+        return error(call, "INVALID_ARGUMENT", start_inputs)
     mocks = call["arguments"].get("mocks") or {}
     if not _is_fixtures(mocks):
         return error(call, "INVALID_ARGUMENT", "mocks must map node ids to output objects")
-    if level == "live" and mocks:
-        return error(call, "INVALID_ARGUMENT", "mocks are only accepted with level=mock")
     rejection, changed = prepare_candidate_for_execution(call, context, purpose="execution")
     if rejection is not None:
         return rejection
@@ -64,28 +67,38 @@ def run_workflow(call: ToolCall, context: ToolContext) -> ToolResult:
     graph_hash = canonical_graph_hash(graph)
     context.state.graph_hash = graph_hash
     has_external = bool(external_node_ids(graph))
+    strategy = _resolve_workflow_execution_strategy(context, graph_hash, has_external)
+    if strategy == "requires_consent":
+        return error(
+            call,
+            "LIVE_RUN_REQUIRES_CONSENT",
+            "Live execution requires ask_user consent with question id live_run_consent for the current candidate",
+        )
     run_graph: MinimalGraphDict = graph
     mocked: Fixtures = {}
     engine_mode: AcceptanceMode = "simulated"
-    if level == "mock":
+    if strategy == "mock":
         try:
             run_graph, mocked = build_mocked_graph(graph, cast(Mapping[str, Mapping[str, object]], mocks))
         except MockGraphError as exc:
             return error(call, exc.code, exc.detail)
-    elif has_external:
-        denied = _live_gate(call, context, graph_hash)
-        if denied is not None:
-            return denied
+    elif strategy == "live":
         engine_mode = "live"
     trace = _execute(call, execute_graph, run_graph, engine_mode, start_inputs)
     if not isinstance(trace, list):
         return trace
     node_outputs = _node_outputs(trace)
     context.state.last_node_outputs = {**node_outputs, **mocked}
+    context.state.last_workflow_execution = WorkflowExecutionRecord(
+        revision=context.state.candidate_revision,
+        graph_hash=graph_hash,
+        passed=not trace,
+        verification_level=cast(WorkflowVerificationLevel, strategy),
+    )
     clipped, truncated = _clip_node_outputs({key: value for key, value in node_outputs.items() if key not in mocked})
     content: dict[str, object] = {
         "passed": not trace,
-        "verification_level": ("live" if level == "live" else "mock") if has_external else "local_only",
+        "verification_level": strategy,
         "revision": context.state.candidate_revision,
         "graph_hash": graph_hash,
         "failed_nodes": list(trace),
@@ -136,7 +149,7 @@ def run_node(call: ToolCall, context: ToolContext) -> ToolResult:
                 call,
                 "INVALID_ARGUMENT",
                 f"{node_id} calls external providers; level=mock would only echo a fixture. "
-                "Use level=live, or run_workflow(level=mock) to test its consumers",
+                "Use level=live, or run_workflow to let the system test its consumers",
             )
         denied = _live_gate(call, context, graph_hash)
         if denied is not None:
@@ -196,6 +209,28 @@ def _parse_level_and_inputs(call: ToolCall) -> tuple[str, dict[str, object]] | s
     return str(level), dict(start_inputs)
 
 
+def _parse_start_inputs(call: ToolCall) -> dict[str, object] | str:
+    start_inputs = call["arguments"].get("start_inputs") or {}
+    if not isinstance(start_inputs, dict):
+        return "start_inputs must be an object keyed by start variable"
+    return dict(start_inputs)
+
+
+def _resolve_workflow_execution_strategy(
+    context: ToolContext, graph_hash: str, has_external: bool
+) -> _WorkflowExecutionStrategy:
+    if not has_external:
+        return "local_only"
+    if context.env.execution_consent_mode == "always_execute":
+        return "live"
+    if context.env.live_consent_declined_hash == graph_hash:
+        return "mock"
+    authorize = context.env.authorize_live_acceptance
+    if authorize is not None and authorize(context.state.candidate_revision, graph_hash):
+        return "live"
+    return "requires_consent"
+
+
 def _is_fixtures(value: object) -> bool:
     return isinstance(value, dict) and all(
         isinstance(key, str) and isinstance(item, dict) for key, item in value.items()
@@ -209,7 +244,7 @@ def _live_gate(call: ToolCall, context: ToolContext, graph_hash: str) -> ToolRes
         return error(
             call,
             "EXECUTION_CONSENT_DENIED",
-            "The user did not approve live execution for this candidate; test with level=mock",
+            "The user did not approve live execution for this candidate; use run_workflow for automatic fallback",
         )
     authorize = context.env.authorize_live_acceptance
     if authorize is None or not authorize(context.state.candidate_revision, graph_hash):

@@ -4,7 +4,8 @@
 completion claim was accepted (hydrate is idempotent review, ``valid=true``,
 revision aligned, and — when an ``AcceptanceRunner`` is injected — current
 revision+hash Evidence passed). ``run_acceptance`` hydrates first so Evidence
-is recorded against the bound graph.
+is recorded against the bound graph, and requires a current passing
+``run_workflow`` observation when graph execution is available.
 """
 
 import logging
@@ -38,6 +39,7 @@ logger = logging.getLogger(__name__)
 def note_graph_mutation(context: ToolContext) -> None:
     """After a successful non-finish mutation: sticky flag, layout, hash."""
     context.state.last_mutation_changed = True
+    context.state.last_workflow_execution = None
     try:
         relayout_graph(context)
     except Exception:
@@ -215,6 +217,9 @@ def run_acceptance(call: ToolCall, context: ToolContext) -> ToolResult:
         return rejection
     graph_hash = canonical_graph_hash(context.state.graph)
     context.state.graph_hash = graph_hash
+    execution_error = _current_workflow_execution_error(call, context, graph_hash)
+    if execution_error is not None:
+        return execution_error
     if mode == "live":
         # Reserve durably before any external call; failures and worker retries cannot reuse the grant.
         if (
@@ -275,6 +280,33 @@ def run_acceptance(call: ToolCall, context: ToolContext) -> ToolResult:
     return ok(call, changed=hydrate_changed, content=content)
 
 
+def _current_workflow_execution_error(
+    call: ToolCall, context: ToolContext, graph_hash: str
+) -> ToolResult | None:
+    """Require a passing whole-graph observation in production Assist runs."""
+    if context.env.execute_graph is None:
+        return None
+    execution = context.state.last_workflow_execution
+    current = (
+        execution is not None
+        and execution.revision == context.state.candidate_revision
+        and execution.graph_hash == graph_hash
+    )
+    if not current:
+        return error(
+            call,
+            "WORKFLOW_EXECUTION_REQUIRED",
+            "Call run_workflow and inspect its outputs before run_acceptance for the current candidate",
+        )
+    if not execution.passed:
+        return error(
+            call,
+            "WORKFLOW_EXECUTION_REQUIRED",
+            "The current run_workflow failed; repair the graph and run it again before run_acceptance",
+        )
+    return None
+
+
 def inspect_attempt(call: ToolCall, context: ToolContext) -> ToolResult:
     attempt_id = require_str(call["arguments"], "attempt_id")
     if attempt_id is None:
@@ -294,13 +326,13 @@ def ask_user(call: ToolCall, context: ToolContext) -> ToolResult:
             return error(
                 call,
                 "INVALID_ARGUMENT",
-                "Real calls are pre-approved in this session; call run_workflow or run_node with level=live",
+                "Real calls are pre-approved in this session; call run_workflow, or run_node with level=live",
             )
         if context.env.live_consent_declined_hash == canonical_graph_hash(context.state.graph):
             return error(
                 call,
                 "EXECUTION_CONSENT_DENIED",
-                "The user did not approve live execution for this candidate; test with level=mock",
+                "The user did not approve live execution for this candidate; call run_workflow for mock fallback",
             )
         try:
             request = build_live_acceptance_request(context.state.graph, revision=context.state.candidate_revision)
@@ -431,6 +463,7 @@ def _apply_hydrate(context: ToolContext) -> bool:
     context.state.graph = hydrated
     context.state.candidate_revision += 1
     context.state.last_mutation_changed = True
+    context.state.last_workflow_execution = None
     return True
 
 

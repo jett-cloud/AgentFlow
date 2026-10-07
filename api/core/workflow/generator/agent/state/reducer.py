@@ -262,6 +262,47 @@ def _done_payload(
         "summary": summary,
         "diff": _graph_diff(start_graph, context.state.graph),
         "validation": {"ok": bool(content.get("valid")), "errors": errors if isinstance(errors, list) else []},
+        "verification": _verification_payload(context, structure_ok=bool(content.get("valid"))),
+    }
+
+
+def _verification_payload(context: ToolContext, *, structure_ok: bool) -> dict[str, str]:
+    attempts = [
+        attempt
+        for attempt in context.state.attempts.values()
+        if attempt.get("revision") == context.state.candidate_revision
+    ]
+    execution = context.state.last_workflow_execution
+    current_execution = (
+        execution
+        if execution is not None
+        and execution.revision == context.state.candidate_revision
+        and execution.graph_hash == context.state.graph_hash
+        else None
+    )
+    if current_execution is not None and not current_execution.passed:
+        runtime = "failed"
+    elif current_execution is not None and current_execution.verification_level == "live":
+        runtime = "live_passed"
+    elif current_execution is not None:
+        runtime = "simulated_passed"
+    elif not attempts:
+        runtime = "not_run"
+    elif not all(bool(attempt.get("passed")) for attempt in attempts):
+        runtime = "failed"
+    elif all(str(attempt.get("mode") or "") == "live" for attempt in attempts):
+        runtime = "live_passed"
+    else:
+        runtime = "simulated_passed"
+    business = (
+        "verified"
+        if attempts and all(bool(attempt.get("business_verified")) for attempt in attempts)
+        else "unverified"
+    )
+    return {
+        "structure": "passed" if structure_ok else "failed",
+        "runtime": runtime,
+        "business": business,
     }
 
 
