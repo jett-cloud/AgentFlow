@@ -3,6 +3,13 @@ import assert from 'node:assert/strict'
 
 import * as assistLanguage from './assistLanguage.js'
 
+test('workflow node names do not switch a Chinese instruction to English', () => {
+  assert.equal(assistLanguage.detectAssistLanguage('生成 Start → LLM → End'), 'zh-Hans')
+  assert.equal(assistLanguage.detectRecoveredAssistLanguage([
+    { role: 'user', text: '生成 Start → LLM → End' },
+  ]), 'zh-Hans')
+})
+
 test('recovered copy follows explicit language changes', () => {
   assert.equal(typeof assistLanguage.detectRecoveredAssistLanguage, 'function')
 
@@ -73,6 +80,47 @@ test('tool activity labels prefer arguments over a generic ok summary', () => {
   )
 })
 
+test('successful tool activities do not append model-generated summaries', () => {
+  assert.equal(
+    assistLanguage.formatAssistToolActivity(
+      {
+        name: 'finish',
+        summary: '一段非常长而且只应该出现在最终结果卡片里的总结',
+        ok: true,
+      },
+      null,
+      'zh-Hans',
+    ),
+    '完成校验',
+  )
+})
+
+test('unknown tool activities do not expose internal method names', () => {
+  assert.equal(
+    assistLanguage.formatAssistToolActivity(
+      { name: 'new_internal_method', ok: true },
+      null,
+      'zh-Hans',
+    ),
+    '处理中…',
+  )
+})
+
+test('legacy execution tools have readable fallback labels', () => {
+  assert.equal(
+    assistLanguage.formatAssistToolActivity({ name: 'run_workflow', ok: true }, null, 'zh-Hans'),
+    '试运行工作流',
+  )
+  assert.equal(
+    assistLanguage.formatAssistToolActivity({ name: 'run_acceptance', ok: true }, null, 'zh-Hans'),
+    '运行验收',
+  )
+  assert.equal(
+    assistLanguage.formatAssistToolActivity({ name: 'inspect_mock_targets', ok: true }, null, 'zh-Hans'),
+    '检查模拟运行条件',
+  )
+})
+
 test('completion markdown keeps summary, diff, and validation as formatted copy', () => {
   assert.equal(
     assistLanguage.formatAssistCompletionMarkdown(
@@ -80,9 +128,22 @@ test('completion markdown keeps summary, diff, and validation as formatted copy'
         summary: '已搭好 RAG 测试工作流',
         diff: { added: ['n1'], removed: [], updated: ['n2'] },
         validation: { ok: true },
+        verification: { structure: 'passed', runtime: 'simulated_passed', business: 'unverified' },
       },
       'zh-Hans',
     ),
-    '已搭好 RAG 测试工作流\n\n**变更:** +1 ~1 −0\n\n**校验通过**',
+    '**工作流已更新**\n\n已搭好 RAG 测试工作流\n\n- ✓ 结构校验通过\n- ✓ 模拟试运行通过\n- ! 自动化业务断言尚未验证\n\n**变更:** +1 ~1 −0',
+  )
+})
+
+test('completion markdown distinguishes a live workflow run from business assertion coverage', () => {
+  assert.equal(
+    assistLanguage.formatAssistCompletionMarkdown(
+      {
+        verification: { structure: 'passed', runtime: 'live_passed', business: 'unverified' },
+      },
+      'zh-Hans',
+    ),
+    '**工作流已更新**\n\n- ✓ 结构校验通过\n- ✓ 真实运行通过\n- ! 自动化业务断言尚未验证',
   )
 })

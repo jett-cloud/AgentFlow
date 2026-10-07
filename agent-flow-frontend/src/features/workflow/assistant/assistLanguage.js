@@ -1,11 +1,11 @@
 const COPY = {
   en: {
-    liveAcceptanceTitle: 'Authorize a live trial',
-    liveAcceptanceNotice: 'This trial uses real models, agents and the configured tools listed below. Provider charges and external writes may occur. Agent calls include its configured tools and MCP capabilities. Approval applies only to this candidate version and one execution.',
-    liveAcceptanceEffects: 'May change external data',
-    liveAcceptanceApprove: 'Authorize one live trial',
-    liveAcceptanceSimulate: 'Use simulated checks only',
-    liveAcceptanceBudget: request => `One execution, up to ${request.max_steps} workflow steps and a ${request.max_seconds}s engine time limit. In-flight provider requests may finish later. Nested agent calls use their configured limits; this is not a price guarantee.`,
+    liveAcceptanceTitle: 'Allow live execution?',
+    liveAcceptanceNotice: 'This workflow will run against real services once. Charges or external changes may occur.',
+    liveAcceptanceApprove: 'Allow and run live',
+    liveAcceptanceSimulate: 'Use simulated run',
+    liveAcceptanceLimitSummary: request => `This run only · Up to ${request.max_steps} steps · ${request.max_seconds}s`,
+    liveAcceptanceBudget: request => `One execution, up to ${request.max_steps} workflow steps and a ${request.max_seconds}s engine time limit. In-flight requests may finish later; external service charges can vary.`,
     title: 'Workflow Agent',
     workflowSubtitle: 'Workflow assistant',
     chatflowSubtitle: 'Chatflow assistant',
@@ -59,6 +59,8 @@ const COPY = {
     shortenRequirement: 'Shorten requirement',
     switchModel: 'Switch model',
     rawError: 'View raw error',
+    copyRawError: 'Copy error',
+    rawErrorCopied: 'Copied',
     answer: 'Answer',
     answerPlaceholder: 'Type your answer',
     statusFailed: 'This Run did not complete',
@@ -77,6 +79,15 @@ const COPY = {
     statusApplyApplied: 'Candidate applied.',
     statusApplyConflict: 'Apply facts changed; candidate refreshed.',
     statusApplyFailed: 'Candidate could not be applied.',
+    completionTitle: 'Workflow updated',
+    structurePassed: 'Structure validation passed',
+    structureFailed: 'Structure validation failed',
+    runtimeSimulatedPassed: 'Simulated run passed',
+    runtimeLivePassed: 'Live run passed',
+    runtimeNotRun: 'Workflow was not test-run',
+    runtimeFailed: 'Workflow test run failed',
+    businessVerified: 'Automated business assertions passed',
+    businessUnverified: 'Automated business assertions are not verified',
     validationPassed: 'Validation passed',
     changed: 'Changed',
     globalError: 'Workflow Assist could not complete the request.',
@@ -86,6 +97,24 @@ const COPY = {
       noJsonObject: 'The model did not return the plan as JSON. Try again or switch to a model that handles structured output better.',
       outputTruncated: 'The response exceeded this model\'s output limit and the plan was truncated. Split the request into smaller parts or switch to a model with a larger output limit.',
       missingPlan: 'Planning finished without a plan result. Try again.',
+    },
+    providerErrors: {
+      insufficientBalance: {
+        text: 'The model account has insufficient balance (HTTP 402).',
+        hint: 'Add funds or switch to a model account with available credit, then try again.',
+      },
+      authentication: {
+        text: 'Model provider authentication failed (HTTP 401/403).',
+        hint: 'Check the model credentials and access permissions, or switch models.',
+      },
+      rateLimit: {
+        text: 'Too many model requests (HTTP 429).',
+        hint: 'Try again later or switch to a model with more available quota.',
+      },
+      timeout: {
+        text: 'The model provider request timed out.',
+        hint: 'Check the network connection or try again later.',
+      },
     },
     errorCodes: {
       provider_error: 'The model provider could not complete this request. Try again or switch models.',
@@ -140,6 +169,10 @@ const COPY = {
     otherPlaceholder: 'Or type your own answer',
     toolLabels: {
       build_node: 'Write node',
+      build_tool_node: 'Write tool node',
+      build_agent_node: 'Write Agent node',
+      build_loop: 'Write loop',
+      build_iteration: 'Write iteration',
       validate_graph: 'Validate',
       search_datasets: 'Search knowledge bases',
       search_tools: 'Search tools',
@@ -150,6 +183,11 @@ const COPY = {
       disconnect: 'Disconnect',
       delete_node: 'Delete node',
       inspect_node_schema: 'Inspect fields',
+      run_acceptance: 'Run acceptance',
+      inspect_attempt: 'Inspect failed run',
+      inspect_mock_targets: 'Inspect mock requirements',
+      run_workflow: 'Test-run workflow',
+      run_node: 'Test-run node',
       finish: 'Finish validation',
       ask_user: 'Ask',
       fail: 'Failed',
@@ -182,12 +220,12 @@ const COPY = {
     },
   },
   'zh-Hans': {
-    liveAcceptanceTitle: '授权真实试运行',
-    liveAcceptanceNotice: '本次将调用下列真实模型、Agent 和已配置工具，可能产生费用或修改外部数据。Agent 调用包含其配置的工具和 MCP 能力。授权仅适用于当前候选图版本的一次执行。',
-    liveAcceptanceEffects: '可能修改外部数据',
-    liveAcceptanceApprove: '授权一次真实试运行',
-    liveAcceptanceSimulate: '仅做模拟检查',
-    liveAcceptanceBudget: request => `限一次执行，最多 ${request.max_steps} 个工作流步骤，引擎时限 ${request.max_seconds} 秒。已发出的请求可能稍后才结束；Agent 内部调用遵循其配置上限，此限制不保证具体费用。`,
+    liveAcceptanceTitle: '允许真实运行？',
+    liveAcceptanceNotice: '这个工作流将进行一次真实运行，可能产生费用或修改外部数据。',
+    liveAcceptanceApprove: '允许并真实运行',
+    liveAcceptanceSimulate: '改用模拟运行',
+    liveAcceptanceLimitSummary: request => `仅本次 · 最多 ${request.max_steps} 步 · ${request.max_seconds} 秒`,
+    liveAcceptanceBudget: request => `限一次执行，最多 ${request.max_steps} 个工作流步骤，引擎时限 ${request.max_seconds} 秒。已发出的请求可能稍后才结束，外部服务的实际费用可能不同。`,
     title: '工作流 Agent',
     workflowSubtitle: 'Workflow 助手',
     chatflowSubtitle: 'Chatflow 助手',
@@ -241,6 +279,8 @@ const COPY = {
     shortenRequirement: '缩短需求',
     switchModel: '切换模型',
     rawError: '查看原始错误',
+    copyRawError: '复制错误',
+    rawErrorCopied: '已复制',
     answer: '回答',
     answerPlaceholder: '输入你的回答',
     statusFailed: '本轮操作未完成',
@@ -259,6 +299,15 @@ const COPY = {
     statusApplyApplied: '候选图已应用。',
     statusApplyConflict: '应用事实已变化，候选图已刷新。',
     statusApplyFailed: '候选图未能应用。',
+    completionTitle: '工作流已更新',
+    structurePassed: '结构校验通过',
+    structureFailed: '结构校验失败',
+    runtimeSimulatedPassed: '模拟试运行通过',
+    runtimeLivePassed: '真实运行通过',
+    runtimeNotRun: '尚未试运行工作流',
+    runtimeFailed: '工作流试运行未通过',
+    businessVerified: '自动化业务断言已通过',
+    businessUnverified: '自动化业务断言尚未验证',
     validationPassed: '校验通过',
     changed: '变更',
     globalError: 'Workflow Assist 未能完成请求。',
@@ -268,6 +317,24 @@ const COPY = {
       noJsonObject: '模型没有按 JSON 格式返回规划结果。可以直接重试，或换一个更擅长结构化输出的模型。',
       outputTruncated: '输出超出了该模型的输出长度上限，计划被截断。请把需求拆成几段分别生成，或换一个支持更长输出的模型。',
       missingPlan: '规划已结束但没有收到计划结果，请重试。',
+    },
+    providerErrors: {
+      insufficientBalance: {
+        text: '模型账户余额不足（HTTP 402）。',
+        hint: '请充值或切换到有可用额度的模型后重试。',
+      },
+      authentication: {
+        text: '模型服务鉴权失败（HTTP 401/403）。',
+        hint: '请检查模型凭据和访问权限，或切换模型后重试。',
+      },
+      rateLimit: {
+        text: '模型请求过于频繁（HTTP 429）。',
+        hint: '请稍后重试，或切换到限额更充足的模型。',
+      },
+      timeout: {
+        text: '模型服务请求超时。',
+        hint: '请检查网络或稍后重试。',
+      },
     },
     errorCodes: {
       provider_error: '模型服务未能完成请求，请重试或切换模型。',
@@ -322,6 +389,10 @@ const COPY = {
     otherPlaceholder: '也可以自己填写',
     toolLabels: {
       build_node: '写入节点',
+      build_tool_node: '写入工具节点',
+      build_agent_node: '写入 Agent 节点',
+      build_loop: '写入循环',
+      build_iteration: '写入迭代',
       validate_graph: '校验',
       search_datasets: '搜索知识库',
       search_tools: '搜索工具',
@@ -332,6 +403,11 @@ const COPY = {
       disconnect: '断开连线',
       delete_node: '删除节点',
       inspect_node_schema: '查看字段',
+      run_acceptance: '运行验收',
+      inspect_attempt: '检查失败原因',
+      inspect_mock_targets: '检查模拟运行条件',
+      run_workflow: '试运行工作流',
+      run_node: '试运行节点',
       finish: '完成校验',
       ask_user: '询问',
       fail: '失败',
@@ -367,7 +443,7 @@ const COPY = {
 
 export function detectAssistLanguage(instruction) {
   const chineseCount = (String(instruction).match(/[\u3400-\u4dbf\u4e00-\u9fff]/g) || []).length
-  const latinCount = (String(instruction).match(/[A-Za-z]/g) || []).length
+  const latinCount = (String(instruction).match(/[A-Za-z]+/g) || []).length
   return chineseCount * 2 >= latinCount ? 'zh-Hans' : 'en'
 }
 
@@ -424,7 +500,7 @@ function argumentText(args, ...keys) {
 }
 
 function toolActivityBase(name, args, copy) {
-  const verb = copy.toolLabels[name] || name || copy.processing
+  const verb = copy.toolLabels[name] || copy.processing
   if (name === 'build_node') {
     const detail = quoted(copy, argumentText(args, 'title', 'type', 'id', 'purpose'))
     return detail ? `${verb}${detail}` : verb
@@ -472,25 +548,43 @@ export function formatAssistToolActivity(event, previousItem, language = 'zh-Han
       ? `${base}${copy.activityFailurePrefix}${detail}`
       : `${base}${copy.activityFailurePrefix}`.trimEnd()
   }
-  const summary = String(event?.summary || '').trim()
-  if (!summary || isGenericToolSummary(summary) || base.includes(summary))
-    return base
-  return `${base}${copy.activitySummarySeparator}${summary}`
+  return base
 }
 
 export function formatAssistCompletionMarkdown(message, language = 'zh-Hans') {
   const copy = assistCopy(language)
-  const lines = []
+  const lines = [`**${copy.completionTitle}**`]
   const summary = String(message?.summary || '').trim()
   if (summary)
     lines.push(summary)
+  const verification = message?.verification
+  const checks = []
+  if (verification && typeof verification === 'object') {
+    checks.push(verification.structure === 'passed'
+      ? `✓ ${copy.structurePassed}`
+      : `! ${copy.structureFailed}`)
+    const runtimeCopy = {
+      simulated_passed: copy.runtimeSimulatedPassed,
+      live_passed: copy.runtimeLivePassed,
+      not_run: copy.runtimeNotRun,
+      failed: copy.runtimeFailed,
+    }[verification.runtime]
+    if (runtimeCopy)
+      checks.push(`${verification.runtime.endsWith('_passed') ? '✓' : '!'} ${runtimeCopy}`)
+    checks.push(verification.business === 'verified'
+      ? `✓ ${copy.businessVerified}`
+      : `! ${copy.businessUnverified}`)
+  }
+  else if (message?.validation?.ok) {
+    checks.push(`✓ ${copy.structurePassed}`)
+  }
+  if (checks.length)
+    lines.push(checks.map(item => `- ${item}`).join('\n'))
   const diff = message?.diff
   const added = diff?.added?.length || 0
   const updated = (diff?.updated || diff?.changed)?.length || 0
   const removed = diff?.removed?.length || 0
   if (added || updated || removed)
     lines.push(`**${copy.changed}:** +${added} ~${updated} −${removed}`)
-  if (message?.validation?.ok)
-    lines.push(`**${copy.validationPassed}**`)
   return lines.join('\n\n')
 }
