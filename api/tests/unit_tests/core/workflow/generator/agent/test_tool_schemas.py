@@ -314,6 +314,21 @@ def test_single_argument_tools_require_that_argument():
         assert _schema(name)["parameters"]["required"] == ["query"], name
 
 
+def test_finish_summary_is_a_short_user_facing_result() -> None:
+    summary = _schema("finish")["parameters"]["properties"]["summary"]
+
+    assert summary["minLength"] == 1
+    assert summary["maxLength"] == 240
+    assert "internal" in summary["description"].lower()
+
+
+def test_run_workflow_schema_leaves_execution_strategy_to_the_system() -> None:
+    parameters = _schema("run_workflow")["parameters"]
+
+    assert set(parameters["properties"]) == {"start_inputs", "mocks"}
+    assert parameters["required"] == []
+
+
 def test_inspect_tool_requires_an_exact_binding():
     parameters = _schema("inspect_tool")["parameters"]
 
@@ -404,9 +419,10 @@ def test_tool_context_requires_every_field_a_tool_may_touch():
         "contract_revision",
         "contract_hash",
         "candidate_base_hash",
-        "user_turn_evidence",
-        "last_node_outputs",
-    }
+            "user_turn_evidence",
+            "last_node_outputs",
+            "last_workflow_execution",
+        }
     assert set(env_fields) == env_required | env_optional
     assert set(state_fields) == state_names
     assert set(context_fields) == {"env", "state"}

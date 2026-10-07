@@ -22,7 +22,11 @@ _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 def detect_output_language(instruction: str) -> OutputLanguage:
     """Return the dominant supported language in one user instruction."""
     chinese_count = len(_CJK_RE.findall(instruction))
-    latin_count = sum(len(word) for word in _LATIN_WORD_RE.findall(instruction))
+    # Workflow prompts commonly mix short Chinese instructions with long
+    # technical identifiers such as ``Start``, ``LLM`` and model names. Count
+    # Latin words rather than their characters so those identifiers do not
+    # override the language of the surrounding instruction.
+    latin_count = len(_LATIN_WORD_RE.findall(instruction))
     return "zh-Hans" if chinese_count * 2 >= latin_count else "en"
 
 

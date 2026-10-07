@@ -319,6 +319,15 @@ def test_system_prompt_hard_binds_referenced_ids() -> None:
     assert "user_turn_ids" in SYSTEM_PROMPT
 
 
+def test_system_prompt_keeps_internal_progress_details_out_of_user_prose() -> None:
+    from core.workflow.generator.agent.loop import SYSTEM_PROMPT
+
+    assert "Do not narrate tool names or method calls" in SYSTEM_PROMPT
+    assert "Do not expose raw verification field names" in SYSTEM_PROMPT
+    assert "Call finish directly without announcing it" in SYSTEM_PROMPT
+    assert "Translate verification evidence into natural language" in SYSTEM_PROMPT
+
+
 def test_system_prompt_routes_configuration_details_to_authoritative_schemas() -> None:
     from core.workflow.generator.agent.loop import SYSTEM_PROMPT
 
@@ -397,7 +406,7 @@ def test_system_prompt_distinguishes_recovery_from_retryability_and_completion()
         "retryable controls retry/cascade behavior",
         "it does not decide whether to ask a user",
         "Respect runtime cancellation and exhausted budgets",
-        "question id live_run_consent",
+            "ask_user(live_run_consent)",
         "Contract and graph revisions are independent",
         "passing graph/contract checks",
         "Finish does not Apply",
@@ -594,15 +603,15 @@ def test_execution_skill_only_triggers_after_the_graph_is_complete() -> None:
     assert "Never use while nodes are still being created" in descriptions["test-and-evaluate"]
     body = skill_body("test-and-evaluate") or ""
     assert "validate_graph returned content.valid=true" in body
-    assert "EXECUTION_CONSENT_DENIED" in body
+    assert "Decline selects mock" in body
     assert "passed=true only means" in body
     assert "inspect_mock_targets" in (skill_body("prepare-mock-data") or "")
 
 
-def test_system_prompt_keeps_consent_rule_and_names_execution_denial() -> None:
+def test_system_prompt_keeps_system_selected_execution_and_consent_rule() -> None:
     from core.workflow.generator.agent.loop import SYSTEM_PROMPT
 
-    assert "question id live_run_consent" in SYSTEM_PROMPT
-    assert "always_execute runs live without ask_user" in SYSTEM_PROMPT
-    assert "EXECUTION_CONSENT_DENIED" in SYSTEM_PROMPT
+    assert "ask_user(live_run_consent)" in SYSTEM_PROMPT
+    assert "always_execute or a grant runs live" in SYSTEM_PROMPT
+    assert "current decline runs mock" in SYSTEM_PROMPT
     assert "only finish completes the run" in SYSTEM_PROMPT

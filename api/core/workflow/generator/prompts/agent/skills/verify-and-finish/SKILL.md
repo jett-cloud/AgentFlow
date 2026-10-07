@@ -1,10 +1,14 @@
 ---
 name: verify-and-finish
-description: Use when construction or repair is ready for graph validation, acceptance, and completion.
+description: Use only after test-and-evaluate has produced a passing run_workflow result whose outputs satisfy the request.
 ---
 
 # Verify and finish
 
+0. Gate. Continue only when run_workflow passed for the current candidate
+   revision and you judged its graph_outputs/node_outputs to satisfy the user's
+   request. WORKFLOW_EXECUTION_REQUIRED means return to test-and-evaluate. Any
+   graph mutation reopens this gate.
 1. Confirm the intended nodes, edges, final outputs, and edit scope against the
    current contract. For non-legacy sessions, resolve remaining plan items and
    submit a complete contract before final verification.
@@ -31,6 +35,6 @@ description: Use when construction or repair is ready for graph validation, acce
 5. Call finish with an evidence-grounded summary. Inspect a rejection's
    content.valid, contract_report, and acceptance even without an error_code.
    Return to repair-validation or the necessary verification step on failure.
-   Complete only when finish.ok=true. Report actual execution coverage, the level run_workflow
-   reached (live, mock or local_only), and whether
+   Complete only when finish.ok=true. Report actual execution coverage, the strategy run_workflow
+   selected (live, mock or local_only), and whether
    business outcomes remain unverified. The service performs Apply separately.

@@ -12,16 +12,16 @@ description: Use only after the workflow is fully built and validated. Never use
 1. Pick inputs. Derive start_inputs from the user's request and any examples in
    the conversation; use realistic values, not "test". With no examples, pick one
    typical case in the user's language.
-2. First pass on mock. Activate prepare-mock-data and follow it to write mocks,
-   then call run_workflow(level=mock). Omitted outputs get typed placeholders,
-   which only prove wiring.
-3. Live pass when it matters. If the answer depends on real model or tool
-   behaviour, call run_workflow(level=live). LIVE_RUN_REQUIRES_CONSENT means
-   ask_user with question id live_run_consent; the run waits for the user and the
-   next turn may retry live. EXECUTION_CONSENT_DENIED means the user did not
-   approve: keep testing on mock and do not ask again while this graph remains
-   in always_ask. A later user turn in always_execute clears that decline.
-   A mock or local_only pass is still a valid place to stop.
+2. Run once. Call run_workflow without a level. The system chooses the strategy:
+   graphs without external calls run local_only, always_execute or a one-shot
+   grant runs external nodes live, and a decline for the current graph runs mock.
+3. Handle consent. LIVE_RUN_REQUIRES_CONSENT means ask_user with question id
+   live_run_consent; the run waits for the user. On the next turn, call
+   run_workflow again. Approval selects live. Decline selects mock and must never
+   be upgraded to live. Before the declined retry, activate prepare-mock-data and
+   supply realistic mocks when they improve coverage; omitted outputs get typed
+   placeholders, which only prove wiring. A later turn in always_execute clears
+   the decline and selects live automatically.
 4. Judge the outputs, not passed. passed=true only means the engine ran without
    failures. Compare graph_outputs and node_outputs with what the user asked for:
    required fields present, format, language, branch taken, obvious nonsense.
@@ -35,6 +35,6 @@ description: Use only after the workflow is fully built and validated. Never use
    still fails. Do not re-run an unchanged candidate hoping for a different result.
 7. Hand off. When satisfied, activate verify-and-finish; run_acceptance stays in
    its default simulated mode. In the finish summary state the verification level
-   reached (live, mock or local_only) and what was not verified. Known limits:
+   selected (live, mock or local_only) and what was not verified. Known limits:
    question-classifier and human-input cannot be mocked in a whole-graph run, file
    outputs cannot be mocked, and live runs stop at 32 steps or 60 seconds.

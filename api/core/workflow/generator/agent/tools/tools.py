@@ -457,7 +457,8 @@ TOOL_SCHEMAS: list[ToolSchema] = [
     {
         "name": "run_acceptance",
         "description": (
-            "Run sandbox acceptance against the current candidate. Default mode is simulated: "
+            "Record completion evidence after a successful run_workflow for the current candidate; "
+            "WORKFLOW_EXECUTION_REQUIRED means run and judge the whole graph first. Default mode is simulated: "
             "no user tools or models, usage count stays 0. mode=live requires prior ask_user "
             "consent (question id live_run_consent) and meters tools/models. "
             "ok means the runner ran; content.passed is whether cases passed. "
@@ -488,16 +489,15 @@ TOOL_SCHEMAS: list[ToolSchema] = [
         "description": (
             "Execute the whole current candidate once and return per-node outputs and failures. "
             "Use only after the graph is complete and validate_graph passes; activate test-and-evaluate first. "
-            "level=mock (default) replaces model, tool, HTTP and other external nodes with the fixtures in "
-            "mocks (omitted outputs get typed placeholders) and costs nothing. level=live calls real providers: "
-            "LIVE_RUN_REQUIRES_CONSENT means ask_user with question id live_run_consent; "
-            "EXECUTION_CONSENT_DENIED means stay on mock while this graph remains in always_ask. "
+            "The system selects execution: local-only graphs run directly, always_execute or a one-shot grant "
+            "runs external nodes live, and a decline for the current graph falls back to mocks (omitted outputs "
+            "get typed placeholders). LIVE_RUN_REQUIRES_CONSENT means ask_user with question id "
+            "live_run_consent, then call run_workflow again after the user answers. "
             "passed=true only means the engine ran without "
             "failures; judge the outputs against the user's request yourself. Never completes the run."
         ),
         "parameters": _obj(
             {
-                "level": {"type": "string", "enum": ["mock", "live"]},
                 "start_inputs": {"type": "object"},
                 "mocks": {"type": "object"},
             },
@@ -510,7 +510,7 @@ TOOL_SCHEMAS: list[ToolSchema] = [
             "Execute one top-level node after a repair, feeding it fixed upstream outputs. Ancestors become "
             "fixtures from upstream_outputs, else the last run_workflow outputs, else typed placeholders; "
             "downstream nodes do not run. Local nodes (code, template, if-else, assigner...) run free at any "
-            "level. Model, tool and HTTP targets need level=live and follow the run_workflow consent rules. "
+            "level. Model, tool and HTTP targets need level=live and follow the same consent records. "
             "Nodes inside a loop or iteration cannot run alone."
         ),
         "parameters": _obj(
@@ -575,9 +575,24 @@ TOOL_SCHEMAS: list[ToolSchema] = [
         "name": "finish",
         "description": (
             "Claim the workflow is done. ok means hydrate+validate passed and, when a "
-            "sandbox runner is present, current-revision acceptance Evidence passed."
+            "sandbox runner is present, current-revision acceptance Evidence passed. "
+            "Write summary as at most two concise user-facing sentences. Do not include "
+            "internal flags, raw validation fields, execution logs, or tool names."
         ),
-        "parameters": _obj({"summary": _STRING}, ["summary"]),
+        "parameters": _obj(
+            {
+                "summary": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 240,
+                    "description": (
+                        "A concise user-facing result in the user's language. Do not include internal flags "
+                        "such as valid, runtime_contract_passed, or business_verified."
+                    ),
+                }
+            },
+            ["summary"],
+        ),
     },
 ]
 

@@ -18,6 +18,10 @@ def test_detect_output_language_uses_majority_for_mixed_instruction():
     assert detect_output_language("请 build 一个客服 workflow，并返回中文结果") == "zh-Hans"
 
 
+def test_detect_output_language_treats_workflow_node_names_as_technical_words():
+    assert detect_output_language("生成 Start → LLM → End") == "zh-Hans"
+
+
 def test_localized_generator_message_preserves_event_shape_values():
     assert localized_generator_message("planning", "zh-Hans") == "正在规划工作流"
     assert localized_generator_message("planning", "en") == "Planning workflow"
