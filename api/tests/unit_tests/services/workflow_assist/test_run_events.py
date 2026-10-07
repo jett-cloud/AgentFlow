@@ -459,7 +459,12 @@ def test_event_serialization_is_exact_and_replay_is_strictly_after_cursor(sqlite
         "sequence": 2,
         "step_id": "step-7-2",
         "created_at": "2026-08-25T00:00:00Z",
-        "data": {"tool_call_id": "call-1", "ok": True, "summary": ""},
+        "data": {
+            "tool_call_id": "call-1",
+            "ok": True,
+            "summary": "",
+            "display": {"visible": True, "text": "处理完成"},
+        },
     }
     assert "graph" not in json.dumps(envelope)
 

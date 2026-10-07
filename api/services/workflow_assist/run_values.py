@@ -14,6 +14,7 @@ from sqlalchemy.engine.interfaces import Dialect
 
 from models.types import LimitedAdjustedJSON, validate_json_value, validate_text_byte_limit
 from models.workflow_assist import WORKFLOW_ASSIST_RUN_EVENT_PAYLOAD_MAX_BYTES, WORKFLOW_ASSIST_RUN_INPUT_MAX_BYTES
+from services.workflow_assist.tool_presentations import tool_display
 
 _SECRET_FIELD_PARTS = (
     "api_key",
@@ -99,6 +100,7 @@ def _project_tool_call(data: dict[str, Any]) -> dict[str, Any]:
         "tool_call_id": data.get("tool_call_id") or data.get("id"),
         "name": name,
         "summary": _tool_call_summary(name, public_arguments),
+        "display": tool_display(name, completed=False),
     }
     if public_arguments:
         projected["arguments"] = public_arguments
@@ -106,12 +108,17 @@ def _project_tool_call(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _project_tool_result(data: dict[str, Any]) -> dict[str, Any]:
+    raw_name = data.get("name")
+    name = str(raw_name or "")
+    ok = data.get("ok") is not False
     projected: dict[str, Any] = {
         "tool_call_id": data.get("tool_call_id") or data.get("id"),
-        "name": data.get("name"),
+        "name": raw_name,
         "ok": data.get("ok"),
-        "summary": data.get("summary") or "",
+        "display": tool_display(name, completed=True, ok=ok),
     }
+    if name != "finish":
+        projected["summary"] = data.get("summary") or ""
     if "changed" in data:
         projected["changed"] = data["changed"]
     if "elapsed_ms" in data:
