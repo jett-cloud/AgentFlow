@@ -108,6 +108,7 @@ function assistantEventMessages(events, failed, language) {
         summary: event.summary || '',
         diff: event.diff || { added: [], removed: [], updated: [] },
         validation: event.validation || { ok: false, errors: [] },
+        verification: event.verification || null,
       })
     }
     else if (event?.event === 'failed') {

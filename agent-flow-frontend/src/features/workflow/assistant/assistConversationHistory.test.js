@@ -201,6 +201,7 @@ test('history restores chat-loop waiting_user, abort status, and done completion
             summary: 'ready',
             diff: { added: ['n1'], removed: [], updated: [] },
             validation: { ok: true, errors: [] },
+            verification: { structure: 'passed', runtime: 'simulated_passed', business: 'unverified' },
           },
         ],
       },
@@ -211,6 +212,7 @@ test('history restores chat-loop waiting_user, abort status, and done completion
   assert.equal(messages[0].clarification.clarification_id, 'ask-1')
   assert.equal(messages.some(message => message.kind === 'status' && message.text === '已停止。'), true)
   assert.equal(messages.some(message => message.kind === 'completion' && message.summary === 'ready'), true)
+  assert.equal(messages.find(message => message.kind === 'completion').verification.runtime, 'simulated_passed')
 })
 
 test('English history uses selected-language planning and abort copy', () => {
@@ -251,13 +253,9 @@ test('history restores v2 conversation rows as a completed snapshot', () => {
   ])
 
   assert.equal(messages[0].text, 'build a rag flow')
-  assert.equal(messages[1].kind, 'activity')
-  assert.equal(messages[1].status, 'completed')
-  assert.equal(messages[1].collapsed, true)
+  assert.equal(messages[1].kind, 'assistant_text')
+  assert.equal(messages[1].text, 'I will add retrieval next.')
   assert.equal(messages[1].streaming, false)
-  assert.equal(messages[2].kind, 'assistant_text')
-  assert.equal(messages[2].text, 'I will add retrieval next.')
-  assert.equal(messages[2].streaming, false)
 })
 
 test('conversation timestamps are localized instead of exposing raw server text', async () => {

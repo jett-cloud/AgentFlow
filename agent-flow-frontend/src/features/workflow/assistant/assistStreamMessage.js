@@ -179,11 +179,24 @@ export function stripAssistToolJson(text) {
   return output.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
 }
 
+const LEGACY_HIDDEN_TOOL_NAMES = new Set([
+  'submit_workflow_plan',
+  'read_graph',
+  'read_node',
+  'activate_skills',
+  'inspect_node_schema',
+  'inspect_tool',
+  'ask_user',
+  'fail',
+])
+
 function createToolItem(event, previous, language, key, toolCallId) {
   const args = (event.arguments && typeof event.arguments === 'object' && !Array.isArray(event.arguments))
     ? event.arguments
     : (previous?.arguments || {})
   const name = event.name || previous?.action || ''
+  if (event.display?.visible === false || (!event.display && LEGACY_HIDDEN_TOOL_NAMES.has(name)))
+    return null
   return {
     key,
     tool_call_id: toolCallId || previous?.tool_call_id || '',
@@ -192,7 +205,7 @@ function createToolItem(event, previous, language, key, toolCallId) {
     status: event.event === 'tool_result'
       ? (event.ok === false ? 'failed' : 'done')
       : 'running',
-    message: formatAssistToolActivity(
+    message: String(event.display?.text || '').trim() || formatAssistToolActivity(
       { ...event, name, arguments: args },
       previous,
       language,
@@ -368,6 +381,15 @@ export function applyAssistStreamEvent(messages, input, language = 'zh-Hans', op
       const items = [...(activity.items || [])]
       const previous = items[existing.itemIndex]
       const item = createToolItem(event, previous, language, key || previous.key, toolCallId)
+      if (!item) {
+        items.splice(existing.itemIndex, 1)
+        if (!items.length) {
+          next.splice(existing.messageIndex, 1)
+          return next
+        }
+        next[existing.messageIndex] = { ...activity, items }
+        return next
+      }
       items[existing.itemIndex] = { ...previous, ...item }
       next[existing.messageIndex] = {
         ...activity,
@@ -378,6 +400,8 @@ export function applyAssistStreamEvent(messages, input, language = 'zh-Hans', op
     }
     const item = createToolItem(event, null, language, key || 'tool:anon:0', toolCallId)
     const current = Array.isArray(messages) ? messages : []
+    if (!item)
+      return current
     const lastIndex = current.length - 1
     const last = lastIndex >= 0 ? current[lastIndex] : null
     if (last?.kind === 'activity' && last.status === 'running' && !(last.items || []).length) {
@@ -431,6 +455,7 @@ export function applyAssistStreamEvent(messages, input, language = 'zh-Hans', op
       summary: event.summary || '',
       diff: event.diff || { added: [], removed: [], updated: [] },
       validation: event.validation || { ok: false, errors: [] },
+      verification: event.verification || null,
     }]
   }
 
@@ -458,6 +483,8 @@ function isEmptyActivity(message) {
 export function groupAssistTimeline(messages) {
   const groups = []
   for (const message of Array.isArray(messages) ? messages : []) {
+    if (message?.kind === 'assistant_text' && !String(message.text || '').trim())
+      continue
     if (message?.role === 'user' || message?.kind === 'clarification' || message?.kind === 'status') {
       groups.push({ kind: 'single', message })
       continue

@@ -121,6 +121,22 @@ function latestTurnHasAssistantText(messages) {
   ))
 }
 
+function latestTurnHasCompletion(messages) {
+  if (!Array.isArray(messages) || !messages.length)
+    return false
+  let latestUserIndex = -1
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === 'user') {
+      latestUserIndex = index
+      break
+    }
+  }
+  return messages.slice(latestUserIndex + 1).some(message => (
+    message?.role === 'assistant'
+    && message?.kind === 'completion'
+  ))
+}
+
 const TERMINAL_EVENTS = new Set(['waiting_user', 'done', 'failed', 'aborted', 'error', 'turn_complete'])
 const TERMINAL_RUN_STATUSES = new Set(['waiting_user', 'done', 'failed', 'aborted', 'error', 'turn_complete'])
 const DISPATCHED_EVENTS = new Set(['tool_result', 'waiting_user', 'done', 'failed', 'aborted', 'error', 'turn_complete'])
@@ -1049,7 +1065,10 @@ export function useWorkflowAssistController({
       const snapshotMessages = snapshotRecords.length
         ? buildAssistHistoryMessages(snapshotRecords, null, currentLanguage())
         : null
-      const snapshotNeedsTimeline = Boolean(snapshotMessages && !latestTurnHasAssistantText(snapshotMessages))
+      const snapshotNeedsTimeline = Boolean(snapshotMessages && (
+        !latestTurnHasAssistantText(snapshotMessages)
+        || (candidateSnapshot?.completion_evidence && !latestTurnHasCompletion(snapshotMessages))
+      ))
       const snapshotActiveRun = candidateSnapshot?.active_run
       const live = Boolean(snapshotActiveRun && ACTIVE_RUN_STATUSES.has(snapshotActiveRun.status))
       runState = createWorkflowAssistRunState(snapshotMessages || [], currentLanguage())

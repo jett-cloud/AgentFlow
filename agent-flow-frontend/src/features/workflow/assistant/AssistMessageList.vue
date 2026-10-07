@@ -16,10 +16,6 @@
             v-if="block.kind === 'assistant_text'"
             class="turn-text markdown-body"
           >
-            <details v-if="hasReasoning(block)" class="thought">
-              <summary>{{ thoughtLabel(block) }}</summary>
-              <div class="thought-body">{{ block.reasoning }}</div>
-            </details>
             <div v-if="block.text" v-html="assistantHtml(block.text)" />
           </div>
           <ul v-else-if="block.kind === 'activity' || block.kind === 'operations'" class="turn-ops">
@@ -53,13 +49,9 @@
       />
 
       <div
-        v-else-if="group.message.kind === 'assistant_text' || (group.message.role === 'assistant' && (group.message.text || hasReasoning(group.message)))"
+        v-else-if="group.message.kind === 'assistant_text' || (group.message.role === 'assistant' && group.message.text)"
         class="bubble markdown-body"
       >
-        <details v-if="hasReasoning(group.message)" class="thought">
-          <summary>{{ thoughtLabel(group.message) }}</summary>
-          <div class="thought-body">{{ group.message.reasoning }}</div>
-        </details>
         <div v-if="group.message.text" v-html="assistantHtml(group.message.text)" />
       </div>
 
@@ -74,11 +66,17 @@
     </article>
 
     <section v-if="friendlyErrors.length" class="error-list" role="alert">
-      <div v-for="(error, index) in friendlyErrors" :key="index">
-        <p>{{ error.text || copy.globalError }}</p>
-        <details v-if="error.raw && error.raw !== error.text">
+      <div v-for="(error, index) in friendlyErrors" :key="index" class="error-item">
+        <p class="error-title">{{ error.text || copy.globalError }}</p>
+        <p v-if="error.hint" class="error-hint">{{ error.hint }}</p>
+        <details v-if="error.raw && error.raw !== error.text" class="error-details">
           <summary>{{ copy.rawError }}</summary>
-          <pre>{{ error.raw }}</pre>
+          <div class="error-detail-toolbar">
+            <button type="button" class="error-copy-button" @click="copyError(index, error.raw)">
+              {{ copiedErrorIndex === index ? copy.rawErrorCopied : copy.copyRawError }}
+            </button>
+          </div>
+          <pre class="error-detail">{{ error.raw }}</pre>
         </details>
       </div>
       <button v-if="retryable" type="button" @click="$emit('retry')">
@@ -107,7 +105,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { renderMarkdown } from '../utils/helpers.js'
 import AssistClarificationCard from './AssistClarificationCard.vue'
-import { friendlyAssistError } from './assistErrors.js'
+import { copyAssistErrorText, friendlyAssistError } from './assistErrors.js'
 import { assistCopy, formatAssistCompletionMarkdown } from './assistLanguage.js'
 import { createAssistLiveAnnouncement } from './assistLiveAnnouncement.js'
 import { stripAssistToolJson, groupAssistTimeline } from './assistStreamMessage.js'
@@ -131,6 +129,7 @@ const copy = computed(() => assistCopy(props.language))
 const friendlyErrors = computed(() => props.errors.map(error => friendlyAssistError(error, props.language)))
 const listRef = ref(null)
 const liveAnnouncement = ref('')
+const copiedErrorIndex = ref(-1)
 const live = createAssistLiveAnnouncement({
   onAnnounce: text => { liveAnnouncement.value = text },
 })
@@ -172,14 +171,6 @@ function submitClarification(message, answers) {
   emit('answer-clarification', { index: props.messages.indexOf(message), answers })
 }
 
-function hasReasoning(message) {
-  return Boolean(String(message?.reasoning || '').trim())
-}
-
-function thoughtLabel(message) {
-  return message?.reasoningStreaming ? copy.value.thinking : copy.value.thought
-}
-
 function mentionParts(message) {
   return splitTextByMentions(message?.text, message?.references)
 }
@@ -190,6 +181,15 @@ function assistantHtml(text) {
 
 function completionHtml(message) {
   return renderMarkdown(formatAssistCompletionMarkdown(message, props.language))
+}
+
+async function copyError(index, raw) {
+  try {
+    copiedErrorIndex.value = await copyAssistErrorText(raw) ? index : -1
+  }
+  catch {
+    copiedErrorIndex.value = -1
+  }
 }
 
 function isPinnedToBottom(el) {
@@ -301,6 +301,12 @@ onBeforeUnmount(() => {
 .turn-completion {
   min-width: 0;
   white-space: normal;
+}
+
+.turn-completion {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #f8fafc;
 }
 
 .thought {
@@ -508,8 +514,70 @@ onBeforeUnmount(() => {
 }
 
 .error-list {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   background: #fef3f2;
   color: #b42318;
+}
+
+.error-item + .error-item {
+  margin-top: 12px;
+  border-top: 1px solid #fecdca;
+  padding-top: 12px;
+}
+
+.error-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.error-hint {
+  margin: 6px 0 0;
+  color: #912018;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.error-details {
+  min-width: 0;
+  margin-top: 10px;
+}
+
+.error-details summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.error-detail-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.error-list .error-copy-button {
+  min-height: 28px;
+  padding: 3px 9px;
+  font-size: 12px;
+}
+
+.error-detail {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  max-height: 220px;
+  margin: 6px 0 0;
+  overflow: auto;
+  border: 1px solid #fecdca;
+  border-radius: 6px;
+  background: #fff;
+  padding: 8px;
+  color: #7a271a;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .warning-list {

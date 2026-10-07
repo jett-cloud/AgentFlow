@@ -99,3 +99,49 @@ test('assistant turn keeps the same width while streaming content grows', async 
   assert.equal(shortBubbleWidth, shortWidth)
   assert.equal(longBubbleWidth, shortBubbleWidth)
 })
+
+test('long raw errors wrap and scroll inside the error card', async (t) => {
+  assert.ok(componentStyles)
+  const browser = await launchBrowser(t)
+  if (!browser)
+    return
+
+  t.after(() => browser.close())
+  const page = await browser.newPage()
+  const longToken = 'PluginInvokeErrorWithoutAnyNaturalBreak'.repeat(18)
+  const traceback = Array.from({ length: 30 }, (_, index) => `${index}: ${longToken}`).join('\n')
+
+  await page.setContent(`
+    <style>${componentStyles}</style>
+    <div style="display: flex; width: 420px; height: 500px">
+      <div class="assist-message-list">
+        <section class="error-list">
+          <details class="error-details" open>
+            <summary>查看原始错误</summary>
+            <pre class="error-detail">${traceback}</pre>
+          </details>
+        </section>
+      </div>
+    </div>
+  `)
+
+  const layout = await page.locator('.error-detail').evaluate((detail) => {
+    const list = detail.closest('.assist-message-list')
+    const styles = getComputedStyle(detail)
+    return {
+      listClientWidth: list.clientWidth,
+      listScrollWidth: list.scrollWidth,
+      detailClientHeight: detail.clientHeight,
+      detailScrollHeight: detail.scrollHeight,
+      overflowY: styles.overflowY,
+      overflowWrap: styles.overflowWrap,
+      whiteSpace: styles.whiteSpace,
+    }
+  })
+
+  assert.equal(layout.listScrollWidth, layout.listClientWidth)
+  assert.equal(layout.overflowY, 'auto')
+  assert.equal(layout.overflowWrap, 'anywhere')
+  assert.equal(layout.whiteSpace, 'pre-wrap')
+  assert.ok(layout.detailScrollHeight > layout.detailClientHeight)
+})

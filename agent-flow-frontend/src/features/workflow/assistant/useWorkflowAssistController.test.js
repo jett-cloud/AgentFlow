@@ -863,6 +863,50 @@ test('terminal recovery prefers conversation snapshot over timeline deltas', asy
   assert.equal(messages.value.some(message => message.streaming), false)
 })
 
+test('terminal recovery restores done completion missing from the conversation snapshot', async () => {
+  let timelineCalls = 0
+  const { controller, messages } = harness(async () => {}, {
+    selectConversation: async () => true,
+    loadConversation: async () => ({
+      conversation: { id: 'conversation-1' },
+      messages: [
+        { id: 'u1', role: 'user', event_type: 'message', payload: { text: '生成工作流' } },
+        { id: 'a1', role: 'assistant', event_type: 'message', payload: { text: '验收已通过，现在完成。' } },
+      ],
+    }),
+    loadTimeline: async () => {
+      timelineCalls += 1
+      return {
+        items: [
+          envelope('run-1', 1, 0, 'user.message', { text: '生成工作流' }),
+          envelope('run-1', 1, 1, 'message.delta', { text: '验收已通过，现在完成。', message_id: 'agent-message-1' }),
+          envelope('run-1', 1, 2, 'done', {
+            summary: '工作流完整检验通过',
+            diff: { added: ['start'], removed: [], updated: [] },
+            validation: { ok: true, errors: [] },
+            verification: { structure: 'passed', runtime: 'simulated_passed', business: 'unverified' },
+          }),
+        ],
+        has_more: false,
+      }
+    },
+    loadCandidate: async () => ({
+      revision: 1,
+      active_run: null,
+      latest_run: { run_id: 'run-1', epoch: 1, status: 'done' },
+      completion_evidence: { run_id: 'run-1', epoch: 1, candidate_revision: 1 },
+    }),
+  })
+
+  await controller.selectConversation('conversation-1')
+
+  assert.equal(timelineCalls, 1)
+  const completion = messages.value.find(message => message.kind === 'completion')
+  assert.equal(completion?.summary, '工作流完整检验通过')
+  assert.deepEqual(completion?.diff.added, ['start'])
+  assert.equal(completion?.validation.ok, true)
+})
+
 test('terminal recovery falls back to timeline when the latest snapshot reply has no text', async () => {
   let timelineCalls = 0
   const { controller, messages } = harness(async () => {}, {
@@ -924,8 +968,7 @@ test('terminal recovery falls back to timeline when the latest snapshot reply ha
     '当前工作流画布是空的，还没有任何节点和连线。',
   )
   const activities = messages.value.filter(message => message.kind === 'activity')
-  assert.equal(activities.length, 1)
-  assert.deepEqual(activities[0].items.map(item => item.key), ['tool:call-1'])
+  assert.equal(activities.length, 0)
   assert.equal(messages.value.filter(message => message.role === 'user').length, 1)
 })
 

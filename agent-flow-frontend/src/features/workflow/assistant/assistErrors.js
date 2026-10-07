@@ -46,6 +46,25 @@ const FRIENDLY_ERROR_RULES = [
   },
 ]
 
+const PROVIDER_ERROR_RULES = [
+  {
+    match: /\b(?:http\s*)?402\b|insufficient\s+(?:balance|credits?|funds?)/i,
+    copyKey: 'insufficientBalance',
+  },
+  {
+    match: /\b(?:http\s*)?(?:401|403)\b|unauthori[sz]ed|forbidden|invalid\s+(?:api\s*)?key|authentication failed/i,
+    copyKey: 'authentication',
+  },
+  {
+    match: /\b(?:http\s*)?429\b|rate[ _-]?limit|too many requests/i,
+    copyKey: 'rateLimit',
+  },
+  {
+    match: /timed?\s*out|timeout|connection (?:reset|refused)|network error|failed to fetch/i,
+    copyKey: 'timeout',
+  },
+]
+
 function errorDetailText(error) {
   if (typeof error === 'string')
     return error.trim()
@@ -59,6 +78,12 @@ export function friendlyAssistError(error, language = 'zh-Hans') {
   const detail = errorDetailText(error)
   const rawCode = typeof error === 'object' ? String(error?.code || error?.termination_reason || '') : ''
   const code = rawCode === 'provider_error' || detail === 'provider_error' ? 'provider_error' : rawCode
+  if (code === 'provider_error') {
+    const providerRule = PROVIDER_ERROR_RULES.find(item => item.match.test(detail))
+    const providerCopy = providerRule ? copy.providerErrors?.[providerRule.copyKey] : null
+    if (providerCopy)
+      return { text: providerCopy.text, hint: providerCopy.hint, raw: detail }
+  }
   const codedText = copy.errorCodes[code]
   if (codedText)
     return { text: codedText, raw: detail }
@@ -67,6 +92,23 @@ export function friendlyAssistError(error, language = 'zh-Hans') {
 
   const rule = FRIENDLY_ERROR_RULES.find(item => item.match.test(detail))
   return { text: rule ? copy.errorRules[rule.copyKey] : detail, raw: detail }
+}
+
+export async function copyAssistErrorText(value, writeText) {
+  const text = String(value ?? '')
+  if (!text)
+    return false
+
+  let writer = writeText
+  if (typeof writer !== 'function') {
+    const clipboard = globalThis.navigator?.clipboard
+    if (typeof clipboard?.writeText !== 'function')
+      return false
+    writer = clipboard.writeText.bind(clipboard)
+  }
+
+  await writer(text)
+  return true
 }
 
 export function assistStatusText(ev, language = 'zh-Hans') {

@@ -157,8 +157,8 @@ test('tool results associate only by tool_call_id even when results arrive out o
 
   const items = state.messages.filter(message => message.kind === 'activity').flatMap(message => message.items)
   assert.deepEqual(items.map(item => ({ key: item.key, message: item.message })), [
-    { key: 'tool:call-a', message: '写入节点 · first' },
-    { key: 'tool:call-b', message: '写入节点 · second' },
+    { key: 'tool:call-a', message: '写入节点' },
+    { key: 'tool:call-b', message: '写入节点' },
   ])
 })
 
@@ -208,8 +208,8 @@ test('hydrate mode concatenates deltas without a live streaming flag', () => {
     envelope('run-1', 1, 0, 'user.message', { text: 'build it' }),
     envelope('run-1', 1, 1, 'message.delta', { text: 'hel' }),
     envelope('run-1', 1, 2, 'message.delta', { text: 'lo' }),
-    envelope('run-1', 1, 3, 'tool_call', { tool_call_id: 'call-1', name: 'read_graph' }),
-    envelope('run-1', 1, 4, 'tool_result', { tool_call_id: 'call-1', name: 'read_graph', summary: 'ok' }),
+    envelope('run-1', 1, 3, 'tool_call', { tool_call_id: 'call-1', name: 'validate_graph' }),
+    envelope('run-1', 1, 4, 'tool_result', { tool_call_id: 'call-1', name: 'validate_graph', summary: 'ok' }),
     envelope('run-1', 1, 5, 'turn_complete'),
   ])
   const settled = settleHydratedAssistRunState(state)

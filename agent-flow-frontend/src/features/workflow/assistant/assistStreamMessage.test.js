@@ -263,10 +263,71 @@ test('v2 tool envelopes associate activities by tool_call_id rather than name or
   const items = messages.filter(message => message.kind === 'activity').flatMap(message => message.items)
   assert.deepEqual(items.map(item => ({ key: item.key, message: item.message })), [
     { key: 'tool:call-a', message: '写入节点' },
-    { key: 'tool:call-b', message: '写入节点 · second' },
+    { key: 'tool:call-b', message: '写入节点' },
   ])
   assert.equal(items[0].status, 'running')
   assert.equal(items[1].status, 'done')
+})
+
+test('server display text updates the same tool activity row', () => {
+  let messages = applyAssistStreamEvent([], {
+    event: 'tool_call',
+    data: {
+      tool_call_id: 'call-1',
+      name: 'run_workflow',
+      display: { visible: true, text: '正在试运行工作流…' },
+    },
+  })
+  messages = applyAssistStreamEvent(messages, {
+    event: 'tool_result',
+    data: {
+      tool_call_id: 'call-1',
+      name: 'run_workflow',
+      ok: true,
+      summary: 'internal result summary',
+      display: { visible: true, text: '工作流试运行完成' },
+    },
+  })
+
+  const items = messages.filter(message => message.kind === 'activity').flatMap(message => message.items)
+  assert.equal(items.length, 1)
+  assert.equal(items[0].message, '工作流试运行完成')
+  assert.equal(items[0].status, 'done')
+})
+
+test('server-hidden tools do not create activity rows', () => {
+  let messages = applyAssistStreamEvent([], {
+    event: 'tool_call',
+    data: {
+      tool_call_id: 'call-1',
+      name: 'activate_skills',
+      display: { visible: false },
+    },
+  })
+  messages = applyAssistStreamEvent(messages, {
+    event: 'tool_result',
+    data: {
+      tool_call_id: 'call-1',
+      name: 'activate_skills',
+      ok: true,
+      display: { visible: false },
+    },
+  })
+
+  assert.deepEqual(messages, [])
+})
+
+test('legacy internal tools without display metadata stay hidden', () => {
+  let messages = applyAssistStreamEvent([], {
+    event: 'tool_call',
+    data: { tool_call_id: 'call-1', name: 'read_graph' },
+  })
+  messages = applyAssistStreamEvent(messages, {
+    event: 'tool_result',
+    data: { tool_call_id: 'call-1', name: 'read_graph', ok: true },
+  })
+
+  assert.deepEqual(messages, [])
 })
 
 test('a tool_result updates its tool_call_id instead of the latest running activity', () => {
@@ -464,11 +525,13 @@ test('done completion bubble shows summary, diff, and validation', () => {
     summary: '已搭好 RAG 测试工作流',
     diff: { added: ['n1'], removed: [], updated: ['n2'] },
     validation: { ok: true, errors: [] },
+    verification: { structure: 'passed', runtime: 'simulated_passed', business: 'unverified' },
   })
   const completion = messages.find(message => message.kind === 'completion')
   assert.equal(completion.summary, '已搭好 RAG 测试工作流')
   assert.deepEqual(completion.diff.added, ['n1'])
   assert.equal(completion.validation.ok, true)
+  assert.equal(completion.verification.runtime, 'simulated_passed')
 })
 
 test('connect labels keep source and target after a generic ok result', () => {
@@ -589,4 +652,13 @@ test('empty reasoning.delta does not render a thought bubble', () => {
     message_id: 'msg-1',
   })
   assert.equal(messages.length, 0)
+})
+
+test('reasoning-only messages stay out of the visible timeline', () => {
+  const messages = applyAssistStreamEvent([], {
+    event: 'reasoning.delta',
+    data: { text: '内部分析过程', message_id: 'reasoning-1' },
+  })
+
+  assert.deepEqual(groupAssistTimeline(messages), [])
 })
