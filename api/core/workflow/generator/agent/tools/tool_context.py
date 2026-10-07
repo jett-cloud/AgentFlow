@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from core.workflow.generator.acceptance.authorization import ExecutionConsentMode
 from core.workflow.generator.acceptance.evidence import (
@@ -45,6 +45,17 @@ class PendingPlanNode:
 
 
 GraphExecuteFn = Callable[[MinimalGraphDict, AcceptanceMode, Mapping[str, object]], GraphExecutionTrace]
+WorkflowVerificationLevel = Literal["local_only", "live", "mock"]
+
+
+@dataclass(frozen=True)
+class WorkflowExecutionRecord:
+    """One completed whole-graph observation bound to the exact candidate."""
+
+    revision: int
+    graph_hash: str
+    passed: bool
+    verification_level: WorkflowVerificationLevel
 
 
 @dataclass(frozen=True)
@@ -138,6 +149,7 @@ class ToolTurnState:
     candidate_base_hash: str | None = None
     user_turn_evidence: Mapping[str, str] = field(default_factory=dict)
     last_node_outputs: dict[str, dict[str, object]] = field(default_factory=dict)
+    last_workflow_execution: WorkflowExecutionRecord | None = None
 
 
 @dataclass
