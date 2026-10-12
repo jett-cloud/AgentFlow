@@ -73,7 +73,18 @@ def test_topological_layers_put_independent_children_together() -> None:
                 "kind": "standard",
                 "ref": "join",
                 "node_type": "assigner",
-                "intent": {"objective": "Join", "inputs": [{"source": ["a", "text"], "role": "acc"}]},
+                "intent": {
+                    "objective": "Join",
+                    "structure": {
+                        "kind": "assigner",
+                        "assignments": [
+                            {
+                                "target": ["loop1", "acc"],
+                                "value": {"kind": "variable", "selector": ["a", "text"]},
+                            }
+                        ],
+                    },
+                },
             }
         ),
     ]
@@ -160,7 +171,18 @@ def test_iteration_layers_stay_topological_when_parallel_is_enabled() -> None:
                 "kind": "standard",
                 "ref": "join",
                 "node_type": "assigner",
-                "intent": {"objective": "Join", "inputs": [{"source": ["a", "text"], "role": "acc"}]},
+                "intent": {
+                    "objective": "Join",
+                    "structure": {
+                        "kind": "assigner",
+                        "assignments": [
+                            {
+                                "target": ["iter1", "acc"],
+                                "value": {"kind": "variable", "selector": ["a", "text"]},
+                            }
+                        ],
+                    },
+                },
             }
         ),
     ]
@@ -204,8 +226,12 @@ def test_iteration_registry_exposes_declared_object_item_children() -> None:
             "node_type": "template-transform",
             "intent": {
                 "objective": "Read question",
-                "inputs": [{"source": ["iter1", "item", "question"], "role": "question"}],
                 "outputs": [{"name": "output", "type": "string"}],
+                "structure": {
+                    "kind": "template-transform",
+                    "template": "{{ question }}",
+                    "bindings": [{"name": "question", "source": ["iter1", "item", "question"]}],
+                },
             },
         }
     )
@@ -306,8 +332,12 @@ def test_loop_registry_exposes_declared_object_variable_children() -> None:
                     "node_type": "template-transform",
                     "intent": {
                         "objective": "Read count",
-                        "inputs": [{"source": ["loop1", "state", "count"], "role": "count"}],
                         "outputs": [{"name": "output", "type": "string"}],
+                        "structure": {
+                            "kind": "template-transform",
+                            "template": "{{ count }}",
+                            "bindings": [{"name": "count", "source": ["loop1", "state", "count"]}],
+                        },
                     },
                 }
             ],

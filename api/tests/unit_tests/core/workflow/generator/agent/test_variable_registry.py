@@ -15,6 +15,7 @@ def _declaration(
     owner_container_id: str | None = None,
     producer_layer: int = 0,
     guaranteed: bool = True,
+    writable: bool = False,
 ) -> VariableDeclaration:
     return VariableDeclaration(
         selector=selector,
@@ -22,6 +23,7 @@ def _declaration(
         owner_container_id=owner_container_id,
         producer_layer=producer_layer,
         guaranteed=guaranteed,
+        writable=writable,
     )
 
 
@@ -137,3 +139,23 @@ def test_resolve_rejects_file_and_array_file_mismatch() -> None:
 
     assert exc_info.value.code == "VARIABLE_TYPE_MISMATCH"
     assert exc_info.value.selector == ("start", "images")
+
+
+def test_resolve_writable_accepts_only_explicit_writable_declarations() -> None:
+    registry = VariableRegistry(
+        declarations=(
+            _declaration(("loop", "draft"), "string", owner_container_id="loop", writable=True),
+            _declaration(("worker", "text"), "string", owner_container_id="loop", producer_layer=1),
+        ),
+        referrers=(
+            VariableReferrer(node_id="writer", layer=2, ancestor_container_ids=("loop",)),
+        ),
+    )
+
+    resolved = registry.resolve_writable(("loop", "draft"), referrer_id="writer")
+    assert resolved.writable is True
+
+    with pytest.raises(VariableResolutionError) as exc_info:
+        registry.resolve_writable(("worker", "text"), referrer_id="writer")
+    assert exc_info.value.code == "VARIABLE_NOT_WRITABLE"
+    assert registry.writable_selectors() == (("loop", "draft"),)

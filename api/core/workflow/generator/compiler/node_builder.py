@@ -31,7 +31,6 @@ from core.workflow.generator.prompts.output_language import (
 )
 from core.workflow.generator.prompts.planner_prompts import format_ideal_output_section
 from core.workflow.generator.types import GraphDict, WorkflowGenerationMode
-from core.workflow.generator.variables.declarations import declared_outputs
 from graphon.enums import BuiltinNodeTypes
 from graphon.model_runtime.entities.message_entities import SystemPromptMessage, UserPromptMessage
 
@@ -108,97 +107,6 @@ def _sanitize_existing_config_for_prompt(value: Any) -> Any:
     if isinstance(value, list):
         return [_sanitize_existing_config_for_prompt(item) for item in value]
     return deepcopy(value)
-
-
-def _start_inputs_from_graph(graph: dict[str, Any] | None) -> list[dict[str, Any]]:
-    if not isinstance(graph, dict):
-        return []
-    for node in graph.get("nodes") or []:
-        if not isinstance(node, dict):
-            continue
-        data = node.get("data") if isinstance(node.get("data"), dict) else {}
-        if data.get("type") != BuiltinNodeTypes.START:
-            continue
-        return [
-            variable
-            for variable in (data.get("variables") or [])
-            if isinstance(variable, dict) and isinstance(variable.get("variable"), str) and variable["variable"]
-        ]
-    return []
-
-
-def _builder_topology_plan(
-    graph: dict[str, Any] | None,
-    *,
-    target_node: dict[str, Any],
-    extra_plan_nodes: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Compact live topology plus same-batch pending nodes. Live edges only."""
-    plan_nodes: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    plan_edges: list[dict[str, Any]] = []
-    if isinstance(graph, dict):
-        for node in graph.get("nodes") or []:
-            if not isinstance(node, dict) or not isinstance(node.get("id"), str) or not node["id"]:
-                continue
-            node_id = node["id"]
-            data = node.get("data") if isinstance(node.get("data"), dict) else {}
-            item: dict[str, Any] = {
-                "id": node_id,
-                "node_type": str(data.get("type") or ""),
-                "label": str(data.get("title") or node_id),
-                "outputs": declared_outputs(node),
-                "outputs_kind": "confirmed",
-            }
-            parent = node.get("parentId") or data.get("parentId")
-            if isinstance(parent, str) and parent:
-                item["parent"] = parent
-            plan_nodes.append(item)
-            seen.add(node_id)
-        for edge in graph.get("edges") or []:
-            if not isinstance(edge, dict):
-                continue
-            source = edge.get("source")
-            target = edge.get("target")
-            if not isinstance(source, str) or not source or not isinstance(target, str) or not target:
-                continue
-            compact: dict[str, Any] = {"source": source, "target": target}
-            handle = edge.get("sourceHandle") or edge.get("source_handle")
-            if isinstance(handle, str) and handle:
-                compact["source_handle"] = handle
-            plan_edges.append(compact)
-    for extra in extra_plan_nodes:
-        extra_id = str(extra.get("id") or "")
-        if not extra_id or extra_id in seen:
-            continue
-        item = {
-            "id": extra_id,
-            "node_type": str(extra.get("node_type") or extra.get("type") or ""),
-            "label": str(extra.get("label") or extra.get("title") or extra_id),
-            "outputs": [name for name in (extra.get("outputs") or []) if isinstance(name, str) and name],
-            "outputs_kind": extra.get("outputs_kind") or "provisional",
-        }
-        purpose = extra.get("purpose")
-        if isinstance(purpose, str) and purpose:
-            item["purpose"] = purpose
-        parent = extra.get("parent")
-        if isinstance(parent, str) and parent:
-            item["parent"] = parent
-        plan_nodes.append(item)
-        seen.add(extra_id)
-    target_id = str(target_node.get("id") or "")
-    if target_id and target_id not in seen:
-        plan_nodes.append(
-            {
-                "id": target_id,
-                "node_type": str(target_node.get("node_type") or ""),
-                "label": str(target_node.get("label") or target_id),
-                "purpose": str(target_node.get("purpose") or ""),
-                "outputs": [],
-                "outputs_kind": "provisional",
-            }
-        )
-    return plan_nodes, plan_edges
 
 
 def _merge_generated_config(existing: dict[str, Any], generated: dict[str, Any]) -> dict[str, Any]:
@@ -355,62 +263,6 @@ def _build_node(
                 },
             )
         )
-    return config
-
-
-def build_single_node(
-    *,
-    client: LLMJsonClient,
-    request: BuilderInput,
-    node_id: str,
-    node_type: str,
-    title: str,
-    purpose: str,
-    existing_node: dict[str, Any] | None = None,
-    extra_plan_nodes: list[dict[str, Any]] | None = None,
-    topology_graph: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Generate one non-Tool node's config from intent. Does not write the graph.
-
-    Workflow Assist compiles Tool intent in pure Python and this dedicated
-    entry point rejects Tool nodes before any model call. The legacy full-graph
-    builder remains separate for cmd+k. ``existing_node`` is prompt context; when its type matches
-    ``node_type`` the generated fields are merged so an update is a delta.
-    Replace (type change) uses the generated config as-is. Reserved wrapper
-    keys are stripped so graph ops own ``type`` / ``title`` / ``desc`` / ``parentId``.
-
-    ``topology_graph`` plus ``extra_plan_nodes`` become the Builder plan so an
-    Assist create can see already-committed nodes and same-batch siblings.
-    ``request.current_graph`` is the fallback topology (cmd+k / stale snapshot).
-    """
-    if node_type == BuiltinNodeTypes.TOOL:
-        raise ValueError("Tool nodes are compiled outside Node Builder")
-    target_node = {"id": node_id, "node_type": node_type, "label": title, "purpose": purpose}
-    graph = topology_graph if isinstance(topology_graph, dict) else request.current_graph
-    plan_nodes, plan_edges = _builder_topology_plan(
-        graph,
-        target_node=target_node,
-        extra_plan_nodes=extra_plan_nodes or [],
-    )
-    start_inputs = request.start_inputs or _start_inputs_from_graph(graph)
-    generated = _build_node(
-        client=client,
-        request=request,
-        target_node=target_node,
-        plan_json=format_parallel_plan(plan_nodes, plan_edges, start_inputs),
-        mode_section=format_mode_section(request.mode),
-        existing_node=existing_node,
-        emit=None,
-    )
-    existing_data = existing_node.get("data") if existing_node and isinstance(existing_node.get("data"), dict) else None
-    if isinstance(existing_data, dict) and existing_data.get("type") == node_type:
-        config = _merge_generated_config(existing_data, generated)
-    else:
-        config = deepcopy(generated)
-    for shared_key in ("type", "title", "desc", "selected", "parentId"):
-        config.pop(shared_key, None)
-    if node_type in CONTAINER_NODE_TYPES:
-        config["start_node_id"] = resolve_container_start_node_id(node_id=node_id, data=config)
     return config
 
 

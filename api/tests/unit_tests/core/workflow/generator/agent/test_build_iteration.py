@@ -269,21 +269,19 @@ def test_iteration_output_must_be_produced_on_every_branch(tool_context: ToolCon
     branch = {
         "kind": "standard",
         "ref": "branch",
-        "node_type": "if-else",
-        "intent": {
-            "objective": "Only process even-indexed items",
-            "inputs": [{"source": ["iter1", "index"], "role": "index"}],
-            "structure": {
+            "node_type": "if-else",
+            "intent": {
+                "objective": "Only process even-indexed items",
+                "structure": {
                 "kind": "if-else",
                 "cases": [
                     {
                         "id": "matched",
                         "conditions": [
-                            {
-                                "source": ["iter1", "index"],
-                                "type": "number",
-                                "operator": "=",
-                                "value": 0,
+                                {
+                                    "source": ["iter1", "index"],
+                                    "operator": "=",
+                                    "value": 0,
                             }
                         ],
                     }

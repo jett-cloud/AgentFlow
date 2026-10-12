@@ -5,16 +5,20 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from core.workflow.generator.types import WorkflowGenerateErrorDict
+from core.workflow.generator.validation.condition_operators import (
+    CONDITION_OPERATORS_BY_TYPE as _LOOP_OPERATORS_BY_TYPE,
+)
+from core.workflow.generator.validation.condition_operators import CONDITION_TYPES as _LOOP_CONDITION_TYPES
+from core.workflow.generator.validation.condition_operators import (
+    UNARY_CONDITION_OPERATORS as _UNARY_CONDITION_OPERATORS,
+)
 from core.workflow.generator.validation.node_validation_values import (
     _ALLOWED_CODE_OUTPUT_TYPES,
     _ASSIGNER_NO_VALUE_OPERATIONS,
     _CODE_OUTPUT_NAME_RE,
     _HUMAN_INPUT_RESERVED_OUTPUTS,
-    _LOOP_CONDITION_TYPES,
-    _LOOP_OPERATORS_BY_TYPE,
     _LOOP_VALUE_TYPES,
     _TEMPLATE_VARIABLE_NAME_MAX_LENGTH,
-    _UNARY_CONDITION_OPERATORS,
     _bounded_int,
     _completeness_error,
     _loop_constant_matches,

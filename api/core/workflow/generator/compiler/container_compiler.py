@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from configs import dify_config
 from core.workflow.generator.compiler.container_assembly import assemble_container_graph
-from core.workflow.generator.compiler.container_children import compile_child_with_mechanical_retry
+from core.workflow.generator.compiler.container_children import compile_container_child
 from core.workflow.generator.compiler.container_scope import (
     _child_output_declarations,
     _layer_index,
@@ -47,9 +47,11 @@ def compile_container_subgraph(request: ContainerCompileRequest) -> CompiledCont
         knowledge_entries=request.knowledge_entries,
         layer_by_ref=_layer_index(layers),
         in_iteration=request.kind == "iteration",
-        builder_client=request.builder_client,
-        builder_input=request.builder_input,
-        frozen_graph=request.frozen_graph,
+        model_entries=request.model_entries,
+        installed_dataset_ids=request.installed_dataset_ids,
+        http_credential_reference_ids=request.http_credential_reference_ids,
+        human_input_delivery_capabilities=request.human_input_delivery_capabilities,
+        human_input_member_reference_ids=request.human_input_member_reference_ids,
     )
     by_ref = {child.ref: child for child in request.intent.children}
     intent_layers = tuple(tuple(by_ref[ref] for ref in layer) for layer in layers)
@@ -67,7 +69,7 @@ def compile_container_subgraph(request: ContainerCompileRequest) -> CompiledCont
         cache = request.compile_cache
         if cache is not None and key in cache:
             return cache[key]
-        compiled = compile_child_with_mechanical_retry(child, context)
+        compiled = compile_container_child(child, context)
         if cache is not None and _safe_to_cache(compiled):
             cache[key] = compiled
         return compiled
@@ -157,6 +159,33 @@ def resource_snapshot_hash(request: ContainerCompileRequest) -> str:
         {
             "tools": [dict(entry) for entry in request.tool_entries],
             "knowledge": [dict(entry) for entry in request.knowledge_entries],
+            "models": None if request.model_entries is None else [dict(entry) for entry in request.model_entries],
+            "installed_dataset_ids": (
+                None if request.installed_dataset_ids is None else sorted(request.installed_dataset_ids)
+            ),
+            "http_credential_reference_ids": (
+                None if request.http_credential_reference_ids is None else sorted(request.http_credential_reference_ids)
+            ),
+            "human_input_delivery_capabilities": (
+                None
+                if request.human_input_delivery_capabilities is None
+                else sorted(request.human_input_delivery_capabilities)
+            ),
+            "human_input_member_reference_ids": (
+                None
+                if request.human_input_member_reference_ids is None
+                else sorted(request.human_input_member_reference_ids)
+            ),
+            "conversation_variable_types": (
+                None
+                if request.conversation_variable_types is None
+                else sorted(request.conversation_variable_types.items())
+            ),
+            "writable_conversation_variables": (
+                None
+                if request.writable_conversation_variables is None
+                else sorted(request.writable_conversation_variables)
+            ),
         }
     )
 

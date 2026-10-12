@@ -227,6 +227,37 @@ def _schema_for_variable(
 def _declared_output_schema(node: dict[str, Any], base: str) -> dict[str, Any]:
     data = node.get("data") or {}
     node_type = data.get("type")
+    if node_type == BuiltinNodeTypes.QUESTION_CLASSIFIER and base in {"class_id", "class_name"}:
+        return {"type": "string"}
+    if node_type == BuiltinNodeTypes.PARAMETER_EXTRACTOR:
+        builtin_types = {"__is_success": "boolean", "__reason": "string", "__usage": "object"}
+        if base in builtin_types:
+            return {"type": builtin_types[base]}
+        for parameter in data.get("parameters") or []:
+            if isinstance(parameter, dict) and parameter.get("name") == base:
+                return {"type": str(parameter.get("type") or "object")}
+    if node_type in (BuiltinNodeTypes.VARIABLE_AGGREGATOR, BuiltinNodeTypes.LEGACY_VARIABLE_AGGREGATOR):
+        if base == "output":
+            return {"type": str(data.get("output_type") or "object")}
+    if node_type == BuiltinNodeTypes.LIST_OPERATOR:
+        if base == "result":
+            return {"type": "array"}
+        if base in {"first_record", "last_record"}:
+            return {"type": "object"}
+    if node_type == BuiltinNodeTypes.HUMAN_INPUT:
+        if base in _HITL_BUILTIN_OUTPUTS:
+            return {"type": "string"}
+        for item in data.get("inputs") or []:
+            if not isinstance(item, dict) or item.get("output_variable_name") != base:
+                continue
+            return {
+                "type": {
+                    "paragraph": "string",
+                    "select": "string",
+                    "file": "file",
+                    "file-list": "array[file]",
+                }.get(str(item.get("type") or ""), "object")
+            }
     if node_type == BuiltinNodeTypes.LLM and base == "structured_output":
         properties = ((data.get("structured_output") or {}).get("schema") or {}).get("properties") or {}
         return {"type": "object", "properties": properties if isinstance(properties, dict) else {}}
@@ -261,10 +292,13 @@ def _declared_output_schema(node: dict[str, Any], base: str) -> dict[str, Any]:
                     "children": item.get("children"),
                 }
         return {"type": "string"}
-    if node_type == BuiltinNodeTypes.HTTP_REQUEST and base == "files":
-        return {"type": "arrayFile"}
-    if node_type == BuiltinNodeTypes.HTTP_REQUEST and base == "headers":
-        return {"type": "object"}
+    if node_type == BuiltinNodeTypes.HTTP_REQUEST:
+        return {
+            "body": {"type": "string"},
+            "status_code": {"type": "number"},
+            "headers": {"type": "object"},
+            "files": {"type": "array[file]"},
+        }.get(base, {"type": "object"})
     if node_type == BuiltinNodeTypes.AGENT:
         for item in data.get("agent_declared_outputs") or []:
             if isinstance(item, dict) and item.get("name") == base:

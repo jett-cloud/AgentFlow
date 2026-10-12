@@ -146,30 +146,9 @@ def test_build_node_schema_has_structured_intent_and_update_forbids_type():
     assert update_then.get("not") == {"required": ["type"]}
     intent = properties["intent"]
     assert intent["type"] == "object"
-    assert set(intent["properties"]) >= {
-        "objective",
-        "behavior",
-        "inputs",
-        "outputs",
-        "requirements",
-        "tool",
-        "tool_bindings",
-        "agent_knowledge",
-        "structure",
-    }
-    arguments = intent["properties"]["tool"]["properties"]["arguments"]["additionalProperties"]
-    assert {branch["properties"]["kind"]["const"] for branch in arguments["oneOf"]} == {
-        "variable",
-        "template",
-        "constant",
-    }
-
-    agent_knowledge = intent["properties"]["agent_knowledge"]
-    assert agent_knowledge["properties"]["operation"]["enum"] == ["replace", "clear"]
-    knowledge_set = agent_knowledge["properties"]["sets"]["items"]
-    assert knowledge_set["additionalProperties"] is False
-    assert knowledge_set["properties"]["retrieval_mode"]["enum"] == ["multiple"]
-    assert knowledge_set["properties"]["query_mode"]["enum"] == ["generated_query", "user_query"]
+    assert set(intent["properties"]) == {"objective", "outputs", "structure"}
+    assert intent["required"] == ["objective", "structure"]
+    assert intent["additionalProperties"] is False
     structure = intent["properties"]["structure"]
     assert {branch["properties"]["kind"]["const"] for branch in structure["oneOf"]} == {
         "start",
@@ -178,36 +157,46 @@ def test_build_node_schema_has_structured_intent_and_update_forbids_type():
         "template-transform",
         "llm",
         "code",
+        "document-extractor",
         "if-else",
+        "question-classifier",
+        "parameter-extractor",
+        "variable-aggregator",
+        "list-operator",
+        "knowledge-retrieval",
+        "http-request",
+        "human-input",
+        "assigner",
     }
 
 
-def test_build_node_constant_argument_schema_accepts_arbitrary_json_array_items() -> None:
+def test_build_node_schema_excludes_specialized_tool_and_agent_fields() -> None:
     intent = _schema("build_node")["parameters"]["properties"]["intent"]
-    arguments = intent["properties"]["tool"]["properties"]["arguments"]["additionalProperties"]
-    constant = next(branch for branch in arguments["oneOf"] if branch["properties"]["kind"]["const"] == "constant")
-    value_schema = constant["properties"]["value"]
-
-    assert Draft202012Validator(value_schema).is_valid(["text", 1, False, None, {"nested": ["value"]}])
-
-
-def test_build_node_variable_argument_schema_accepts_nested_selectors() -> None:
-    intent = _schema("build_node")["parameters"]["properties"]["intent"]
-    arguments = intent["properties"]["tool"]["properties"]["arguments"]["additionalProperties"]
-    variable = next(branch for branch in arguments["oneOf"] if branch["properties"]["kind"]["const"] == "variable")
-
-    assert Draft202012Validator(variable).is_valid(
-        {"kind": "variable", "selector": ["iteration", "item", "source_image"]}
+    assert {"tool", "tool_bindings", "agent_knowledge", "behavior", "inputs", "requirements"}.isdisjoint(
+        intent["properties"]
     )
 
 
-def test_build_node_input_schema_accepts_nested_selectors() -> None:
+def test_container_standard_child_exposes_same_structure_only_intent_contract() -> None:
+    parameters = _schema("build_loop")["parameters"]
+    intent = parameters["$defs"]["NodeBuildIntent"]
+
+    assert set(intent["properties"]) == {"objective", "outputs", "structure"}
+    assert intent["required"] == ["objective", "structure"]
+    assert intent["additionalProperties"] is False
+
+
+def test_build_node_structure_schema_accepts_nested_selectors() -> None:
     intent = _schema("build_node")["parameters"]["properties"]["intent"]
 
     assert Draft202012Validator(intent).is_valid(
         {
             "objective": "Read the nested title",
-            "inputs": [{"source": ["iteration", "item", "title"], "role": "title"}],
+            "structure": {
+                "kind": "template-transform",
+                "template": "{{ title }}",
+                "bindings": [{"name": "title", "source": ["iteration", "item", "title"]}],
+            },
         }
     )
 
@@ -221,6 +210,7 @@ def test_build_node_output_schema_accepts_declared_object_children() -> None:
     assert Draft202012Validator(intent).is_valid(
         {
             "objective": "Parse cases",
+            "structure": {"kind": "code", "language": "python3", "code": "def main():\n    return {}"},
             "outputs": [
                 {
                     "name": "cases",
@@ -384,7 +374,6 @@ def test_tool_context_requires_every_field_a_tool_may_touch():
         "installed_dataset_ids",
         "knowledge_available",
         "tools_available",
-        "builder_input",
         "llm_client",
         "agent_model_entries",
         "models_available",
@@ -396,12 +385,18 @@ def test_tool_context_requires_every_field_a_tool_may_touch():
         "authorize_live_acceptance",
         "environment_variables",
         "conversation_variables",
+        "conversation_variable_types",
+        "writable_conversation_variables",
+        "http_credential_reference_ids",
+        "human_input_delivery_capabilities",
+        "human_input_member_reference_ids",
         "run_id",
         "run_epoch",
         "contract_rollout_stage",
         "execution_consent_mode",
         "execute_graph",
         "live_consent_declined_hash",
+        "output_language",
     }
     state_names = {
         "graph",
@@ -419,10 +414,10 @@ def test_tool_context_requires_every_field_a_tool_may_touch():
         "contract_revision",
         "contract_hash",
         "candidate_base_hash",
-            "user_turn_evidence",
-            "last_node_outputs",
-            "last_workflow_execution",
-        }
+        "user_turn_evidence",
+        "last_node_outputs",
+        "last_workflow_execution",
+    }
     assert set(env_fields) == env_required | env_optional
     assert set(state_fields) == state_names
     assert set(context_fields) == {"env", "state"}
@@ -449,6 +444,7 @@ def test_tool_context_requires_every_field_a_tool_may_touch():
     assert env_fields["execution_consent_mode"].default == "always_ask"
     assert env_fields["execute_graph"].default is None
     assert env_fields["live_consent_declined_hash"].default is None
+    assert env_fields["output_language"].default == "en-US"
     assert state_fields["last_node_outputs"].default_factory is dict
 
 

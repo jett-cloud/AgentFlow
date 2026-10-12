@@ -6,16 +6,23 @@ def test_intent_validation_distinguishes_flattened_nested_selector() -> None:
     intent = NodeBuildIntent.model_validate(
         {
             "objective": "Read the current question",
-            "inputs": [{"source": ["iteration", "item", "question"], "role": "query"}],
+            "structure": {
+                "kind": "template-transform",
+                "template": "{{ question }}",
+                "bindings": [{"name": "question", "source": ["iteration", "item", "question"]}],
+            },
         }
     )
 
     issues = validate_node_config_against_intent(
         node_id="retrieve",
-        node_type="knowledge-retrieval",
+        node_type="template-transform",
         title="Retrieve",
         intent=intent,
-        config={"query_variable_selector": ["iteration", "item.question"]},
+        config={
+            "template": "{{ question }}",
+            "variables": [{"variable": "question", "value_selector": ["iteration", "item.question"]}],
+        },
     )
 
     assert [issue.code for issue in issues] == ["INTENT_INPUT_MISSING"]

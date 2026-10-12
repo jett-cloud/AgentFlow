@@ -105,28 +105,7 @@ def _required_text_errors(
     return [_completeness_error(node_id, field, "must be non-empty")]
 
 
-_UNARY_CONDITION_OPERATORS = frozenset(
-    {"empty", "not empty", "is null", "is not null", "null", "not null", "exists", "not exists"}
-)
-
-
 _LOOP_VALUE_TYPES = frozenset({"constant", "variable"})
-
-
-_LOOP_CONDITION_TYPES = _ALLOWED_CODE_OUTPUT_TYPES | frozenset({"file", "array"})
-
-
-_LOOP_OPERATORS_BY_TYPE: dict[str, frozenset[str]] = {
-    "string": frozenset({"contains", "not contains", "start with", "end with", "is", "is not", "empty", "not empty"}),
-    "number": frozenset({"=", "≠", ">", "<", "≥", "≤", "empty", "not empty"}),
-    "boolean": frozenset({"is", "is not", "empty", "not empty"}),
-    "object": frozenset({"empty", "not empty"}),
-    "array": frozenset({"empty", "not empty"}),
-    "array[object]": frozenset({"empty", "not empty"}),
-    "array[string]": frozenset({"contains", "not contains", "empty", "not empty"}),
-    "array[number]": frozenset({"contains", "not contains", "empty", "not empty"}),
-    "file": frozenset({"exists", "not exists"}),
-}
 
 
 def _loop_constant_matches(var_type: object, value: object) -> bool:

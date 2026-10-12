@@ -13,7 +13,7 @@ description: Use when creating a workflow from an empty candidate or an explicit
    Submit requirement evidence, node intents, edges/handles, and final outputs.
    Complete when submit_workflow_plan succeeds and the next nodes are resolved.
 3. Build using the system builder router and dependency rules. Ordinary nodes use
-   build_node(mode=create); supply matching intent.structure for supported types.
+   build_node(mode=create); always supply the matching typed intent.structure.
    Use inspect_node_schema when fields are unclear. Declare dynamic output types
    explicitly and retain full nested selectors. Constants need no invented input.
    Independent creates may share a native multi-tool batch; consumers that need

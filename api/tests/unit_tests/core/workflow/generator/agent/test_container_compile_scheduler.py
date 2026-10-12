@@ -9,7 +9,12 @@ from typing import Any, cast
 import pytest
 
 from core.workflow.generator.agent.tools.tool_context import ToolTurnState
-from core.workflow.generator.compiler.container_compiler import compile_container_subgraph, compile_topological_layers
+from core.workflow.generator.compiler.container_compiler import (
+    compile_container_subgraph,
+    compile_topological_layers,
+    resource_snapshot_hash,
+)
+from core.workflow.generator.compiler.container_scope import build_container_registry
 from core.workflow.generator.compiler.container_types import (
     CompiledChild,
     ContainerCompileCacheKey,
@@ -22,6 +27,7 @@ from core.workflow.generator.compiler.intents.container_intent import (
 )
 from core.workflow.generator.graph.graph_ops import empty_graph, find_node, upsert_node
 from core.workflow.generator.graph.types import MinimalGraphDict
+from core.workflow.generator.variables.variable_registry import VariableResolutionError
 
 
 def _standard_child(ref: str, *, objective: str | None = None) -> StandardContainerChildIntent:
@@ -29,12 +35,16 @@ def _standard_child(ref: str, *, objective: str | None = None) -> StandardContai
         {
             "kind": "standard",
             "ref": ref,
-            "node_type": "llm",
-            "intent": {
-                "objective": objective or f"compile {ref}",
-                "inputs": [],
-                "outputs": [{"name": "text"}],
-            },
+                "node_type": "llm",
+                "intent": {
+                    "objective": objective or f"compile {ref}",
+                    "outputs": [{"name": "text"}],
+                    "structure": {
+                        "kind": "llm",
+                        "model": {"provider": "openai", "name": "gpt-4o"},
+                        "prompt": [{"role": "user", "text": objective or f"compile {ref}"}],
+                    },
+                },
         }
     )
 
@@ -141,33 +151,42 @@ def _loop_request(
 
 
 def _assigner_payload(ref: str, *, role: str = "acc") -> dict[str, object]:
+    del role
     return {
         "kind": "standard",
         "ref": ref,
         "node_type": "assigner",
         "intent": {
             "objective": f"write {ref}",
-            "inputs": [{"source": ["start", "query"], "role": role}],
+            "structure": {
+                "kind": "assigner",
+                "assignments": [
+                    {
+                        "target": ["loop1", "acc"],
+                        "operation": "over-write",
+                        "value": {"kind": "constant", "value": ""},
+                    }
+                ],
+            },
         },
     }
 
 
-def test_builder_protocol_error_retries_only_that_child(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_child_compile_error_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     attempts: list[str] = []
 
     def fake_compile(child: Any, context: Any) -> CompiledChild:
         attempts.append(child.ref)
-        if child.ref == "writer" and attempts.count("writer") == 1:
+        if child.ref == "writer":
             raise ContainerCompileError(
                 "INVALID_JSON",
-                "Builder returned unparseable JSON",
+                "invalid child payload",
                 path="children.writer",
                 child_ref="writer",
-                mechanical_retry=True,
             )
         return _dummy_compiled(child.ref)
 
-    monkeypatch.setattr("core.workflow.generator.compiler.container_children.compile_container_child", fake_compile)
+    monkeypatch.setattr("core.workflow.generator.compiler.container_compiler.compile_container_child", fake_compile)
     monkeypatch.setattr(
         "core.workflow.generator.compiler.container_compiler.validate_compiled_container", lambda *_args: None
     )
@@ -179,10 +198,12 @@ def test_builder_protocol_error_retries_only_that_child(monkeypatch: pytest.Monk
     )
     frozen = deepcopy(request.frozen_graph)
 
-    compile_container_subgraph(request)
+    with pytest.raises(ContainerCompileError) as excinfo:
+        compile_container_subgraph(request)
 
+    assert excinfo.value.code == "INVALID_JSON"
     assert attempts.count("keep") == 1
-    assert attempts.count("writer") == 2
+    assert attempts.count("writer") == 1
     assert request.frozen_graph == frozen
 
 
@@ -199,14 +220,13 @@ def test_semantic_errors_are_not_retried(monkeypatch: pytest.MonkeyPatch, code: 
             raise ContainerCompileError(code, f"{code} boom", path="children.bad", child_ref="bad")
         return _dummy_compiled(child.ref)
 
-    monkeypatch.setattr("core.workflow.generator.compiler.container_children.compile_container_child", fake_compile)
+    monkeypatch.setattr("core.workflow.generator.compiler.container_compiler.compile_container_child", fake_compile)
     request = _loop_request([_assigner_payload("ok"), _assigner_payload("bad")])
 
     with pytest.raises(ContainerCompileError) as excinfo:
         compile_container_subgraph(request)
 
     assert excinfo.value.code == code
-    assert excinfo.value.mechanical_retry is False
     assert attempts.count("bad") == 1
 
 
@@ -229,7 +249,7 @@ def test_cross_call_cache_reuses_unchanged_children(monkeypatch: pytest.MonkeyPa
         nonlocal validate_calls
         validate_calls += 1
 
-    monkeypatch.setattr("core.workflow.generator.compiler.container_children.compile_container_child", counting_compile)
+    monkeypatch.setattr("core.workflow.generator.compiler.container_compiler.compile_container_child", counting_compile)
     monkeypatch.setattr(
         "core.workflow.generator.compiler.container_compiler.validate_compiled_container", counting_validate
     )
@@ -261,7 +281,7 @@ def test_cache_misses_when_resource_or_upstream_signature_changes(monkeypatch: p
         compile_calls.append(child.ref)
         return _dummy_compiled(child.ref)
 
-    monkeypatch.setattr("core.workflow.generator.compiler.container_children.compile_container_child", counting_compile)
+    monkeypatch.setattr("core.workflow.generator.compiler.container_compiler.compile_container_child", counting_compile)
     monkeypatch.setattr(
         "core.workflow.generator.compiler.container_compiler.validate_compiled_container", lambda *_args: None
     )
@@ -272,11 +292,20 @@ def test_cache_misses_when_resource_or_upstream_signature_changes(monkeypatch: p
         {
             "kind": "standard",
             "ref": "b",
-            "node_type": "assigner",
-            "intent": {
-                "objective": "join a",
-                "inputs": [{"source": ["a", "text"], "role": "acc"}],
-            },
+                "node_type": "assigner",
+                "intent": {
+                    "objective": "join a",
+                    "structure": {
+                        "kind": "assigner",
+                        "assignments": [
+                            {
+                                "target": ["loop1", "acc"],
+                                "operation": "over-write",
+                                "value": {"kind": "variable", "selector": ["a", "text"]},
+                            }
+                        ],
+                    },
+                },
         },
     ]
     edges = [{"source": "a", "target": "b"}]
@@ -317,7 +346,7 @@ def test_container_cache_key_includes_resolved_child_id(monkeypatch: pytest.Monk
         compiled.node["id"] = context.ref_map[child.ref]
         return compiled
 
-    monkeypatch.setattr("core.workflow.generator.compiler.container_children.compile_container_child", counting_compile)
+    monkeypatch.setattr("core.workflow.generator.compiler.container_compiler.compile_container_child", counting_compile)
     monkeypatch.setattr(
         "core.workflow.generator.compiler.container_compiler.validate_compiled_container", lambda *_args: None
     )
@@ -355,3 +384,73 @@ def test_turn_state_holds_compile_cache() -> None:
     cached = state.compile_cache[key]
     assert "credential" not in str(cached.node).lower()
     assert "api_key" not in str(cached.node).lower()
+
+
+def test_resource_snapshot_hash_includes_phase_five_capabilities() -> None:
+    base = _loop_request([])
+    first = resource_snapshot_hash(base)
+
+    assert (
+        resource_snapshot_hash(
+            ContainerCompileRequest(
+                **{
+                    **base.__dict__,
+                    "installed_dataset_ids": frozenset({"dataset-1"}),
+                }
+            )
+        )
+        != first
+    )
+    assert (
+        resource_snapshot_hash(
+            ContainerCompileRequest(
+                **{
+                    **base.__dict__,
+                    "human_input_delivery_capabilities": frozenset({"webapp"}),
+                }
+            )
+        )
+        != first
+    )
+    assert (
+        resource_snapshot_hash(
+            ContainerCompileRequest(
+                **{
+                    **base.__dict__,
+                    "human_input_member_reference_ids": frozenset({"member-1"}),
+                }
+            )
+        )
+        != first
+    )
+    assert (
+        resource_snapshot_hash(
+            ContainerCompileRequest(
+                **{
+                    **base.__dict__,
+                    "conversation_variable_types": {"summary": "string"},
+                    "writable_conversation_variables": frozenset({"summary"}),
+                }
+            )
+        )
+        != first
+    )
+
+
+def test_container_registry_seeds_typed_writable_conversation_variables() -> None:
+    base = _loop_request([])
+    request = ContainerCompileRequest(
+        **{
+            **base.__dict__,
+            "conversation_variable_types": {"summary": "string", "counter": "number"},
+            "writable_conversation_variables": frozenset({"summary"}),
+        }
+    )
+
+    registry = build_container_registry(request, {}, [])
+
+    assert registry.resolve(("conversation", "counter"), referrer_id="loop1", expected_type=None).value_type == "number"
+    assert registry.resolve_writable(("conversation", "summary"), referrer_id="loop1").value_type == "string"
+    with pytest.raises(VariableResolutionError) as exc_info:
+        registry.resolve_writable(("conversation", "counter"), referrer_id="loop1")
+    assert exc_info.value.code == "VARIABLE_NOT_WRITABLE"

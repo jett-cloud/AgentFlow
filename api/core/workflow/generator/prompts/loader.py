@@ -181,10 +181,20 @@ def always_on_system_prompt() -> str:
 @cache
 def node_config_snippets() -> dict[str, str]:
     """Parse ``nodes.md`` H2 sections into ``{node_type: snippet}``."""
+    return _node_snippets("nodes.md")
+
+
+@cache
+def intent_node_snippets() -> dict[str, str]:
+    """Parse Agent-facing ``intent_nodes.md`` sections by node type."""
+    return _node_snippets("intent_nodes.md")
+
+
+def _node_snippets(relative: str) -> dict[str, str]:
     snippets: dict[str, str] = {}
     current = ""
     buf: list[str] = []
-    for line in read_prompt("nodes.md").splitlines():
+    for line in read_prompt(relative).splitlines():
         if line.startswith("## "):
             if current:
                 snippets[current] = "\n".join(buf).strip()
@@ -203,3 +213,10 @@ def read_node_snippet(node_type: str) -> str:
     if not node_type or any(token in node_type for token in ("/", "\\", "#")):
         return ""
     return node_config_snippets().get(node_type, "")
+
+
+def read_intent_node_snippet(node_type: str) -> str:
+    """Return one Agent-facing Intent section. Unknown → ``""``."""
+    if not node_type or any(token in node_type for token in ("/", "\\", "#")):
+        return ""
+    return intent_node_snippets().get(node_type, "")

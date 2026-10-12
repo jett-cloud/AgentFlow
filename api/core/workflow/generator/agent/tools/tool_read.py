@@ -7,9 +7,10 @@ from typing import cast
 from core.workflow.generator.agent.tools.tool_context import ToolContext
 from core.workflow.generator.agent.tools.tool_results import error, ok, require_str
 from core.workflow.generator.agent.types import ToolCall, ToolResult
+from core.workflow.generator.compiler.intents.build_contracts import parameters_schema
+from core.workflow.generator.compiler.node_intent_registry import NODE_INTENT_SPECS, node_intent_spec
 from core.workflow.generator.graph.graph_ops import read_node_view, render_compact_graph
-from core.workflow.generator.prompts.builder_prompts import get_node_config_snippet
-from core.workflow.generator.prompts.loader import node_config_snippets, registered_skill_names, skill_body
+from core.workflow.generator.prompts.loader import read_intent_node_snippet, registered_skill_names, skill_body
 from core.workflow.generator.resources.resource_search import search_knowledge
 from core.workflow.generator.resources.resource_search import search_tools as search_tool_catalogue
 from core.workflow.generator.resources.tool_catalogue import ToolCatalogueEntry, find_tool_entry
@@ -33,19 +34,73 @@ def read_node(call: ToolCall, context: ToolContext) -> ToolResult:
 
 
 def inspect_node_schema(call: ToolCall, context: ToolContext) -> ToolResult:
-    """Return known schema guidance or a recoverable error with supported types."""
+    """Return only the Agent-facing Intent contract and safe capabilities."""
     node_type = require_str(call["arguments"], "node_type")
     if node_type is None:
         return error(call, "INVALID_ARGUMENT", "node_type is required")
-    snippet = get_node_config_snippet(node_type)
-    if not snippet:
+    spec = node_intent_spec(node_type)
+    if spec is None:
         return error(
             call,
             "INVALID_ARGUMENT",
             f"No node schema is available for {node_type!r}; choose an available type",
-            cause={"available_types": sorted(key for key, value in node_config_snippets().items() if value)},
+            cause={"available_types": sorted(NODE_INTENT_SPECS)},
         )
-    return ok(call, changed=False, content={"node_type": node_type, "snippet": snippet})
+    intent_schema = parameters_schema(spec.intent_model) if spec.intent_model is not None else None
+    return ok(
+        call,
+        changed=False,
+        content={
+            "node_type": node_type,
+            "build_tool": spec.build_tool,
+            "typed_intent_available": spec.intent_model is not None,
+            "typed_surfaces": list(spec.typed_surfaces),
+            "intent_schema": intent_schema,
+            "intent_guidance": read_intent_node_snippet(node_type),
+            "capabilities": _node_capabilities(context, node_type),
+        },
+    )
+
+
+def _node_capabilities(context: ToolContext, node_type: str) -> dict[str, object] | None:
+    if node_type == "knowledge-retrieval":
+        return {
+            "knowledge_available": context.env.knowledge_available,
+            "dataset_count": (
+                None if context.env.installed_dataset_ids is None else len(context.env.installed_dataset_ids)
+            ),
+            "discovery_tool": "search_datasets",
+        }
+    if node_type == "http-request":
+        references = context.env.http_credential_reference_ids
+        return {
+            "credential_references_available": references is not None,
+            "credential_reference_ids": [] if references is None else sorted(references)[:50],
+            "credential_reference_count": None if references is None else len(references),
+            "plaintext_credentials_allowed": False,
+        }
+    if node_type == "human-input":
+        methods = context.env.human_input_delivery_capabilities
+        members = context.env.human_input_member_reference_ids
+        conversation_types = context.env.conversation_variable_types
+        writable_conversation = context.env.writable_conversation_variables or frozenset()
+        return {
+            "delivery_capabilities_available": methods is not None,
+            "delivery_methods": [] if methods is None else sorted(methods),
+            "member_references_available": members is not None,
+            "member_reference_ids": [] if members is None else sorted(members)[:50],
+            "member_reference_count": None if members is None else len(members),
+            "conversation_variables": (
+                []
+                if conversation_types is None
+                else [
+                    {"name": name, "type": value_type, "writable": name in writable_conversation}
+                    for name, value_type in sorted(conversation_types.items())
+                    if value_type != "secret"
+                ][:50]
+            ),
+        }
+    return None
 
 
 def activate_skills(call: ToolCall, context: ToolContext) -> ToolResult:

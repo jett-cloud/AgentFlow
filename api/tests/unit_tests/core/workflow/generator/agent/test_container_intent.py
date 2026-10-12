@@ -16,8 +16,12 @@ def _standard_child(ref: str = "worker", *, node_type: str = "llm") -> dict[str,
         "node_type": node_type,
         "intent": {
             "objective": "Transform the current item",
-            "inputs": [{"source": ["start", "query"], "role": "query"}],
             "outputs": [{"name": "text", "type": "string"}],
+            "structure": {
+                "kind": "llm",
+                "model": {"provider": "openai", "name": "gpt-4o"},
+                "prompt": [{"role": "user", "text": "{{#start.query#}}"}],
+            },
         },
     }
 

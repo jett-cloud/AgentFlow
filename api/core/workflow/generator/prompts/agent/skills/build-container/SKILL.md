@@ -10,10 +10,15 @@ description: Use when creating, updating, or repairing a Loop or Iteration and i
    Identify external inputs, child refs, internal dependencies, and public outputs.
    Complete when scope and required execution settings are known.
 2. Resolve resource-bearing children with bind-resources. Give ordinary children
-   structured intent and exact inputs/output types. Use request-local ref values
+   typed `structure` with exact selectors and output types. Use request-local ref values
    for child edges and selectors; external selectors keep real graph identities.
    Children may use the container's exposed variables in their permitted scope;
    external consumers must use public container outputs, not private child values.
+   A Loop assigner child MUST use `intent.structure.kind="assigner"` with explicit
+   `assignments[].target`, `operation`, and discriminated `value`. The target is the
+   exact declared Loop variable selector such as `["revision_loop", "optimized_doc"]`;
+   never encode a target variable in `objective` or another natural-language field.
+   Phase one typed operations are `over-write` and `clear`.
    Complete when all child dependencies and resource bindings are explicit.
 3. Supply the whole container: children, internal edges, public outputs, and required
    execution settings. Loop includes initial variables and exit conditions;

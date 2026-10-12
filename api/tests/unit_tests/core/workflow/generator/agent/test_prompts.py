@@ -341,7 +341,7 @@ def test_system_prompt_routes_configuration_details_to_authoritative_schemas() -
         "build_agent_node",
         "tools/mcp_tools/knowledge",
         "selector",
-        "omission/replacement/clearing",
+        "complete typed structure",
     ):
         assert required in SYSTEM_PROMPT
     assert '["iteration_id", "item", "source_image"]' not in SYSTEM_PROMPT
@@ -415,26 +415,6 @@ def test_system_prompt_distinguishes_recovery_from_retryability_and_completion()
     ):
         assert rule in SYSTEM_PROMPT
     assert "A retryable tool error is not a reason to call fail or ask_user" not in SYSTEM_PROMPT
-
-
-def test_workflow_assist_builder_specs_require_node_specific_semantic_fields() -> None:
-    from core.workflow.generator.compiler.intents.node_intent import NodeBuildIntent, render_node_builder_spec
-
-    intent = NodeBuildIntent(objective="Build the requested node")
-    expected_fields = {
-        "llm": ("prompt_template", "model.provider", "model.name"),
-        "http-request": ("url",),
-        "if-else": ("cases",),
-        "question-classifier": ("query_variable_selector", "classes", "model.provider", "model.name"),
-        "parameter-extractor": ("query", "parameters", "model.provider", "model.name"),
-        "human-input": ("form_content", "delivery_methods", "user_actions"),
-    }
-
-    for node_type, fields in expected_fields.items():
-        rendered = render_node_builder_spec(intent, node_type=node_type)
-        for field in fields:
-            assert field in rendered
-        assert "Runtime schema defaults do not make an empty semantic field complete" in rendered
 
 
 def test_repair_validation_skill_explains_invalid_node_config_field_repair() -> None:

@@ -158,60 +158,6 @@ def _without_null_branch(schema: dict[str, Any]) -> dict[str, Any]:
 
 
 _STRUCTURE_SCHEMA = _without_null_branch(parameters_schema(NodeBuildIntent)["properties"]["structure"])
-_TOOL_BINDING_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {"provider_name": _STRING, "tool_name": _STRING},
-    "required": ["provider_name", "tool_name"],
-    "additionalProperties": False,
-}
-_TOOL_ARGUMENT_SCHEMA: dict[str, Any] = {
-    "oneOf": [
-        {
-            "type": "object",
-            "properties": {
-                "kind": {"type": "string", "const": "variable"},
-                "selector": {"type": "array", "items": _STRING, "minItems": 2},
-            },
-            "required": ["kind", "selector"],
-            "additionalProperties": False,
-        },
-        {
-            "type": "object",
-            "properties": {"kind": {"type": "string", "const": "template"}, "text": _STRING},
-            "required": ["kind", "text"],
-            "additionalProperties": False,
-        },
-        {
-            "type": "object",
-            "properties": {"kind": {"type": "string", "const": "constant"}, "value": {}},
-            "required": ["kind", "value"],
-            "additionalProperties": False,
-        },
-    ]
-}
-_AGENT_KNOWLEDGE_SET_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "name": _STRING,
-        "dataset_ids": {"type": "array", "items": _STRING, "minItems": 1},
-        "query_mode": {"type": "string", "enum": ["generated_query", "user_query"]},
-        "query_value": _STRING,
-        "retrieval_mode": {"type": "string", "enum": ["multiple"]},
-        "top_k": {"type": "integer", "minimum": 1, "maximum": 20},
-        "score_threshold": {"type": "number", "minimum": 0, "maximum": 1},
-    },
-    "required": ["dataset_ids"],
-    "additionalProperties": False,
-}
-_AGENT_KNOWLEDGE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "operation": {"type": "string", "enum": ["replace", "clear"]},
-        "sets": {"type": "array", "items": _AGENT_KNOWLEDGE_SET_SCHEMA},
-    },
-    "required": ["operation"],
-    "additionalProperties": False,
-}
 
 
 def _node_output_field_schema(*, remaining_depth: int = 6) -> dict[str, Any]:
@@ -237,30 +183,10 @@ _NODE_BUILD_INTENT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "objective": _STRING,
-        "behavior": _STRING,
-        "inputs": {
-            "type": "array",
-            "items": _obj(
-                {"source": {"type": "array", "items": _STRING, "minItems": 2}, "role": _STRING},
-                ["source", "role"],
-            ),
-        },
         "outputs": {"type": "array", "items": _NODE_OUTPUT_SCHEMA},
-        "requirements": {"type": "array", "items": _STRING},
-        "tool": {
-            "type": "object",
-            "properties": {
-                "binding": _TOOL_BINDING_SCHEMA,
-                "arguments": {"type": "object", "additionalProperties": _TOOL_ARGUMENT_SCHEMA},
-            },
-            "required": ["binding"],
-            "additionalProperties": False,
-        },
-        "tool_bindings": {"type": "array", "items": _TOOL_BINDING_SCHEMA},
-        "agent_knowledge": _AGENT_KNOWLEDGE_SCHEMA,
         "structure": _STRUCTURE_SCHEMA,
     },
-    "required": ["objective"],
+    "required": ["objective", "structure"],
     "additionalProperties": False,
 }
 
@@ -302,8 +228,8 @@ TOOL_SCHEMAS: list[ToolSchema] = [
         "description": (
             "Create, update, or replace one ordinary node from structured intent. mode is required. "
             "Do not submit config. Tool, Agent, Loop, and Iteration nodes have dedicated builders. "
-            "For Start, End, Answer, Template, LLM, Code, and If/Else, provide intent.structure "
-            "to compile required runtime fields deterministically. update forbids type — use replace to change type."
+            "intent.structure is required and must match the node type; runtime fields are compiled deterministically. "
+            "update forbids type — use replace to change type."
         ),
         "parameters": {
             "type": "object",
@@ -457,8 +383,10 @@ TOOL_SCHEMAS: list[ToolSchema] = [
     {
         "name": "run_acceptance",
         "description": (
-            "Record completion evidence after a successful run_workflow for the current candidate; "
-            "WORKFLOW_EXECUTION_REQUIRED means run and judge the whole graph first. Default mode is simulated: "
+            "Record completion evidence after run_workflow has either passed or explicitly skipped a node "
+            "without a registered verification capability as structural_only; "
+            "WORKFLOW_EXECUTION_REQUIRED means inspect "
+            "the current candidate with run_workflow first. Default mode is simulated: "
             "no user tools or models, usage count stays 0. mode=live requires prior ask_user "
             "consent (question id live_run_consent) and meters tools/models. "
             "ok means the runner ran; content.passed is whether cases passed. "
@@ -487,14 +415,17 @@ TOOL_SCHEMAS: list[ToolSchema] = [
     {
         "name": "run_workflow",
         "description": (
-            "Execute the whole current candidate once and return per-node outputs and failures. "
+            "Check whether the whole candidate can be safely executed, then execute it when supported. "
             "Use only after the graph is complete and validate_graph passes; activate test-and-evaluate first. "
             "The system selects execution: local-only graphs run directly, always_execute or a one-shot grant "
             "runs external nodes live, and a decline for the current graph falls back to mocks (omitted outputs "
             "get typed placeholders). LIVE_RUN_REQUIRES_CONSENT means ask_user with question id "
             "live_run_consent, then call run_workflow again after the user answers. "
-            "passed=true only means the engine ran without "
-            "failures; judge the outputs against the user's request yourself. Never completes the run."
+            "Question Classifier classes and Human Input actions are verified as bounded scenarios; Human Input "
+            "forces simulated execution and resumes every action from a cloned pause snapshot. Only unknown node "
+            "capabilities return execution_status=skipped with verification_level=structural_only. passed=true "
+            "only means every executed scenario had no engine failures; judge the outputs against the "
+            "user's request yourself. Never completes the run."
         ),
         "parameters": _obj(
             {

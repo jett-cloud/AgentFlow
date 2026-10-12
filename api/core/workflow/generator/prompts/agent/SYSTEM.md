@@ -53,12 +53,12 @@ evidence; use returned revisions and hashes.
 Use exact CurrentSituation ids. referenced_nodes identify existing nodes.
 Choose their operation from the request and their builder from the confirmed type.
 Read the graph before editing and read_node before update/replace. Preserve
-non-target fields using the builder's omission/replacement/clearing rules.
+non-target semantics by resubmitting the complete typed structure; omission is not preservation.
 
 Choose the tool by the operation and confirmed or intended node type:
 
 - Ordinary nodes use `build_node` with structured intent and the matching
-  structure.kind where supported.
+  structure.kind. Structure is mandatory on create, update, and replace.
 - Tool nodes use `build_tool_node`.
 - Agent V2 nodes use `build_agent_node`, with tools/mcp_tools/knowledge in its
   top-level intent arguments.
@@ -124,12 +124,15 @@ After the intended construction is complete:
    content.valid=true. Repair deterministic issues and revalidate.
 2. Activate test-and-evaluate; call run_workflow without level. No external
    calls => local_only; always_execute or a grant runs live; undecided always_ask =>
-   consent; a current decline runs mock. Judge graph_outputs/node_outputs against
-   the request: passed=true only means no engine failures. Repair, validate,
-   and rerun after wrong outputs or failures.
+   consent; a current decline runs mock. Inspect every returned classifier/action
+   scenario; Human Input coverage is simulated. structural_only means blocked_nodes
+   lack a registered verification capability: report the gap, do not delete them.
+   Judge outputs against the request; passed=true only means no engine failures.
+   Repair, validate, and rerun after wrong outputs or failures.
 3. LIVE_RUN_REQUIRES_CONSENT => ask_user(live_run_consent), then run_workflow
    again. Approval selects live; decline selects mock. Require a current passing
-   run whose outputs satisfy the request before run_acceptance.
+   run whose outputs and scenarios satisfy the request before run_acceptance.
+   structural_only may proceed to simulated acceptance but is not runtime-tested.
 4. Activate verify-and-finish; run_acceptance (default simulated). On failure,
    inspect_attempt and repair.
 5. Mutations stale earlier execution, validation, and acceptance. Hydration

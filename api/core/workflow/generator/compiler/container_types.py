@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 from core.workflow.generator.compiler.intents.container_intent import (
     IterationBuildIntent,
@@ -12,6 +12,7 @@ from core.workflow.generator.compiler.intents.container_intent import (
 )
 from core.workflow.generator.graph.types import MinimalGraphDict, MinimalGraphNodeDict
 from core.workflow.generator.resources.knowledge_catalogue import KnowledgeCatalogueEntry
+from core.workflow.generator.resources.model_catalogue import AgentModelCatalogueEntry
 from core.workflow.generator.resources.tool_catalogue import ToolCatalogueEntry
 from core.workflow.generator.types import WorkflowGenerationMode
 from core.workflow.generator.variables.variable_registry import (
@@ -30,7 +31,6 @@ class ContainerCompileError(ValueError):
         path: str,
         child_ref: str | None = None,
         cause: Mapping[str, object] | None = None,
-        mechanical_retry: bool = False,
     ) -> None:
         super().__init__(detail)
         self.code = code
@@ -38,7 +38,6 @@ class ContainerCompileError(ValueError):
         self.path = path
         self.child_ref = child_ref
         self.cause = dict(cause) if cause is not None else {"error_code": code, "error": detail}
-        self.mechanical_retry = mechanical_retry
 
 
 @dataclass(frozen=True)
@@ -72,11 +71,16 @@ class ContainerCompileRequest:
     knowledge_entries: Sequence[KnowledgeCatalogueEntry]
     installed_tools: set[tuple[str, str]] | None
     generation_mode: WorkflowGenerationMode
+    model_entries: Sequence[AgentModelCatalogueEntry] | None = None
+    installed_dataset_ids: frozenset[str] | None = None
+    http_credential_reference_ids: frozenset[str] | None = None
+    human_input_delivery_capabilities: frozenset[str] | None = None
+    human_input_member_reference_ids: frozenset[str] | None = None
+    conversation_variable_types: Mapping[str, str] | None = None
+    writable_conversation_variables: frozenset[str] | None = None
     title: str = ""
     compile_cache: ContainerCompileCache | None = None
     resource_snapshot_hash: str = ""
-    builder_client: Any = None
-    builder_input: Any = None
 
 
 @dataclass(frozen=True)
@@ -88,9 +92,11 @@ class ChildCompileContext:
     knowledge_entries: Sequence[KnowledgeCatalogueEntry]
     layer_by_ref: Mapping[str, int]
     in_iteration: bool = False
-    builder_client: Any = None
-    builder_input: Any = None
-    frozen_graph: MinimalGraphDict | None = None
+    model_entries: Sequence[AgentModelCatalogueEntry] | None = None
+    installed_dataset_ids: frozenset[str] | None = None
+    http_credential_reference_ids: frozenset[str] | None = None
+    human_input_delivery_capabilities: frozenset[str] | None = None
+    human_input_member_reference_ids: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)

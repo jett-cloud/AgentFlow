@@ -17,17 +17,15 @@ from core.workflow.generator.agent.tools.tools import ToolContext
 from core.workflow.generator.agent.tools.tools import dispatch as real_dispatch
 from core.workflow.generator.agent.types import AgentMessage, AgentSession
 from core.workflow.generator.graph.graph_ops import find_node
-from core.workflow.generator.model_io.llm_response import StageJSONError
 from core.workflow.generator.prompts.loader import always_on_system_prompt, read_prompt, skill_body
 from tests.unit_tests.core.workflow.generator.agent.test_build_loop import (
-    _assigner_child,
     _enable_tools,
     _fetch_child,
     _min_loop_args,
     _outer_graph,
+    _typed_assigner_child,
 )
 from tests.unit_tests.core.workflow.generator.agent.test_loop import FakeCancellation, FakeInvoker, FakeLimits
-from tests.unit_tests.core.workflow.generator.node_fixtures import builder_config
 
 _GENERATOR_ROOT = Path(generator_pkg.__file__).resolve().parent
 _OLD_BUILD_NODE_TYPE = re.compile(r"build_node.*type.*(tool|agent|loop|iteration)")
@@ -198,7 +196,12 @@ def test_unknown_tool_output_wakes_main_agent_with_available_outputs(
         return inner(messages, **kwargs)
 
     harness.invoker.invoke = capture
-    bad = _min_loop_args(children=[_fetch_child(), _assigner_child(source=["fetch", "missing"])])
+    bad = _min_loop_args(
+        children=[
+            _fetch_child(),
+            _typed_assigner_child(value={"kind": "variable", "selector": ["fetch", "missing"]}),
+        ]
+    )
     good = _min_loop_args()
     harness.invoker.queue_tool_calls([{"id": "loop-bad", "name": "build_loop", "arguments": bad}])
     harness.invoker.queue_tool_calls([{"id": "loop-good", "name": "build_loop", "arguments": good}])
@@ -250,7 +253,7 @@ def test_tool_child_selector_miss_wakes_main_agent_with_available_outputs(
             "arguments": {"prompt": {"kind": "variable", "selector": ["start", "missing"]}},
         },
     }
-    bad = _min_loop_args(children=[bad_fetch, _assigner_child()])
+    bad = _min_loop_args(children=[bad_fetch, _typed_assigner_child()])
     good = _min_loop_args()
     harness.invoker.queue_tool_calls([{"id": "loop-bad", "name": "build_loop", "arguments": bad}])
     harness.invoker.queue_tool_calls([{"id": "loop-good", "name": "build_loop", "arguments": good}])
@@ -274,30 +277,24 @@ def test_tool_child_selector_miss_wakes_main_agent_with_available_outputs(
     assert events[-1][0] == "turn_complete"
 
 
-class _FlakyThenValidBuilder:
+class _FailIfCalledBuilder:
     def __init__(self) -> None:
         self.calls = 0
 
     def iter_json(self, *, messages: object, stage: str) -> Iterator[object]:
+        del messages, stage
         self.calls += 1
-        if self.calls == 1:
-            raise StageJSONError(stage, "unparseable builder JSON")
-        yield from ()
-        return {
-            "config": builder_config(
-                messages,
-                {"prompt_template": [{"role": "user", "text": "总结 {{#fetch.text#}}"}]},
-            )
-        }
+        raise AssertionError("typed container compilation must not call the model")
+        yield
 
 
-def test_mechanical_builder_retry_stays_inside_container(
+def test_typed_container_compile_never_calls_builder_model(
     tool_context: ToolContext, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_tools(tool_context)
     graph = _outer_graph()
     tool_context.state.graph = graph
-    builder = _FlakyThenValidBuilder()
+    builder = _FailIfCalledBuilder()
     from dataclasses import replace
 
     tool_context.env = replace(tool_context.env, llm_client=builder)  # type: ignore[arg-type]
@@ -312,11 +309,15 @@ def test_mechanical_builder_retry_stays_inside_container(
                 "node_type": "llm",
                 "intent": {
                     "objective": "Summarize the fetched text",
-                    "inputs": [{"source": ["fetch", "text"], "role": "query"}],
                     "outputs": [{"name": "text"}],
+                    "structure": {
+                        "kind": "llm",
+                        "model": {"provider": "openai", "name": "gpt-4o"},
+                        "prompt": [{"role": "user", "text": "总结 {{#fetch.text#}}"}],
+                    },
                 },
             },
-            _assigner_child(source=["note", "text"]),
+            _typed_assigner_child(value={"kind": "variable", "selector": ["note", "text"]}),
         ],
         edges=[{"source": "fetch", "target": "note"}, {"source": "note", "target": "write"}],
     )
@@ -334,6 +335,6 @@ def test_mechanical_builder_retry_stays_inside_container(
     assert len(loop_calls) == 1
     assert len(loop_results) == 1
     assert loop_results[0]["ok"] is True
-    assert builder.calls == 2
+    assert builder.calls == 0
     assert harness.invoker.invoke_count == 2
     assert harness.dispatch_order == ["build_loop"]

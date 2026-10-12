@@ -136,14 +136,37 @@ def _fetch_child() -> dict[str, object]:
     }
 
 
-def _assigner_child(*, source: list[str] | None = None) -> dict[str, object]:
+def _assigner_child(*, source: list[str] | None = None, role: str = "acc") -> dict[str, object]:
+    del source, role
     return {
         "kind": "standard",
         "ref": "write",
         "node_type": "assigner",
         "intent": {
             "objective": "Write the tool result into the loop accumulator",
-            "inputs": [{"source": source or ["fetch", "text"], "role": "acc"}],
+        },
+    }
+
+
+def _typed_assigner_child(
+    *,
+    target: list[str] | None = None,
+    value: dict[str, object] | None = None,
+    operation: str = "over-write",
+) -> dict[str, object]:
+    assignment: dict[str, object] = {
+        "target": target or ["loop1", "acc"],
+        "operation": operation,
+    }
+    if operation != "clear":
+        assignment["value"] = value or {"kind": "variable", "selector": ["fetch", "text"]}
+    return {
+        "kind": "standard",
+        "ref": "write",
+        "node_type": "assigner",
+        "intent": {
+            "objective": "Write the tool result into the loop accumulator",
+            "structure": {"kind": "assigner", "assignments": [assignment]},
         },
     }
 
@@ -155,7 +178,7 @@ def _min_loop_args(**changes: object) -> dict[str, object]:
         "title": "累计",
         "loop_count": 10,
         "loop_variables": [{"label": "acc", "var_type": "string", "value_type": "constant", "value": ""}],
-        "children": [_fetch_child(), _assigner_child()],
+        "children": [_fetch_child(), _typed_assigner_child()],
         "edges": [{"source": "fetch", "target": "write"}],
         "break_conditions": [{"id": "c1", "variable_selector": ["acc"], "comparison_operator": "is", "value": "done"}],
         "outputs": [{"name": "acc", "type": "string"}],
@@ -239,6 +262,296 @@ def test_min_loop_compiles_tool_then_assigner(tool_context: ToolContext) -> None
     end = find_node(tool_context.state.graph, "end")
     assert end is not None
     assert end["data"]["outputs"][0]["value_selector"] == ["loop1", "acc"]
+
+
+def test_loop_compiles_typed_assigner_without_using_role(tool_context: ToolContext) -> None:
+    _enable_tools(tool_context)
+    set_env(tool_context, llm_client=_UnexpectedBuilderClient())
+    tool_context.state.graph = _outer_graph()
+
+    result = dispatch(
+        _call(**_min_loop_args(children=[_fetch_child(), _typed_assigner_child()])),
+        tool_context,
+    )
+
+    assert result["ok"] is True, result
+    write = find_node(tool_context.state.graph, "loop1_write")
+    assert write is not None
+    assert write["data"]["items"] == [
+        {
+            "variable_selector": ["loop1", "acc"],
+            "input_type": "variable",
+            "operation": "over-write",
+            "value": ["loop1_fetch", "text"],
+        }
+    ]
+
+
+def test_container_requires_typed_assigner_without_mutating_graph(tool_context: ToolContext) -> None:
+    _enable_tools(tool_context)
+    tool_context.state.graph = _outer_graph()
+    snapshot = deepcopy(tool_context.state.graph)
+
+    result = dispatch(
+        _call(**_min_loop_args(children=[_fetch_child(), _assigner_child()])),
+        tool_context,
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "MISSING_NODE_STRUCTURE"
+    assert result["path"] == "children.write.intent.structure"
+    assert result["child_ref"] == "write"
+    assert tool_context.state.graph == snapshot
+
+
+def test_typed_assigner_unknown_target_reports_writable_candidates_without_mutating_graph(
+    tool_context: ToolContext,
+) -> None:
+    _enable_tools(tool_context)
+    tool_context.state.graph = _outer_graph()
+    snapshot = deepcopy(tool_context.state.graph)
+    tool_context.state.candidate_revision = 7
+
+    result = dispatch(
+        _call(
+            **_min_loop_args(
+                children=[
+                    _fetch_child(),
+                    _typed_assigner_child(target=["loop1", "目标循环变量 optimized_doc"]),
+                ]
+            )
+        ),
+        tool_context,
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "UNKNOWN_OUTPUT"
+    assert str(result["path"]).endswith("assignments[0].target")
+    assert result["child_ref"] == "write"
+    assert ["loop1", "acc"] in result["cause"]["writable_selectors"]
+    assert tool_context.state.graph == snapshot
+    assert tool_context.state.candidate_revision == 7
+
+
+def test_legacy_assigner_is_rejected_before_compilation(tool_context: ToolContext) -> None:
+    _enable_tools(tool_context)
+    tool_context.state.graph = _outer_graph()
+    snapshot = deepcopy(tool_context.state.graph)
+
+    result = dispatch(
+        _call(
+            **_min_loop_args(
+                children=[
+                    _fetch_child(),
+                    _assigner_child(role="目标循环变量 optimized_doc"),
+                ]
+            )
+        ),
+        tool_context,
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "MISSING_NODE_STRUCTURE"
+    assert result["path"] == "children.write.intent.structure"
+    assert tool_context.state.graph == snapshot
+
+
+def test_typed_assigner_rejects_read_only_child_output(tool_context: ToolContext) -> None:
+    _enable_tools(tool_context)
+    tool_context.state.graph = _outer_graph()
+
+    result = dispatch(
+        _call(
+            **_min_loop_args(
+                children=[
+                    _fetch_child(),
+                    _typed_assigner_child(target=["fetch", "text"]),
+                ]
+            )
+        ),
+        tool_context,
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "VARIABLE_NOT_WRITABLE"
+    assert str(result["path"]).endswith("assignments[0].target")
+
+
+def test_typed_assigner_rejects_source_type_mismatch(tool_context: ToolContext) -> None:
+    _enable_tools(tool_context)
+    tool_context.state.graph = _outer_graph()
+
+    result = dispatch(
+        _call(
+            **_min_loop_args(
+                loop_variables=[
+                    {"label": "acc", "var_type": "number", "value_type": "constant", "value": 0}
+                ],
+                outputs=[{"name": "acc", "type": "number"}],
+                children=[_fetch_child(), _typed_assigner_child()],
+            )
+        ),
+        tool_context,
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "VARIABLE_TYPE_MISMATCH"
+    assert str(result["path"]).endswith("assignments[0].value.selector")
+
+
+def test_typed_assigner_compiles_clear_without_a_value(tool_context: ToolContext) -> None:
+    _enable_tools(tool_context)
+    set_env(tool_context, llm_client=_UnexpectedBuilderClient())
+    tool_context.state.graph = _outer_graph()
+
+    result = dispatch(
+        _call(
+            **_min_loop_args(
+                children=[_typed_assigner_child(operation="clear")],
+                edges=[],
+            )
+        ),
+        tool_context,
+    )
+
+    assert result["ok"] is True, result
+    write = find_node(tool_context.state.graph, "loop1_write")
+    assert write is not None
+    assert write["data"]["items"][0] == {
+        "variable_selector": ["loop1", "acc"],
+        "input_type": "constant",
+        "operation": "clear",
+        "value": None,
+    }
+
+
+def test_loop_compiles_typed_document_extractor_without_builder(tool_context: ToolContext) -> None:
+    set_env(
+        tool_context,
+        llm_client=_UnexpectedBuilderClient(),
+    )
+    graph = _outer_graph()
+    start = find_node(graph, "start")
+    assert start is not None
+    start["data"]["variables"] = [
+        {
+            "variable": "document",
+            "label": "Document",
+            "type": "file",
+            "required": True,
+            "allowed_file_types": ["document"],
+            "allowed_file_upload_methods": ["local_file"],
+            "allowed_file_extensions": [],
+        }
+    ]
+    tool_context.state.graph = graph
+    extract = {
+        "kind": "standard",
+        "ref": "extract",
+        "node_type": "document-extractor",
+        "intent": {
+            "objective": "Extract the uploaded document",
+            "structure": {"kind": "document-extractor", "source": ["start", "document"]},
+        },
+    }
+
+    result = dispatch(
+        _call(**_min_loop_args(children=[extract], edges=[])),
+        tool_context,
+    )
+
+    assert result["ok"] is True, result
+    child = find_node(tool_context.state.graph, "loop1_extract")
+    assert child is not None
+    assert child["data"]["variable_selector"] == ["start", "document"]
+    assert "is_array_file" not in child["data"]
+
+
+def test_loop_typed_document_extractor_rejects_non_file_source(tool_context: ToolContext) -> None:
+    set_env(tool_context, llm_client=_UnexpectedBuilderClient())
+    tool_context.state.graph = _outer_graph()
+    snapshot = deepcopy(tool_context.state.graph)
+    extract = {
+        "kind": "standard",
+        "ref": "extract",
+        "node_type": "document-extractor",
+        "intent": {
+            "objective": "Extract the uploaded document",
+            "structure": {"kind": "document-extractor", "source": ["start", "query"]},
+        },
+    }
+
+    result = dispatch(
+        _call(**_min_loop_args(children=[extract], edges=[])),
+        tool_context,
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "VARIABLE_TYPE_MISMATCH"
+    assert result["path"] == "children.extract.intent.structure.source"
+    assert result["cause"]["expected"] == ["file", "array[file]"]
+    assert tool_context.state.graph == snapshot
+
+
+def test_loop_compiles_typed_llm_with_model_and_prompt_snapshots(tool_context: ToolContext) -> None:
+    set_env(
+        tool_context,
+        llm_client=_UnexpectedBuilderClient(),
+    )
+    tool_context.state.graph = _outer_graph()
+    llm = {
+        "kind": "standard",
+        "ref": "summarize",
+        "node_type": "llm",
+        "intent": {
+            "objective": "Summarize the query",
+            "structure": {
+                "kind": "llm",
+                "model": {"provider": "openai", "name": "gpt-4o"},
+                "prompt": [{"role": "user", "text": "Summarize {{#start.query#}}"}],
+            },
+        },
+    }
+
+    result = dispatch(
+        _call(**_min_loop_args(children=[llm], edges=[])),
+        tool_context,
+    )
+
+    assert result["ok"] is True, result
+    child = find_node(tool_context.state.graph, "loop1_summarize")
+    assert child is not None
+    assert child["data"]["model"]["provider"] == "openai"
+    assert child["data"]["prompt_template"][0]["text"] == "Summarize {{#start.query#}}"
+
+
+def test_loop_typed_llm_rejects_unknown_model_without_mutating_graph(tool_context: ToolContext) -> None:
+    set_env(tool_context, llm_client=_UnexpectedBuilderClient())
+    tool_context.state.graph = _outer_graph()
+    snapshot = deepcopy(tool_context.state.graph)
+    llm = {
+        "kind": "standard",
+        "ref": "summarize",
+        "node_type": "llm",
+        "intent": {
+            "objective": "Summarize the query",
+            "structure": {
+                "kind": "llm",
+                "model": {"provider": "invented", "name": "missing"},
+                "prompt": [{"role": "user", "text": "Summarize {{#start.query#}}"}],
+            },
+        },
+    }
+
+    result = dispatch(
+        _call(**_min_loop_args(children=[llm], edges=[])),
+        tool_context,
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "UNKNOWN_MODEL"
+    assert result["path"] == "children.summarize.intent.structure.model"
+    assert tool_context.state.graph == snapshot
 
 
 def test_replace_llm_with_loop_removes_stale_llm_fields(tool_context: ToolContext) -> None:
@@ -325,7 +638,7 @@ def test_loop_break_condition_uses_resolved_child_output_type(
     assert condition["varType"] == output_type
 
 
-def test_container_if_else_preserves_builder_condition(tool_context: ToolContext) -> None:
+def test_container_if_else_compiles_typed_condition(tool_context: ToolContext) -> None:
     _enable_tools(tool_context)
     set_env(
         tool_context,
@@ -355,7 +668,18 @@ def test_container_if_else_preserves_builder_condition(tool_context: ToolContext
         "node_type": "if-else",
         "intent": {
             "objective": "Check whether the user confirmed",
-            "inputs": [{"source": ["start", "query"], "role": "condition"}],
+            "structure": {
+                "kind": "if-else",
+                "cases": [
+                    {
+                        "id": "matched",
+                        "logical_operator": "and",
+                        "conditions": [
+                            {"source": ["start", "query"], "operator": "contains", "value": "yes"}
+                        ],
+                    }
+                ],
+            },
         },
     }
 
@@ -378,7 +702,6 @@ def test_structured_container_child_does_not_call_builder(tool_context: ToolCont
         "node_type": "if-else",
         "intent": {
             "objective": "Check whether the user confirmed",
-            "inputs": [{"source": ["start", "query"], "role": "condition"}],
             "structure": {
                 "kind": "if-else",
                 "cases": [
@@ -386,11 +709,10 @@ def test_structured_container_child_does_not_call_builder(tool_context: ToolCont
                         "id": "matched",
                         "logical_operator": "and",
                         "conditions": [
-                            {
-                                "source": ["start", "query"],
-                                "type": "string",
-                                "operator": "contains",
-                                "value": "yes",
+                                {
+                                    "source": ["start", "query"],
+                                    "operator": "contains",
+                                    "value": "yes",
                             }
                         ],
                     }
@@ -408,7 +730,7 @@ def test_structured_container_child_does_not_call_builder(tool_context: ToolCont
     assert condition["comparison_operator"] == "contains"
 
 
-def test_container_standard_child_rejects_builder_that_omits_intent_input(tool_context: ToolContext) -> None:
+def test_container_standard_child_rejects_missing_structure(tool_context: ToolContext) -> None:
     _enable_tools(tool_context)
     set_env(
         tool_context,
@@ -439,14 +761,13 @@ def test_container_standard_child_rejects_builder_that_omits_intent_input(tool_c
         "node_type": "if-else",
         "intent": {
             "objective": "Check whether the user confirmed",
-            "inputs": [{"source": ["start", "query"], "role": "condition"}],
         },
     }
 
     result = dispatch(_call(**_min_loop_args(children=[decision], edges=[])), tool_context)
 
     assert result["ok"] is False
-    assert result["error_code"] == "INTENT_INPUT_MISSING"
+    assert result["error_code"] == "MISSING_NODE_STRUCTURE"
     assert result["child_ref"] == "decision"
     assert tool_context.state.graph == original
 
@@ -476,7 +797,14 @@ def test_missing_child_tool_output_does_not_mutate_graph(tool_context: ToolConte
     original = deepcopy(snapshot)
 
     result = dispatch(
-        _call(**_min_loop_args(children=[_fetch_child(), _assigner_child(source=["fetch", "missing"])])),
+        _call(
+            **_min_loop_args(
+                children=[
+                    _fetch_child(),
+                    _typed_assigner_child(value={"kind": "variable", "selector": ["fetch", "missing"]}),
+                ]
+            )
+        ),
         tool_context,
     )
 
@@ -525,9 +853,19 @@ def test_exit_condition_non_dominated_result_does_not_mutate_graph(tool_context:
                         "kind": "standard",
                         "ref": "branch",
                         "node_type": "if-else",
-                        "intent": {
-                            "objective": "Split on the query",
-                            "inputs": [{"source": ["start", "query"], "role": "condition"}],
+                            "intent": {
+                                "objective": "Split on the query",
+                                "structure": {
+                                    "kind": "if-else",
+                                    "cases": [
+                                        {
+                                            "id": "true",
+                                            "conditions": [
+                                                {"source": ["start", "query"], "operator": "not empty"}
+                                            ],
+                                        }
+                                    ],
+                                },
                         },
                     },
                     _fetch_child(),
@@ -598,9 +936,17 @@ def test_external_output_compatibility_does_not_mutate_graph(tool_context: ToolC
                         "kind": "standard",
                         "ref": "write",
                         "node_type": "assigner",
-                        "intent": {
-                            "objective": "Write the tool result into other",
-                            "inputs": [{"source": ["fetch", "text"], "role": "other"}],
+                            "intent": {
+                                "objective": "Write the tool result into other",
+                                "structure": {
+                                    "kind": "assigner",
+                                    "assignments": [
+                                        {
+                                            "target": ["loop1", "other"],
+                                            "value": {"kind": "variable", "selector": ["fetch", "text"]},
+                                        }
+                                    ],
+                                },
                         },
                     },
                 ],

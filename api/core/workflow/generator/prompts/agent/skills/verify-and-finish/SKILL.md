@@ -1,14 +1,17 @@
 ---
 name: verify-and-finish
-description: Use only after test-and-evaluate has produced a passing run_workflow result whose outputs satisfy the request.
+description: Use after test-and-evaluate has produced passing execution scenarios or an explicit structural-only skip for an unregistered verification capability.
 ---
 
 # Verify and finish
 
-0. Gate. Continue only when run_workflow passed for the current candidate
-   revision and you judged its graph_outputs/node_outputs to satisfy the user's
-   request. WORKFLOW_EXECUTION_REQUIRED means return to test-and-evaluate. Any
-   graph mutation reopens this gate.
+0. Gate. Continue only when run_workflow either passed for the current candidate
+   revision and its outputs satisfy the request, or returned
+   execution_status=skipped with verification_level=structural_only. Before continuing,
+   require every returned classifier/action scenario to pass. In the latter
+   case preserve blocked_nodes as an explicit coverage gap and never claim runtime
+   or business verification. WORKFLOW_EXECUTION_REQUIRED means return to
+   test-and-evaluate. Any graph mutation reopens this gate.
 1. Confirm the intended nodes, edges, final outputs, and edit scope against the
    current contract. For non-legacy sessions, resolve remaining plan items and
    submit a complete contract before final verification.
@@ -36,5 +39,5 @@ description: Use only after test-and-evaluate has produced a passing run_workflo
    content.valid, contract_report, and acceptance even without an error_code.
    Return to repair-validation or the necessary verification step on failure.
    Complete only when finish.ok=true. Report actual execution coverage, the strategy run_workflow
-   selected (live, mock or local_only), and whether
+   selected (live, mock, local_only or structural_only), and whether
    business outcomes remain unverified. The service performs Apply separately.

@@ -2,21 +2,28 @@ import pytest
 from pydantic import ValidationError
 
 from core.workflow.generator.compiler.intents.node_intent import (
+    AgentKnowledgeIntent,
+    AssignerStructureIntent,
+    AssignmentIntent,
     ConstantToolArgument,
     NodeBuildIntent,
     TemplateToolArgument,
     ToolBinding,
+    ToolNodeBuildIntent,
     VariableToolArgument,
     parse_node_build_intent,
-    render_node_builder_spec,
 )
 
 
 def _base_intent(**changes: object) -> dict[str, object]:
     raw: dict[str, object] = {
         "objective": "Summarize the input",
-        "inputs": [{"source": ["start", "query"], "role": "question"}],
         "outputs": [{"name": "text", "type": "string"}],
+        "structure": {
+            "kind": "llm",
+            "model": {"provider": "openai", "name": "gpt-4o"},
+            "prompt": [{"role": "user", "text": "{{#start.query#}}"}],
+        },
     }
     raw.update(changes)
     return raw
@@ -61,14 +68,11 @@ def test_variable_selector_accepts_nested_output_paths() -> None:
 )
 def test_tool_argument_discriminator_rejects_fields_from_other_kinds(argument: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
-        parse_node_build_intent(
-            node_type="tool",
-            raw=_base_intent(
-                tool={
-                    "binding": {"provider_name": "image", "tool_name": "generate"},
-                    "arguments": {"prompt": argument},
-                }
-            ),
+        ToolNodeBuildIntent.model_validate(
+            {
+                "binding": {"provider_name": "image", "tool_name": "generate"},
+                "arguments": {"prompt": argument},
+            }
         )
 
 
@@ -80,69 +84,41 @@ def test_objective_is_trimmed_and_cannot_be_empty() -> None:
         parse_node_build_intent(node_type="llm", raw=_base_intent(objective="   "))
 
 
-@pytest.mark.parametrize("node_type", ["llm", "code", "agent"])
-def test_only_tool_nodes_accept_tool_invocation(node_type: str) -> None:
-    raw = _base_intent(tool={"binding": {"provider_name": "image", "tool_name": "generate"}, "arguments": {}})
-    with pytest.raises(ValueError, match="only for tool nodes"):
-        parse_node_build_intent(node_type=node_type, raw=raw)
+@pytest.mark.parametrize(
+    "legacy_field",
+    ["behavior", "inputs", "requirements", "tool", "tool_bindings", "agent_knowledge"],
+)
+def test_ordinary_intent_rejects_retired_or_specialized_fields(legacy_field: str) -> None:
+    value: object = "legacy"
+    if legacy_field in {"inputs", "requirements", "tool_bindings"}:
+        value = []
+    elif legacy_field == "tool":
+        value = {"binding": {"provider_name": "image", "tool_name": "generate"}, "arguments": {}}
+    elif legacy_field == "agent_knowledge":
+        value = {"operation": "clear"}
 
-
-@pytest.mark.parametrize("mode", ["create", "update", "replace"])
-def test_tool_nodes_always_require_a_complete_binding(mode: str) -> None:
-    del mode
-    with pytest.raises(ValueError, match="requires intent.tool"):
-        parse_node_build_intent(node_type="tool", raw=_base_intent())
-
-    with pytest.raises(ValidationError):
-        parse_node_build_intent(
-            node_type="tool",
-            raw=_base_intent(tool={"binding": {"provider_name": "image"}, "arguments": {}}),
-        )
-
-
-def test_only_agent_nodes_accept_unique_tool_bindings() -> None:
-    bindings = [{"provider_name": "search", "tool_name": "web"}]
-    intent = parse_node_build_intent(node_type="agent", raw=_base_intent(tool_bindings=bindings))
-    assert [(item.provider_name, item.tool_name) for item in intent.tool_bindings] == [("search", "web")]
-
-    with pytest.raises(ValueError, match="only for agent nodes"):
-        parse_node_build_intent(node_type="llm", raw=_base_intent(tool_bindings=bindings))
-    with pytest.raises(ValidationError, match="duplicate"):
-        parse_node_build_intent(node_type="agent", raw=_base_intent(tool_bindings=bindings * 2))
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        parse_node_build_intent(node_type="llm", raw=_base_intent(**{legacy_field: value}))
 
 
 def test_agent_knowledge_replace_requires_complete_sets() -> None:
-    intent = parse_node_build_intent(
-        node_type="agent",
-        raw=_base_intent(
-            agent_knowledge={
-                "operation": "replace",
-                "sets": [
-                    {
-                        "name": " Product docs ",
-                        "dataset_ids": [" ds-1 "],
-                        "query_mode": "generated_query",
-                        "retrieval_mode": "multiple",
-                    }
-                ],
-            }
-        ),
+    intent = AgentKnowledgeIntent.model_validate(
+        {
+            "operation": "replace",
+            "sets": [
+                {
+                    "name": " Product docs ",
+                    "dataset_ids": [" ds-1 "],
+                    "query_mode": "generated_query",
+                    "retrieval_mode": "multiple",
+                }
+            ],
+        }
     )
 
-    assert intent.agent_knowledge is not None
-    assert intent.agent_knowledge.operation == "replace"
-    assert intent.agent_knowledge.sets[0].name == "Product docs"
-    assert intent.agent_knowledge.sets[0].dataset_ids == ["ds-1"]
-
-
-@pytest.mark.parametrize("node_type", ["llm", "tool", "knowledge-retrieval"])
-def test_agent_knowledge_is_agent_only(node_type: str) -> None:
-    raw = _base_intent(agent_knowledge={"operation": "clear"})
-    if node_type == "tool":
-        raw["tool"] = {"binding": {"provider_name": "image", "tool_name": "generate"}, "arguments": {}}
-
-    with pytest.raises(ValueError, match="only for agent nodes"):
-        parse_node_build_intent(node_type=node_type, raw=raw)
+    assert intent.operation == "replace"
+    assert intent.sets[0].name == "Product docs"
+    assert intent.sets[0].dataset_ids == ["ds-1"]
 
 
 @pytest.mark.parametrize(
@@ -177,72 +153,18 @@ def test_agent_knowledge_is_agent_only(node_type: str) -> None:
 )
 def test_agent_knowledge_rejects_ambiguous_or_incomplete_replace(agent_knowledge: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
-        parse_node_build_intent(node_type="agent", raw=_base_intent(agent_knowledge=agent_knowledge))
+        AgentKnowledgeIntent.model_validate(agent_knowledge)
 
 
 def test_agent_knowledge_clear_canonicalizes_supplied_sets_to_empty() -> None:
-    intent = parse_node_build_intent(
-        node_type="agent",
-        raw=_base_intent(
-            agent_knowledge={
-                "operation": "clear",
-                "sets": [{"name": "ignored", "dataset_ids": ["ds-1"]}],
-            }
-        ),
+    intent = AgentKnowledgeIntent.model_validate(
+        {
+            "operation": "clear",
+            "sets": [{"name": "ignored", "dataset_ids": ["ds-1"]}],
+        }
     )
 
-    assert intent.agent_knowledge is not None
-    assert intent.agent_knowledge.sets == []
-
-
-def test_render_node_builder_spec_has_stable_headings_and_exact_bindings() -> None:
-    intent = parse_node_build_intent(
-        node_type="agent",
-        raw=_base_intent(
-            behavior="Use only cited facts",
-            requirements=["Keep the answer concise"],
-            tool_bindings=[{"provider_name": "search", "tool_name": "web"}],
-        ),
-    )
-
-    rendered = render_node_builder_spec(intent)
-
-    headings = [
-        "Objective:",
-        "Inputs:",
-        "Outputs:",
-        "Behavior:",
-        "Variable references:",
-        "Resource bindings:",
-        "Configuration constraints:",
-        "Fields to preserve:",
-    ]
-    assert [rendered.index(heading) for heading in headings] == sorted(rendered.index(heading) for heading in headings)
-    assert "{{#start.query#}}" in rendered
-    assert "search/web" in rendered
-    assert "Keep the answer concise" in rendered
-
-
-def test_template_transform_builder_spec_includes_variable_contract() -> None:
-    intent = parse_node_build_intent(node_type="template-transform", raw=_base_intent())
-    rendered = render_node_builder_spec(intent, node_type="template-transform")
-
-    assert "template must be non-empty" in rendered
-    assert "^[A-Za-z_][A-Za-z0-9_]*$" in rendered
-    assert "30" in rendered
-    assert "unique" in rendered
-    assert "value_selector" in rendered
-    assert "at least two non-empty strings" in rendered
-
-
-def test_tool_intent_cannot_be_rendered_for_node_builder() -> None:
-    intent = parse_node_build_intent(
-        node_type="tool",
-        raw=_base_intent(tool={"binding": {"provider_name": "image", "tool_name": "generate"}, "arguments": {}}),
-    )
-
-    with pytest.raises(ValueError, match="Tool intent"):
-        render_node_builder_spec(intent)
+    assert intent.sets == []
 
 
 def test_structure_kind_must_match_outer_node_type() -> None:
@@ -288,3 +210,79 @@ def test_code_structure_rejects_runtime_unsupported_output_types(output_type: st
 def test_structured_variable_names_must_be_unique(structure: dict[str, object]) -> None:
     with pytest.raises(ValidationError, match="unique"):
         NodeBuildIntent.model_validate({"objective": "Build", "structure": structure})
+
+
+def test_assigner_structure_requires_explicit_target_and_value_kind() -> None:
+    intent = parse_node_build_intent(
+        node_type="assigner",
+        raw={
+            "objective": "Store the revised document",
+            "structure": {
+                "kind": "assigner",
+                "assignments": [
+                    {
+                        "target": ["revision_loop", "optimized_doc"],
+                        "operation": "over-write",
+                        "value": {"kind": "variable", "selector": ["optimize", "text"]},
+                    }
+                ],
+            },
+        },
+    )
+
+    assert isinstance(intent.structure, AssignerStructureIntent)
+    assert intent.structure.assignments[0].target == ("revision_loop", "optimized_doc")
+
+
+def test_assigner_clear_rejects_a_value() -> None:
+    with pytest.raises(ValidationError, match="clear must not include value"):
+        AssignmentIntent.model_validate(
+            {
+                "target": ["loop1", "acc"],
+                "operation": "clear",
+                "value": {"kind": "constant", "value": "unexpected"},
+            }
+        )
+
+
+def test_end_structure_allows_compiler_derived_output_type() -> None:
+    intent = parse_node_build_intent(
+        node_type="end",
+        raw={
+            "objective": "Return the result",
+            "structure": {
+                "kind": "end",
+                "outputs": [{"name": "result", "source": ["worker", "result"]}],
+            },
+        },
+    )
+
+    assert intent.structure is not None
+    assert intent.structure.kind == "end"
+    assert intent.structure.outputs[0].type is None
+
+
+def test_document_extractor_structure_rejects_runtime_fields() -> None:
+    with pytest.raises(ValidationError):
+        parse_node_build_intent(
+            node_type="document-extractor",
+            raw={
+                "objective": "Extract text",
+                "structure": {
+                    "kind": "document-extractor",
+                    "source": ["start", "document"],
+                    "is_array_file": False,
+                },
+            },
+        )
+
+
+def test_assigner_phase_one_rejects_unimplemented_operations() -> None:
+    with pytest.raises(ValidationError):
+        AssignmentIntent.model_validate(
+            {
+                "target": ["loop1", "acc"],
+                "operation": "append",
+                "value": {"kind": "constant", "value": "item"},
+            }
+        )

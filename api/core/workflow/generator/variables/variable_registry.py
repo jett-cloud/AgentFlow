@@ -56,6 +56,7 @@ class VariableDeclaration:
     owner_container_id: str | None
     producer_layer: int
     guaranteed: bool
+    writable: bool = False
 
 
 @dataclass(frozen=True)
@@ -119,6 +120,26 @@ class VariableRegistry:
             seen.add(name)
             names.append(name)
         return tuple(names)
+
+    def writable_selectors(self) -> tuple[tuple[str, ...], ...]:
+        """Return writable selectors in declaration order for diagnostics."""
+        return tuple(item.selector for item in self._declarations.values() if item.writable)
+
+    def resolve_writable(
+        self,
+        selector: tuple[str, ...],
+        *,
+        referrer_id: str,
+    ) -> VariableDeclaration:
+        """Resolve a selector and require that the declared value can be assigned."""
+        declaration = self.resolve(selector, referrer_id=referrer_id, expected_type=None)
+        if not declaration.writable:
+            raise VariableResolutionError(
+                "VARIABLE_NOT_WRITABLE",
+                selector,
+                "目标变量是只读的",
+            )
+        return declaration
 
     def _assert_scope(self, declaration: VariableDeclaration, referrer_id: str) -> None:
         owner = declaration.owner_container_id

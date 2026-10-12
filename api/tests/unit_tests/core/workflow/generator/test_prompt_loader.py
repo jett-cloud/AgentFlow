@@ -4,14 +4,17 @@ from pathlib import Path
 
 import pytest
 
+from core.workflow.generator.compiler.node_intent_registry import NODE_INTENT_SPECS
 from core.workflow.generator.prompts.builder_prompts import get_node_config_snippet
 from core.workflow.generator.prompts.loader import (
     ALWAYS_ON_CHAR_LIMIT,
     always_on_system_prompt,
     available_node_types,
+    intent_node_snippets,
     load_skill_records,
     node_config_snippets,
     read_frontmatter,
+    read_intent_node_snippet,
     read_prompt,
     render_skill_catalogue,
     skill_body,
@@ -31,6 +34,15 @@ def test_read_prompt_strips_yaml_frontmatter() -> None:
     meta = read_frontmatter("agent/skills/create-from-scratch/SKILL.md")
     assert meta["name"] == "create-from-scratch"
     assert "description" in meta
+
+
+def test_build_container_skill_requires_explicit_typed_assigner_target() -> None:
+    body = skill_body("build-container")
+
+    assert body is not None
+    assert 'intent.structure.kind="assigner"' in body
+    assert "assignments[].target" in body
+    assert "never encode a target variable in `objective`" in body
 
 
 def test_unknown_node_snippet_is_empty() -> None:
@@ -113,6 +125,19 @@ def test_every_planner_node_type_has_a_snippet() -> None:
         snippet = get_node_config_snippet(node_type)
         assert snippet, f"missing nodes.md section for {node_type}"
         assert f"- {node_type}" in snippet
+
+
+def test_every_runtime_node_has_registry_and_agent_intent_guidance() -> None:
+    node_config_snippets.cache_clear()
+    intent_node_snippets.cache_clear()
+
+    assert set(node_config_snippets()) == set(_PLANNER_NODE_TYPES)
+    assert set(NODE_INTENT_SPECS) == set(_PLANNER_NODE_TYPES)
+    assert set(intent_node_snippets()) == set(_PLANNER_NODE_TYPES)
+    assert "exact declared writable variable selector" in read_intent_node_snippet("assigner")
+    document_guidance = read_intent_node_snippet("document-extractor")
+    assert '"source": ["start", "document"]' in document_guidance
+    assert "runtime-only `variable_selector`" in document_guidance
 
 
 def test_knowledge_retrieval_snippet_describes_all_retrieval_modes() -> None:

@@ -6,7 +6,9 @@ import pytest
 
 from core.workflow.generator.acceptance.evidence import AcceptanceMode, GraphExecutionTrace, canonical_graph_hash
 from core.workflow.generator.agent.tools.tool_build_tool import CompiledToolNode
+from core.workflow.generator.agent.tools.tool_context import WorkflowExecutionRecord
 from core.workflow.generator.agent.tools.tool_mutate import CompiledBuildNode, pending_plan_nodes_from_calls
+from core.workflow.generator.agent.tools.tool_results import error as tool_error
 from core.workflow.generator.agent.tools.tools import (
     RETRYABLE_BY_ERROR_CODE,
     PendingPlanNode,
@@ -30,12 +32,42 @@ def _call(name: str, **arguments: object) -> ToolCall:
     return {"id": "c1", "name": name, "arguments": arguments}
 
 
+def test_error_envelope_always_contains_location_cause_and_actionable_hint() -> None:
+    result = tool_error(_call("build_node"), "INVALID_ARGUMENT", "bad intent")
+
+    assert result["path"] == "$"
+    assert result["cause"] == {"error_code": "INVALID_ARGUMENT", "error": "bad intent"}
+    assert result["hint"] == "Correct the indicated intent field and retry"
+
+
 def _intent(objective: str, *outputs: str, inputs: list[dict[str, object]] | None = None) -> dict[str, object]:
+    del inputs
     return {
         "objective": objective,
-        "inputs": inputs or [],
         "outputs": [{"name": name} for name in outputs],
     }
+
+
+def _knowledge_intent(dataset_id: str) -> dict[str, object]:
+    return {
+        "objective": "Retrieve knowledge",
+        "structure": {
+            "kind": "knowledge-retrieval",
+            "dataset_ids": [dataset_id],
+            "query": ["start", "query"],
+        },
+    }
+
+
+def _install_query_start(context: ToolContext) -> None:
+    context.state.graph = upsert_node(
+        context.state.graph,
+        node_id="start",
+        node_type="start",
+        title="Start",
+        desc="",
+        config={"variables": [{"variable": "query", "label": "Query", "type": "paragraph"}]},
+    )
 
 
 def _connected_start_end():
@@ -209,37 +241,238 @@ def test_fail_does_not_change_the_graph(tool_context: ToolContext) -> None:
     assert [node["id"] for node in tool_context.state.graph["nodes"]] == ["a"]
 
 
-def test_inspect_node_schema_returns_the_type_snippet(tool_context: ToolContext) -> None:
+def test_inspect_node_schema_returns_only_agent_facing_intent(tool_context: ToolContext) -> None:
     result = dispatch(_call("inspect_node_schema", node_type="llm"), tool_context)
 
     assert result["ok"] is True
     assert result["changed"] is False
-    assert "prompt_template" in str(result["content"]["snippet"])
+    assert "snippet" not in result["content"]
+    assert result["content"]["build_tool"] == "build_node"
+    assert result["content"]["typed_intent_available"] is True
+    assert result["content"]["typed_surfaces"] == ["top_level", "container_child"]
+    assert result["content"]["intent_schema"]["properties"]["kind"]["const"] == "llm"
+
+
+def test_inspect_node_schema_projects_resource_capabilities_without_secrets(tool_context: ToolContext) -> None:
+    _set_env(
+        tool_context,
+        knowledge_available=True,
+        installed_dataset_ids={"dataset-1"},
+        http_credential_reference_ids=frozenset(),
+        human_input_delivery_capabilities=frozenset({"webapp", "email"}),
+        human_input_member_reference_ids=frozenset({"member-2", "member-1"}),
+        conversation_variable_types={"summary": "string", "token": "secret"},
+        writable_conversation_variables=frozenset({"summary"}),
+    )
+
+    knowledge = dispatch(_call("inspect_node_schema", node_type="knowledge-retrieval"), tool_context)
+    http = dispatch(_call("inspect_node_schema", node_type="http-request"), tool_context)
+    human = dispatch(_call("inspect_node_schema", node_type="human-input"), tool_context)
+
+    assert knowledge["content"]["capabilities"] == {
+        "knowledge_available": True,
+        "dataset_count": 1,
+        "discovery_tool": "search_datasets",
+    }
+    assert http["content"]["capabilities"]["plaintext_credentials_allowed"] is False
+    assert http["content"]["capabilities"]["credential_reference_ids"] == []
+    assert human["content"]["capabilities"]["delivery_methods"] == ["email", "webapp"]
+    assert human["content"]["capabilities"]["member_reference_ids"] == ["member-1", "member-2"]
+    assert human["content"]["capabilities"]["conversation_variables"] == [
+        {"name": "summary", "type": "string", "writable": True}
+    ]
+
+
+def test_inspect_assigner_schema_exposes_both_typed_surfaces(tool_context: ToolContext) -> None:
+    result = dispatch(_call("inspect_node_schema", node_type="assigner"), tool_context)
+
+    assert result["ok"] is True
+    assert result["content"]["build_tool"] == "build_node"
+    assert result["content"]["typed_intent_available"] is True
+    assert result["content"]["typed_surfaces"] == ["top_level", "container_child"]
+    assert "assignments" in result["content"]["intent_schema"]["properties"]
+    assert "exact declared writable variable selector" in result["content"]["intent_guidance"]
+
+
+def test_inspect_document_extractor_schema_exposes_typed_source(tool_context: ToolContext) -> None:
+    result = dispatch(_call("inspect_node_schema", node_type="document-extractor"), tool_context)
+
+    assert result["ok"] is True
+    assert result["content"]["typed_intent_available"] is True
+    assert result["content"]["typed_surfaces"] == ["top_level", "container_child"]
+    assert "source" in result["content"]["intent_schema"]["properties"]
+    assert "runtime-only `variable_selector`" in result["content"]["intent_guidance"]
+
+
+def test_top_level_typed_assigner_writes_a_conversation_variable(tool_context: ToolContext) -> None:
+    _set_env(
+        tool_context,
+        conversation_variable_types={"draft": "string"},
+        writable_conversation_variables=frozenset({"draft"}),
+    )
+    result = dispatch(
+        _call(
+            "build_node",
+            mode="create",
+            id="write",
+            type="assigner",
+            title="写回",
+            intent={
+                "objective": "Store a value",
+                "structure": {
+                    "kind": "assigner",
+                    "assignments": [
+                        {
+                            "target": ["conversation", "draft"],
+                            "operation": "over-write",
+                            "value": {"kind": "constant", "value": "new"},
+                        }
+                    ],
+                },
+            },
+        ),
+        tool_context,
+    )
+
+    assert result["ok"] is True, result
+    assert find_node(tool_context.state.graph, "write")["data"]["items"] == [
+        {
+            "variable_selector": ["conversation", "draft"],
+            "operation": "over-write",
+            "input_type": "constant",
+            "value": "new",
+        }
+    ]
+
+
+def test_all_top_level_ordinary_nodes_require_structure(tool_context: ToolContext) -> None:
+    result = dispatch(
+        _call(
+            "build_node",
+            mode="create",
+            id="answer1",
+            type="answer",
+            title="回答",
+            intent={"objective": "Answer the user"},
+        ),
+        tool_context,
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "MISSING_NODE_STRUCTURE"
+    assert result["path"] == "intent.structure"
+    assert result["cause"] == {"node_type": "answer", "surface": "top_level"}
+
+
+def test_phase_five_typed_resource_error_is_atomic_and_does_not_call_builder(tool_context: ToolContext) -> None:
+    tool_context.state.graph = upsert_node(
+        tool_context.state.graph,
+        node_id="start",
+        node_type="start",
+        title="Start",
+        desc="",
+        config={"variables": [{"variable": "query", "label": "Query", "type": "paragraph"}]},
+    )
+    builder = MagicMock()
+    _set_env(
+        tool_context,
+        knowledge_available=True,
+        installed_dataset_ids=set(),
+        llm_client=builder,
+    )
+
+    result = dispatch(
+        _call(
+            "build_node",
+            mode="create",
+            id="retrieve",
+            type="knowledge-retrieval",
+            title="Retrieve",
+            intent={
+                "objective": "Retrieve documents",
+                "structure": {
+                    "kind": "knowledge-retrieval",
+                    "dataset_ids": ["missing"],
+                    "query": ["start", "query"],
+                },
+            },
+        ),
+        tool_context,
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "UNKNOWN_DATASET"
+    assert result["path"] == "structure.dataset_ids[0]"
+    assert find_node(tool_context.state.graph, "retrieve") is None
+    builder.invoke_llm.assert_not_called()
+
+
+def test_typed_human_input_uses_conversation_variable_type_snapshot(tool_context: ToolContext) -> None:
+    builder = MagicMock()
+    _set_env(
+        tool_context,
+        llm_client=builder,
+        conversation_variables={"summary"},
+        conversation_variable_types={"summary": "string"},
+        writable_conversation_variables=frozenset({"summary"}),
+        human_input_delivery_capabilities=frozenset({"webapp"}),
+        human_input_member_reference_ids=frozenset(),
+    )
+
+    result = dispatch(
+        _call(
+            "build_node",
+            mode="create",
+            id="review",
+            type="human-input",
+            title="Review",
+            intent={
+                "objective": "Ask for review",
+                "structure": {
+                    "kind": "human-input",
+                    "form_content": "Review {{#conversation.summary#}}",
+                    "inputs": [
+                        {
+                            "type": "paragraph",
+                            "output_variable_name": "comment",
+                            "default": {"kind": "variable", "source": ["conversation", "summary"]},
+                        }
+                    ],
+                    "delivery": [{"kind": "webapp"}],
+                    "actions": [{"id": "approve", "title": "Approve"}],
+                },
+            },
+        ),
+        tool_context,
+    )
+
+    assert result["ok"] is True
+    assert result["changed"] is True
+    review = find_node(tool_context.state.graph, "review")
+    assert review is not None
+    assert review["data"]["inputs"][0]["default"]["selector"] == ["conversation", "summary"]
+    builder.invoke_llm.assert_not_called()
 
 
 def test_inspect_node_schema_knowledge_retrieval_describes_all_retrieval_modes(tool_context: ToolContext) -> None:
     result = dispatch(_call("inspect_node_schema", node_type="knowledge-retrieval"), tool_context)
-    snippet = str(result["content"]["snippet"])
+    schema = result["content"]["intent_schema"]
+    guidance = str(result["content"]["intent_guidance"])
 
     assert result["ok"] is True
     assert result["changed"] is False
-    assert "query_variable_selector" in snippet
-    assert "query_attachment_selector" in snippet
-    assert "single_retrieval_config" in snippet
-    assert "reranking_model" in snippet
-    assert "weighted_score" in snippet
-    assert "weights" in snippet
-    assert "metadata_filtering_mode" in snippet
-    assert "result" in snippet
+    assert set(schema["properties"]) >= {"dataset_ids", "query", "attachment", "top_k", "score_threshold"}
+    assert "runtime retrieval config" in guidance
+    assert "snippet" not in result["content"]
 
 
 def test_inspect_node_schema_agent_includes_dify_tools(tool_context: ToolContext) -> None:
     result = dispatch(_call("inspect_node_schema", node_type="agent"), tool_context)
 
     assert result["ok"] is True
-    snippet = str(result["content"]["snippet"])
-    assert "dify_tools" in snippet
-    assert "mcp" in snippet
+    schema = result["content"]["intent_schema"]
+    assert set(schema["properties"]) >= {"tools", "mcp_tools"}
+    assert "snippet" not in result["content"]
 
 
 def test_validate_graph_and_finish_dispatch_without_crashing(tool_context: ToolContext) -> None:
@@ -548,32 +781,27 @@ def test_agent_relayout_uses_tool_schema_defaults(tool_context: ToolContext) -> 
 def test_update_omitting_title_and_parent_keeps_old(tool_context: ToolContext) -> None:
     graph = upsert_node(empty_graph(), node_id="iter1", node_type="iteration", title="循环", desc="", config={})
     graph = upsert_node(
-        graph, node_id="kr", node_type="knowledge-retrieval", title="检索", desc="", config={"dataset_ids": ["ds-1"]}
+        graph, node_id="answer", node_type="answer", title="回答", desc="", config={"answer": "old", "variables": []}
     )
     graph["nodes"][1]["parentId"] = "iter1"
     tool_context.state.graph = graph
-    _set_env(
-        tool_context,
-        llm_client=_FakeLLM(
-            {
-                "dataset_ids": ["ds-2"],
-                "query_variable_selector": ["start", "query"],
-                "retrieval_mode": "multiple",
-                "multiple_retrieval_config": {"top_k": 3, "reranking_enable": False},
-            }
+    result = dispatch(
+        _call(
+            "build_node",
+            mode="update",
+            id="answer",
+            intent={"objective": "Update answer", "structure": {"kind": "answer", "content": "new"}},
         ),
+        tool_context,
     )
-
-    result = dispatch(_call("build_node", mode="update", id="kr", intent=_intent("换库")), tool_context)
-    node = find_node(tool_context.state.graph, "kr")
+    node = find_node(tool_context.state.graph, "answer")
 
     assert result["ok"] is True
     assert result["changed"] is True
     assert "config" not in result["content"]
     assert "nodes" not in result["content"]
-    assert "dataset_binding" in result["content"]["effects"]
     assert node is not None
-    assert node["data"]["title"] == "检索"
+    assert node["data"]["title"] == "回答"
     assert node.get("parentId") == "iter1"
 
 
@@ -589,51 +817,79 @@ def test_build_node_rejects_runtime_unsafe_id(tool_context: ToolContext) -> None
 
 
 def test_compile_build_node_does_not_write_graph_until_commit(tool_context: ToolContext) -> None:
-    _set_env(tool_context, llm_client=_FakeLLM({}))
-    call = _call("build_node", mode="create", id="llm1", type="llm", title="模型", intent=_intent("写一段说明"))
+    call = _call(
+        "build_node",
+        mode="create",
+        id="answer1",
+        type="answer",
+        title="回答",
+        intent={"objective": "Write an answer", "structure": {"kind": "answer", "content": "Done"}},
+    )
     before = len(tool_context.state.graph["nodes"])
 
     compiled = compile_build_node(call, tool_context)
 
-    assert find_node(tool_context.state.graph, "llm1") is None
+    assert find_node(tool_context.state.graph, "answer1") is None
     assert len(tool_context.state.graph["nodes"]) == before
 
     result = commit_build_node(compiled, tool_context)
 
     assert result["ok"] is True
     assert result["changed"] is True
-    assert find_node(tool_context.state.graph, "llm1") is not None
+    assert find_node(tool_context.state.graph, "answer1") is not None
 
 
 def test_create_runtime_valid_llm_with_empty_prompt_does_not_commit(tool_context: ToolContext) -> None:
-    _set_env(tool_context, llm_client=_FakeLLM({"prompt_template": [{"role": "user", "text": "  "}]}))
     before = deepcopy(tool_context.state.graph)
     revision_before = tool_context.state.candidate_revision
 
     result = dispatch(
-        _call("build_node", mode="create", id="llm1", type="llm", title="模型", intent=_intent("总结输入")),
+        _call(
+            "build_node",
+            mode="create",
+            id="llm1",
+            type="llm",
+            title="模型",
+            intent={
+                "objective": "Summarize",
+                "structure": {
+                    "kind": "llm",
+                    "model": {"provider": "openai", "name": "gpt-4o"},
+                    "prompt": [{"role": "user", "text": "  "}],
+                },
+            },
+        ),
         tool_context,
     )
 
     assert result["ok"] is False
-    assert result["error_code"] == "INVALID_NODE_CONFIG"
+    assert result["error_code"] == "INVALID_ARGUMENT"
     assert result["changed"] is False
-    assert "prompt_template" in str(result["error"])
+    assert "structure" in str(result["error"])
     assert tool_context.state.graph == before
     assert tool_context.state.candidate_revision == revision_before
 
 
 def test_failed_empty_llm_create_can_be_repaired_with_same_id(tool_context: ToolContext) -> None:
-    call = _call("build_node", mode="create", id="llm1", type="llm", title="模型", intent=_intent("总结输入"))
-    _set_env(tool_context, llm_client=_FakeLLM({"prompt_template": [{"role": "user", "text": ""}]}))
+    def llm_call(text: str) -> ToolCall:
+        return _call(
+            "build_node",
+            mode="create",
+            id="llm1",
+            type="llm",
+            title="模型",
+            intent={
+                "objective": "Summarize",
+                "structure": {
+                    "kind": "llm",
+                    "model": {"provider": "openai", "name": "gpt-4o"},
+                    "prompt": [{"role": "user", "text": text}],
+                },
+            },
+        )
 
-    failed = dispatch(call, tool_context)
-
-    _set_env(
-        tool_context,
-        llm_client=_FakeLLM({"prompt_template": [{"role": "user", "text": "总结输入。"}]}),
-    )
-    repaired = dispatch(call, tool_context)
+    failed = dispatch(llm_call(""), tool_context)
+    repaired = dispatch(llm_call("总结输入。"), tool_context)
 
     assert failed["ok"] is False
     assert repaired["ok"] is True
@@ -664,13 +920,21 @@ def test_update_runtime_valid_http_with_empty_url_is_atomic(tool_context: ToolCo
     graph_before = deepcopy(tool_context.state.graph)
     revision_before = tool_context.state.candidate_revision
     hash_before = tool_context.state.graph_hash
-    invalid_config = {**old_config, "url": "  "}
-    _set_env(tool_context, llm_client=_FakeLLM(invalid_config))
-
-    result = dispatch(_call("build_node", mode="update", id="request", intent=_intent("更换请求地址")), tool_context)
+    result = dispatch(
+        _call(
+            "build_node",
+            mode="update",
+            id="request",
+            intent={
+                "objective": "Update URL",
+                "structure": {"kind": "http-request", "method": "get", "url": "  "},
+            },
+        ),
+        tool_context,
+    )
 
     assert result["ok"] is False
-    assert result["error_code"] == "INVALID_NODE_CONFIG"
+    assert result["error_code"] == "INVALID_ARGUMENT"
     assert result["changed"] is False
     assert "url" in str(result["error"])
     assert tool_context.state.graph == graph_before
@@ -688,10 +952,8 @@ def test_create_invalid_code_output_does_not_commit(tool_context: ToolContext) -
         tool_context,
     )
     assert result["ok"] is False
-    assert result["error_code"] == "INVALID_CODE_OUTPUT"
+    assert result["error_code"] == "MISSING_NODE_STRUCTURE"
     assert result["retryable"] is True
-    assert "questions" in str(result["error"])
-    assert "'array'" in str(result["error"])
     assert find_node(tool_context.state.graph, "node_parse") is None
 
 
@@ -711,7 +973,7 @@ def test_update_invalid_code_output_keeps_old_config(tool_context: ToolContext) 
     result = dispatch(_call("build_node", mode="update", id="node_parse", intent=_intent("改输出类型")), tool_context)
     node = find_node(tool_context.state.graph, "node_parse")
     assert result["ok"] is False
-    assert result["error_code"] == "INVALID_CODE_OUTPUT"
+    assert result["error_code"] == "MISSING_NODE_STRUCTURE"
     assert result["retryable"] is True
     assert node is not None
     assert node["data"]["outputs"]["questions"]["type"] == "array[object]"
@@ -736,9 +998,8 @@ def test_create_incomplete_code_does_not_commit(tool_context: ToolContext) -> No
     )
 
     assert result["ok"] is False
-    assert result["error_code"] == "INVALID_NODE_CONFIG"
+    assert result["error_code"] == "MISSING_NODE_STRUCTURE"
     assert result["retryable"] is True
-    assert "code" in str(result["error"])
     assert find_node(tool_context.state.graph, "node_code") is None
 
 
@@ -774,8 +1035,7 @@ def test_update_incomplete_code_binding_keeps_old_config(tool_context: ToolConte
     )
 
     assert result["ok"] is False
-    assert result["error_code"] == "INVALID_NODE_CONFIG"
-    assert "variables[0].value_selector" in str(result["error"])
+    assert result["error_code"] == "MISSING_NODE_STRUCTURE"
     assert tool_context.state.graph == graph_before
 
 
@@ -803,9 +1063,8 @@ def test_create_incomplete_template_transform_does_not_commit(tool_context: Tool
     )
 
     assert result["ok"] is False
-    assert result["error_code"] == "INVALID_NODE_CONFIG"
+    assert result["error_code"] == "MISSING_NODE_STRUCTURE"
     assert result["retryable"] is True
-    assert "variables[0].value_selector" in str(result["error"])
     assert find_node(tool_context.state.graph, "node_template") is None
 
 
@@ -842,8 +1101,7 @@ def test_update_incomplete_template_transform_keeps_old_config(tool_context: Too
     )
 
     assert result["ok"] is False
-    assert result["error_code"] == "INVALID_NODE_CONFIG"
-    assert "variables[1].variable" in str(result["error"])
+    assert result["error_code"] == "MISSING_NODE_STRUCTURE"
     assert tool_context.state.graph == graph_before
 
 
@@ -1284,14 +1542,20 @@ def test_create_invalid_agent_node_does_not_commit(tool_context: ToolContext) ->
 
 
 def test_short_objective_is_accepted(tool_context: ToolContext) -> None:
-    _set_env(tool_context, llm_client=_FakeLLM({}))
     result = dispatch(
-        _call("build_node", mode="create", id="llm1", type="llm", title="模型", intent=_intent("换库")),
+        _call(
+            "build_node",
+            mode="create",
+            id="answer1",
+            type="answer",
+            title="回答",
+            intent={"objective": "短", "structure": {"kind": "answer", "content": "完成"}},
+        ),
         tool_context,
     )
     assert result["ok"] is True
     assert result["error_code"] is None
-    assert find_node(tool_context.state.graph, "llm1") is not None
+    assert find_node(tool_context.state.graph, "answer1") is not None
 
 
 def test_pending_plan_outputs_come_directly_from_structured_intent() -> None:
@@ -1310,74 +1574,6 @@ def test_pending_plan_outputs_come_directly_from_structured_intent() -> None:
 
     assert pending[0].purpose == "parse the payload"
     assert pending[0].provisional_outputs == ("query", "files")
-
-
-class _RecordingLLM:
-    def __init__(self) -> None:
-        self.user_prompts: list[str] = []
-
-    def iter_json(self, *, messages, stage):
-        self.user_prompts.append(str(messages[-1].content))
-        yield from ()
-        return {
-            "config": builder_config(
-                messages,
-                {"prompt_template": [{"role": "user", "text": "{{#start.query#}}"}]},
-            )
-        }
-
-
-def test_pending_start_outputs_appear_in_sibling_builder_plan(tool_context: ToolContext) -> None:
-    import json
-
-    client = _RecordingLLM()
-    _set_env(tool_context, llm_client=client)
-    start_purpose = (
-        "Objective: accept the user's search question. Inputs: none Outputs: query "
-        "Behavior: one required paragraph input. Variable references: none "
-        "Resource bindings: none Configuration constraints: variable=query, required=true "
-        "Fields to preserve: none"
-    )
-    tool_context.state.pending_plan_nodes = (
-        PendingPlanNode(
-            id="start",
-            type="start",
-            title="开始",
-            purpose=start_purpose,
-            parent=None,
-            provisional_outputs=("query",),
-        ),
-        PendingPlanNode(
-            id="llm1",
-            type="llm",
-            title="回答",
-            purpose="answer the query",
-            parent=None,
-            provisional_outputs=("text",),
-        ),
-    )
-    compiled = compile_build_node(
-        _call(
-            "build_node",
-            mode="create",
-            id="llm1",
-            type="llm",
-            title="回答",
-            intent=_intent(
-                "answer the query",
-                "text",
-                inputs=[{"source": ["start", "query"], "role": "query"}],
-            ),
-        ),
-        tool_context,
-    )
-    assert isinstance(compiled, CompiledBuildNode)
-    marker = "# Normalized plan and topology"
-    _, _, rest = client.user_prompts[0].partition(marker)
-    plan = json.loads(rest.strip().split("\n\n", 1)[0])
-    start = next(node for node in plan["nodes"] if node["id"] == "start")
-    assert start["outputs"] == ["query"]
-    assert start["outputs_kind"] == "provisional"
 
 
 def test_tool_compile_accepts_a_variable_from_a_same_batch_sibling(tool_context: ToolContext) -> None:
@@ -1589,30 +1785,6 @@ def test_tool_compile_rejects_a_self_reference_through_pending_outputs(tool_cont
 
     assert not isinstance(compiled, CompiledToolNode)
     assert compiled["error_code"] == "UNKNOWN_OUTPUT"
-    import json
-
-    client = _RecordingLLM()
-    _set_env(tool_context, llm_client=client)
-    graph = upsert_node(
-        empty_graph(),
-        node_id="start",
-        node_type="start",
-        title="开始",
-        desc="",
-        config={"variables": [{"variable": "query", "label": "问题", "type": "paragraph"}]},
-    )
-    tool_context.state.graph = graph
-    compiled = compile_build_node(
-        _call("build_node", mode="create", id="llm1", type="llm", title="回答", intent=_intent("answer", "text")),
-        tool_context,
-    )
-    assert isinstance(compiled, CompiledBuildNode)
-    marker = "# Normalized plan and topology"
-    _, _, rest = client.user_prompts[0].partition(marker)
-    plan = json.loads(rest.strip().split("\n\n", 1)[0])
-    start = next(node for node in plan["nodes"] if node["id"] == "start")
-    assert start["outputs"] == ["query"]
-    assert start["outputs_kind"] == "confirmed"
 
 
 def test_pending_container_parent_allows_child_compile(tool_context: ToolContext) -> None:
@@ -1640,9 +1812,9 @@ def test_pending_container_parent_allows_child_compile(tool_context: ToolContext
             "build_node",
             mode="create",
             id="child",
-            type="llm",
+            type="answer",
             title="步骤",
-            intent=_intent("step", "text"),
+            intent={"objective": "Step", "structure": {"kind": "answer", "content": "Step"}},
             parent="iter1",
         ),
         tool_context,
@@ -1677,9 +1849,9 @@ def test_pending_parent_after_child_is_invalid_parent(tool_context: ToolContext)
             "build_node",
             mode="create",
             id="child",
-            type="llm",
+            type="answer",
             title="步骤",
-            intent=_intent("step", "text"),
+            intent={"objective": "Step", "structure": {"kind": "answer", "content": "Step"}},
             parent="iter1",
         ),
         tool_context,
@@ -1697,23 +1869,21 @@ def test_pending_parent_after_child_is_invalid_parent(tool_context: ToolContext)
 
 def test_update_empty_parent_moves_node_out_of_container(tool_context: ToolContext) -> None:
     graph = upsert_node(empty_graph(), node_id="iter1", node_type="iteration", title="循环", desc="", config={})
-    graph = upsert_node(graph, node_id="kr", node_type="knowledge-retrieval", title="检索", desc="", config={})
+    graph = upsert_node(graph, node_id="answer", node_type="answer", title="回答", desc="", config={"answer": "old"})
     graph["nodes"][1]["parentId"] = "iter1"
     graph["nodes"][1]["data"]["parentId"] = "iter1"
     tool_context.state.graph = graph
-    _set_env(
-        tool_context,
-        llm_client=_FakeLLM(
-            {
-                "dataset_ids": ["ds-1"],
-                "query_variable_selector": ["start", "query"],
-                "retrieval_mode": "multiple",
-                "multiple_retrieval_config": {"top_k": 3, "reranking_enable": False},
-            }
+    result = dispatch(
+        _call(
+            "build_node",
+            mode="update",
+            id="answer",
+            intent={"objective": "Move out", "structure": {"kind": "answer", "content": "new"}},
+            parent="",
         ),
+        tool_context,
     )
-    result = dispatch(_call("build_node", mode="update", id="kr", intent=_intent("移出循环"), parent=""), tool_context)
-    node = find_node(tool_context.state.graph, "kr")
+    node = find_node(tool_context.state.graph, "answer")
 
     assert result["ok"] is True
     assert node is not None
@@ -1727,25 +1897,38 @@ def test_replace_does_not_delete_edges(tool_context: ToolContext) -> None:
     graph = upsert_node(graph, node_id="b", node_type="end", title="B", desc="", config=node_config("end"))
     graph = connect(graph, source="a", target="b")
     tool_context.state.graph = graph
-    _set_env(tool_context, llm_client=_FakeLLM({"prompt_template": [{"role": "user", "text": "处理输入。"}]}))
-
-    result = dispatch(_call("build_node", mode="replace", id="a", type="llm", intent=_intent("改成 LLM")), tool_context)
+    result = dispatch(
+        _call(
+            "build_node",
+            mode="replace",
+            id="a",
+            type="answer",
+            intent={"objective": "Replace", "structure": {"kind": "answer", "content": "Done"}},
+        ),
+        tool_context,
+    )
 
     assert result["ok"] is True
     assert result["changed"] is True
     assert result["content"]["preserved_edge_count"] == 1
     assert result["content"]["requires_revalidation"] is True
     assert len(tool_context.state.graph["edges"]) == 1
-    assert tool_context.state.graph["nodes"][0]["data"]["type"] == "llm"
+    assert tool_context.state.graph["nodes"][0]["data"]["type"] == "answer"
     assert tool_context.state.graph["nodes"][1]["id"] == "b"
 
 
 def test_invalid_parent_does_not_call_builder(tool_context: ToolContext) -> None:
     tool_context.state.graph = upsert_node(
-        empty_graph(), node_id="kr", node_type="knowledge-retrieval", title="检索", desc="", config={}
+        empty_graph(), node_id="answer", node_type="answer", title="回答", desc="", config={"answer": "old"}
     )
     result = dispatch(
-        _call("build_node", mode="update", id="kr", intent=_intent("挪进不存在的容器"), parent="missing"),
+        _call(
+            "build_node",
+            mode="update",
+            id="answer",
+            intent={"objective": "Move", "structure": {"kind": "answer", "content": "new"}},
+            parent="missing",
+        ),
         tool_context,
     )
     assert result["ok"] is False
@@ -1819,9 +2002,9 @@ def test_create_inside_loop_spreads_children_and_grows_container(tool_context: T
                 "build_node",
                 mode="create",
                 id="inner_a",
-                type="llm",
+                type="answer",
                 title="处理",
-                intent=_intent("循环里第一步"),
+                intent={"objective": "First", "structure": {"kind": "answer", "content": "First"}},
                 parent="loop1",
             ),
             tool_context,
@@ -1834,9 +2017,9 @@ def test_create_inside_loop_spreads_children_and_grows_container(tool_context: T
                 "build_node",
                 mode="create",
                 id="inner_b",
-                type="end",
+                type="answer",
                 title="结束",
-                intent=_intent("循环里第二步"),
+                intent={"objective": "Second", "structure": {"kind": "answer", "content": "Second"}},
                 parent="loop1",
             ),
             tool_context,
@@ -1890,6 +2073,7 @@ def test_search_and_build_share_the_run_snapshot(tool_context) -> None:
     )
     search = dispatch(_call("search_datasets", query="live"), tool_context)
     assert any(hit["id"] == "ds-live" for hit in search["content"]["hits"])
+    _install_query_start(tool_context)
 
     # transcript 里出现过的旧 id 不在 snapshot 中 → 拒绝
     _set_env(tool_context, llm_client=_FakeLLM({"dataset_ids": ["ds-stale"]}))
@@ -1900,7 +2084,7 @@ def test_search_and_build_share_the_run_snapshot(tool_context) -> None:
             id="kr",
             type="knowledge-retrieval",
             title="检索",
-            intent=_intent("绑 ds-stale"),
+            intent=_knowledge_intent("ds-stale"),
         ),
         tool_context,
     )
@@ -1942,11 +2126,17 @@ def test_empty_knowledge_snapshot_rejects_any_dataset(tool_context: ToolContext)
     assert search["ok"] is True
     assert search["content"]["available"] is True
     assert search["content"]["hits"] == []
+    _install_query_start(tool_context)
 
     _set_env(tool_context, llm_client=_FakeLLM({"dataset_ids": ["ds-live"]}))
     result = dispatch(
         _call(
-            "build_node", mode="create", id="kr", type="knowledge-retrieval", title="检索", intent=_intent("绑 ds-live")
+            "build_node",
+            mode="create",
+            id="kr",
+            type="knowledge-retrieval",
+            title="检索",
+            intent=_knowledge_intent("ds-live"),
         ),
         tool_context,
     )
@@ -1957,7 +2147,7 @@ def test_empty_knowledge_snapshot_rejects_any_dataset(tool_context: ToolContext)
     assert find_node(tool_context.state.graph, "kr") is None
 
 
-def test_unavailable_knowledge_catalogue_does_not_reject_stale_ids(tool_context: ToolContext) -> None:
+def test_unavailable_knowledge_catalogue_fails_closed(tool_context: ToolContext) -> None:
     _set_env(
         tool_context,
         knowledge_available=False,
@@ -1971,6 +2161,7 @@ def test_unavailable_knowledge_catalogue_does_not_reject_stale_ids(tool_context:
             }
         ),
     )
+    _install_query_start(tool_context)
     result = dispatch(
         _call(
             "build_node",
@@ -1978,12 +2169,12 @@ def test_unavailable_knowledge_catalogue_does_not_reject_stale_ids(tool_context:
             id="kr",
             type="knowledge-retrieval",
             title="检索",
-            intent=_intent("绑 ds-stale"),
+            intent=_knowledge_intent("ds-stale"),
         ),
         tool_context,
     )
-    assert result["ok"] is True
-    assert result["error_code"] is None
+    assert result["ok"] is False
+    assert result["error_code"] == "CAPABILITY_UNAVAILABLE"
 
 
 def test_build_node_rejects_unknown_tool_from_snapshot(tool_context: ToolContext) -> None:
@@ -2251,9 +2442,15 @@ def test_tool_id_in_dataset_ids_is_unknown_dataset(tool_context: ToolContext) ->
             }
         ),
     )
+    _install_query_start(tool_context)
     result = dispatch(
         _call(
-            "build_node", mode="create", id="kr", type="knowledge-retrieval", title="检索", intent=_intent("误绑工具键")
+            "build_node",
+            mode="create",
+            id="kr",
+            type="knowledge-retrieval",
+            title="检索",
+            intent=_knowledge_intent("langgenius/google"),
         ),
         tool_context,
     )
@@ -2718,6 +2915,26 @@ def test_run_acceptance_allows_a_current_passing_workflow_execution(tool_context
 
     assert execution["content"]["passed"] is True
     assert result["ok"] is True
+    assert len(runner.calls) == 1
+
+
+def test_run_acceptance_allows_structural_only_skip_for_unrunnable_graph(tool_context: ToolContext) -> None:
+    tool_context.state.graph = _connected_start_end()
+    relayout_graph(tool_context)
+    graph_hash = canonical_graph_hash(tool_context.state.graph)
+    tool_context.state.last_workflow_execution = WorkflowExecutionRecord(
+        revision=tool_context.state.candidate_revision,
+        graph_hash=graph_hash,
+        passed=None,
+        verification_level="structural_only",
+    )
+    runner = _FakeAcceptanceRunner(executed=False)
+    _set_env(tool_context, acceptance_runner=runner, execute_graph=_PassingGraphExecutor())
+
+    result = dispatch(_call("run_acceptance"), tool_context)
+
+    assert result["ok"] is True
+    assert result["content"]["executed"] is False
     assert len(runner.calls) == 1
 
 

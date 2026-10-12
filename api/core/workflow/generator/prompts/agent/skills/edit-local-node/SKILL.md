@@ -14,9 +14,9 @@ description: Use when changing existing nodes or their local connections and dow
    nodes. Resolve binding changes with bind-resources.
    Complete when the plan authorizes the intended edit without unrelated changes.
 3. Route by node type. Ordinary build_node(mode=update) keeps the type; replace is
-   for a requested type change. Omitted intent.structure preserves structured
-   fields; a supplied structure replaces them, including explicit empty lists.
-   Retain required intent inputs/outputs so the call still matches its plan.
+   for a requested type change. Always submit the complete typed intent.structure;
+   omission is rejected. Explicit empty lists clear fields whose contract allows it.
+   Retain required semantic inputs/outputs so the call still matches its plan.
    Tool updates require inspected bindings and complete specialized payloads.
    Agent updates follow bind-resources; container edits follow build-container.
    Complete when the target mutation succeeds with the intended retained fields.

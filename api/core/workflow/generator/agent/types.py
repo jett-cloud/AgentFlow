@@ -1,7 +1,7 @@
 """Agent session and tool protocol payloads."""
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 from core.workflow.generator.graph.types import MinimalGraphDict
 from core.workflow.generator.types import WorkflowGenerationMode
@@ -35,6 +35,10 @@ class ToolResult(TypedDict):
     error: str | None
     error_code: str | None
     retryable: bool
+    path: NotRequired[str]
+    child_ref: NotRequired[str]
+    cause: NotRequired[dict[str, object]]
+    hint: NotRequired[str]
 
 
 AgentMessageEventType = Literal["message", "tool_call", "tool_result"]

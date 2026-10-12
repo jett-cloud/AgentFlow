@@ -13,7 +13,6 @@ from core.workflow.generator.acceptance.evidence import (
     AcceptanceRunner,
     GraphExecutionTrace,
 )
-from core.workflow.generator.compiler.node_builder import BuilderInput
 from core.workflow.generator.graph.types import MinimalGraphDict
 from core.workflow.generator.model_io.llm_response import LLMJsonClient
 from core.workflow.generator.resources.knowledge_catalogue import KnowledgeCatalogueEntry
@@ -45,16 +44,17 @@ class PendingPlanNode:
 
 
 GraphExecuteFn = Callable[[MinimalGraphDict, AcceptanceMode, Mapping[str, object]], GraphExecutionTrace]
-WorkflowVerificationLevel = Literal["local_only", "live", "mock"]
+WorkflowVerificationLevel = Literal["local_only", "live", "mock", "structural_only"]
+OutputLanguage = Literal["en-US", "zh-Hans"]
 
 
 @dataclass(frozen=True)
 class WorkflowExecutionRecord:
-    """One completed whole-graph observation bound to the exact candidate."""
+    """One whole-graph observation or capability-aware skip bound to the candidate."""
 
     revision: int
     graph_hash: str
-    passed: bool
+    passed: bool | None
     verification_level: WorkflowVerificationLevel
 
 
@@ -73,6 +73,9 @@ class ToolEnv:
       ``CAPABILITY_UNAVAILABLE`` when the graph needs the unavailable family.
     * An empty ``set()`` means the tenant really has none; unknown ids are
       ``UNKNOWN_DATASET`` / ``UNKNOWN_TOOL``. Empty is not ``None``.
+    * Conversation variable names, types, and writable names come from one
+      draft snapshot. Secret values are never copied; secret names are not
+      advertised as writable.
 
     ``hydrate_graph`` is injected by the service layer. ``None`` is identity.
     Do not import ``hydrate_agent_bindings`` here. ``run_acceptance`` hydrates
@@ -99,15 +102,20 @@ class ToolEnv:
     installed_dataset_ids: set[str] | None
     knowledge_available: bool
     tools_available: bool
-    builder_input: BuilderInput
     llm_client: LLMJsonClient
     agent_model_entries: tuple[AgentModelCatalogueEntry, ...]
     models_available: bool
+    output_language: OutputLanguage = "en-US"
     hydrate_graph: Callable[[MinimalGraphDict], MinimalGraphDict] | None = None
     acceptance_runner: AcceptanceRunner | None = None
     authorize_live_acceptance: Callable[[int, str], bool] | None = None
     environment_variables: set[str] | None = None
     conversation_variables: set[str] | None = None
+    conversation_variable_types: Mapping[str, str] | None = None
+    writable_conversation_variables: frozenset[str] | None = None
+    http_credential_reference_ids: frozenset[str] | None = None
+    human_input_delivery_capabilities: frozenset[str] | None = None
+    human_input_member_reference_ids: frozenset[str] | None = None
     require_resource_context: bool = False
     run_id: str | None = None
     run_epoch: int | None = None
@@ -127,9 +135,9 @@ class ToolTurnState:
     ``repeated_after_repair``, then clears it. Finish hydrates and validates
     itself and must not go through that dispatch path, or the next validate
     would look like a repeated repair. ``model_call_budget`` is installed only
-    for the lifetime of ``iter_agent_events`` so direct tool compilation stays
-    deterministic and main-agent, compactor, and nested Builder calls consume
-    the same logical-call allowance.
+    for the lifetime of ``iter_agent_events``; ordinary tool compilation remains
+    deterministic while the main Agent and compactor share one logical-call
+    allowance.
     """
 
     graph: MinimalGraphDict

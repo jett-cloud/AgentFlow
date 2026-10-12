@@ -51,6 +51,7 @@ from core.workflow.generator.agent.types import (
 )
 from core.workflow.generator.contracts.workflow_contract import workflow_plan_mutation_error
 from core.workflow.generator.graph.types import MinimalGraphDict
+from core.workflow.generator.variables.syntax import collect_exact_references
 
 logger = logging.getLogger(__name__)
 
@@ -88,9 +89,9 @@ _GRAPH_REPLACING_CREATES = frozenset({"build_loop", "build_iteration"})
 def _structured_selector_sources(value: object, *, field_name: str | None = None) -> set[str]:
     """Return producer ids from explicit selector fields in a build request.
 
-    Free-form objective, prompt, and template text are deliberately ignored:
-    scheduling facts come from typed selectors, not strings that merely mention
-    a variable. Invalid payloads remain the owning builder's validation error.
+    Scheduling facts come from typed selector fields and exact runtime
+    placeholders such as ``{{#producer.output#}}``. Ordinary prose that merely
+    mentions a node remains irrelevant.
     """
     sources: set[str] = set()
     if isinstance(value, dict):
@@ -112,6 +113,11 @@ def _structured_selector_sources(value: object, *, field_name: str | None = None
     if isinstance(value, list):
         for item in value:
             sources.update(_structured_selector_sources(item, field_name=field_name))
+        return sources
+    if isinstance(value, str):
+        for selector in collect_exact_references({"value": value}):
+            if selector:
+                sources.add(selector[0])
     return sources
 
 

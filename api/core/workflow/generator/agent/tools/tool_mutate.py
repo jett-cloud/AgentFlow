@@ -5,7 +5,6 @@
 in order. Parallel create only overlaps compile.
 """
 
-import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -19,12 +18,9 @@ from core.workflow.generator.agent.types import ToolCall, ToolResult
 from core.workflow.generator.compiler.agent_knowledge import (
     collect_agent_knowledge_dataset_ids,
 )
-from core.workflow.generator.compiler.intents.node_intent import (
-    parse_node_build_intent,
-    render_node_builder_spec,
-)
-from core.workflow.generator.compiler.node_builder import build_single_node
-from core.workflow.generator.compiler.ordinary_node_compiler import compile_structured_node_config
+from core.workflow.generator.compiler.intents.node_intent import parse_node_build_intent
+from core.workflow.generator.compiler.node_compile_context import NodeCompileContext
+from core.workflow.generator.compiler.node_intent_compiler import NodeIntentCompileError, compile_node_intent
 from core.workflow.generator.graph.graph_ops import (
     confirmed_variable_views,
     find_node,
@@ -41,11 +37,6 @@ from core.workflow.generator.graph.graph_ops import (
 )
 from core.workflow.generator.graph.id_policy import validate_mutation_node_id
 from core.workflow.generator.graph.types import MinimalGraphNodeDict
-from core.workflow.generator.model_io.budget import (
-    ModelCallBudgetExceededError,
-    RunCancelledError,
-    budgeted_llm_json_client,
-)
 from core.workflow.generator.validation.intent_config_validator import (
     validate_intent_reference_nodes,
     validate_node_config_against_intent,
@@ -54,14 +45,16 @@ from core.workflow.generator.validation.node_config_validator import (
     collect_generated_node_completeness_errors,
     collect_node_config_errors,
 )
-from core.workflow.generator.variables.declarations import declared_outputs
-from core.workflow.generator.variables.syntax import collect_references
-
-logger = logging.getLogger(__name__)
+from core.workflow.generator.variables.declarations import declared_output_type, declared_outputs
+from core.workflow.generator.variables.syntax import collect_exact_references, collect_references, system_variable_names
+from core.workflow.generator.variables.variable_registry import (
+    VariableDeclaration,
+    VariableReferrer,
+    VariableRegistry,
+)
 
 _CONTAINER_TYPES = frozenset({"iteration", "loop"})
 _BUILD_MODES = frozenset({"create", "update", "replace"})
-_MECHANICAL_CONFIG_ERROR_CODES = frozenset({"INVALID_NODE_CONFIG", "INVALID_JSON"})
 _SPECIALIZED_BUILD_NODE_ERRORS: dict[str, tuple[str, str]] = {
     "tool": ("TOOL_NODE_REQUIRES_BUILD_TOOL_NODE", "Use build_tool_node for Tool nodes"),
     "agent": ("AGENT_NODE_REQUIRES_BUILD_AGENT_NODE", "Use build_agent_node for Agent nodes"),
@@ -184,23 +177,6 @@ def duplicate_create_ids(calls: Sequence[ToolCall]) -> frozenset[str]:
     return frozenset(node_id for node_id, count in counts.items() if count > 1)
 
 
-def extra_plan_nodes_from_pending(pending: tuple[PendingPlanNode, ...]) -> list[dict[str, Any]]:
-    extras: list[dict[str, Any]] = []
-    for node in pending:
-        extra: dict[str, Any] = {
-            "id": node.id,
-            "node_type": node.type,
-            "label": node.title,
-            "purpose": node.purpose,
-            "outputs": list(node.provisional_outputs),
-            "outputs_kind": "provisional",
-        }
-        if node.parent:
-            extra["parent"] = node.parent
-        extras.append(extra)
-    return extras
-
-
 def _parent_allowed(parent: str, node_id: str, context: ToolContext) -> bool:
     live = find_node(context.state.graph, parent)
     if live is not None:
@@ -245,10 +221,10 @@ def _ancestor_ids_from_parent(
 class CompiledBuildNode:
     """Validated ``build_node`` work that has not been written to the graph yet.
 
-    ``compile_build_node`` may call the node-builder LLM. It must not rebind
+    ``compile_build_node`` is deterministic and must not rebind
     ``context.state.graph``. ``commit_build_node`` is the only writer. ``dispatch``
-    still runs compile then commit on one call; later parallel create only
-    overlaps compile.
+    still runs compile then commit on one call; parallel create overlaps only
+    deterministic compilation.
     """
 
     call: ToolCall
@@ -311,6 +287,15 @@ def compile_build_node(call: ToolCall, context: ToolContext) -> CompiledBuildNod
     except ValueError as exc:
         return error(call, "INVALID_ARGUMENT", str(exc))
 
+    if intent.structure is None:
+        return error(
+            call,
+            "MISSING_NODE_STRUCTURE",
+            f"Node type {node_type!r} requires typed structure",
+            path="intent.structure",
+            cause={"node_type": node_type, "surface": "top_level"},
+        )
+
     parent, parent_error = _resolve_parent(mode, arguments, existing)
     if parent_error is not None:
         return error(call, parent_error, "parent is invalid")
@@ -322,6 +307,9 @@ def compile_build_node(call: ToolCall, context: ToolContext) -> CompiledBuildNod
         intent=intent,
         graph=context.state.graph,
         pending_nodes=context.state.pending_plan_nodes,
+        mode=context.env.mode,
+        environment_variables=context.env.environment_variables,
+        conversation_variable_types=context.env.conversation_variable_types,
     )
     if reference_issues:
         first = reference_issues[0]
@@ -331,39 +319,37 @@ def compile_build_node(call: ToolCall, context: ToolContext) -> CompiledBuildNod
     desc = str(existing["data"].get("desc") or "") if existing is not None else ""
     old_config = _node_config(existing) if existing is not None else {}
     old_parent = _existing_parent(existing)
+    variable_registry = _top_level_variable_registry(
+        context,
+        node_id=node_id,
+        parent=parent,
+        intent_payload=intent.model_dump(mode="python"),
+    )
+    compile_context = NodeCompileContext(
+        node_id=node_id,
+        surface="top_level",
+        mode=mode,
+        old_config=old_config,
+        variable_registry=variable_registry,
+        model_entries=context.env.agent_model_entries if context.env.models_available else None,
+        installed_dataset_ids=(
+            frozenset(context.env.installed_dataset_ids)
+            if context.env.knowledge_available and context.env.installed_dataset_ids is not None
+            else None
+        ),
+        http_credential_reference_ids=context.env.http_credential_reference_ids,
+        human_input_delivery_capabilities=context.env.human_input_delivery_capabilities,
+        human_input_member_reference_ids=context.env.human_input_member_reference_ids,
+    )
 
-    builder_spec = render_node_builder_spec(intent, node_type=node_type)
-    builder_input = context.env.builder_input
-
-    def invoke_builder(purpose: str) -> dict[str, Any]:
-        return build_single_node(
-            client=budgeted_llm_json_client(context.env.llm_client, context.state.model_call_budget),
-            request=builder_input,
-            node_id=node_id,
-            node_type=node_type,
-            title=title,
-            purpose=purpose,
-            existing_node=dict(existing) if existing is not None else None,
-            extra_plan_nodes=extra_plan_nodes_from_pending(context.state.pending_plan_nodes),
-            topology_graph=dict(context.state.graph),
+    try:
+        config = compile_node_intent(
+            intent=intent,
+            context=compile_context,
+            base_config=old_config if mode == "update" else {},
         )
-
-    # Builder/LLM failures must bounce as a ToolResult; never leave a half-written node.
-    builder_repaired = False
-    if intent.structure is not None:
-        config = old_config if mode == "update" else {}
-    else:
-        try:
-            config = invoke_builder(builder_spec)
-        except RunCancelledError:
-            return error(call, "RUN_ABORTED", "Run cancelled before node Builder completed")
-        except ModelCallBudgetExceededError:
-            return error(call, "MODEL_CALL_BUDGET_EXHAUSTED", "Agent model-call limit reached")
-        except Exception:
-            logger.exception("Workflow agent: node builder failed for %s", node_id)
-            return error(call, "CAPABILITY_UNAVAILABLE", "Node builder failed")
-
-    config = compile_structured_node_config(intent=intent, builder_config=config)
+    except NodeIntentCompileError as exc:
+        return error(call, exc.code, exc.detail, path=exc.path, cause=exc.cause)
 
     membership_error = _snapshot_membership_error(call, context, config)
     if membership_error is not None:
@@ -376,37 +362,6 @@ def compile_build_node(call: ToolCall, context: ToolContext) -> CompiledBuildNod
         title=title,
         config=config,
     )
-    if (
-        config_error is not None
-        and intent.structure is None
-        and config_error["error_code"] in _MECHANICAL_CONFIG_ERROR_CODES
-    ):
-        repair_spec = (
-            f"{builder_spec}\nRepair feedback:\n"
-            f"- {config_error['error_code']}: {config_error['error']}\n"
-            "Return one complete replacement config that satisfies the same intent."
-        )
-        try:
-            config = invoke_builder(repair_spec)
-        except RunCancelledError:
-            return error(call, "RUN_ABORTED", "Run cancelled before node Builder repair")
-        except ModelCallBudgetExceededError:
-            return error(call, "MODEL_CALL_BUDGET_EXHAUSTED", "Agent model-call limit reached")
-        except Exception:
-            logger.exception("Workflow agent: node builder repair failed for %s", node_id)
-            return error(call, "CAPABILITY_UNAVAILABLE", "Node builder repair failed")
-        builder_repaired = True
-        config = compile_structured_node_config(intent=intent, builder_config=config)
-        membership_error = _snapshot_membership_error(call, context, config)
-        if membership_error is not None:
-            return membership_error
-        config_error = _node_config_error(
-            call,
-            node_id=node_id,
-            node_type=node_type,
-            title=title,
-            config=config,
-        )
     if config_error is not None:
         return config_error
     intent_issues = validate_node_config_against_intent(
@@ -416,42 +371,6 @@ def compile_build_node(call: ToolCall, context: ToolContext) -> CompiledBuildNod
         intent=intent,
         config=config,
     )
-    if intent_issues and intent.structure is None and not builder_repaired:
-        first = intent_issues[0]
-        repair_spec = (
-            f"{builder_spec}\nRepair feedback:\n"
-            f"- {first.code}: {first.detail}\n"
-            "Return one complete replacement config that satisfies the same intent."
-        )
-        try:
-            config = invoke_builder(repair_spec)
-        except RunCancelledError:
-            return error(call, "RUN_ABORTED", "Run cancelled before node Builder repair")
-        except ModelCallBudgetExceededError:
-            return error(call, "MODEL_CALL_BUDGET_EXHAUSTED", "Agent model-call limit reached")
-        except Exception:
-            logger.exception("Workflow agent: node builder repair failed for %s", node_id)
-            return error(call, "CAPABILITY_UNAVAILABLE", "Node builder repair failed")
-        config = compile_structured_node_config(intent=intent, builder_config=config)
-        membership_error = _snapshot_membership_error(call, context, config)
-        if membership_error is not None:
-            return membership_error
-        config_error = _node_config_error(
-            call,
-            node_id=node_id,
-            node_type=node_type,
-            title=title,
-            config=config,
-        )
-        if config_error is not None:
-            return config_error
-        intent_issues = validate_node_config_against_intent(
-            node_id=node_id,
-            node_type=node_type,
-            title=title,
-            intent=intent,
-            config=config,
-        )
     if intent_issues:
         first = intent_issues[0]
         return error(call, first.code, first.detail, path=first.field_path, cause=first.cause())
@@ -594,6 +513,117 @@ def _node_config(node: MinimalGraphNodeDict) -> dict[str, Any]:
     return {key: value for key, value in node["data"].items() if key not in {"type", "title", "desc", "parentId"}}
 
 
+def _top_level_variable_registry(
+    context: ToolContext,
+    *,
+    node_id: str,
+    parent: str | None,
+    intent_payload: dict[str, Any],
+) -> VariableRegistry:
+    """Freeze the typed namespace used by every top-level ordinary compiler.
+
+    Build calls intentionally precede edge calls, so all already-committed
+    producers are placed in the prior compile layer. Final graph validation
+    remains responsible for reachability; this registry owns existence, scope,
+    type, and writability during deterministic compilation.
+    """
+    declarations: list[VariableDeclaration] = []
+    graph_nodes = context.state.graph.get("nodes", [])
+    nodes_by_id = {
+        str(node["id"]): node
+        for node in graph_nodes
+        if isinstance(node, dict) and isinstance(node.get("id"), str) and node["id"]
+    }
+    known = set(nodes_by_id)
+    known.update(item.id for item in context.state.pending_plan_nodes)
+    known.add(node_id)
+
+    referenced = collect_exact_references(intent_payload)
+    referenced_by_owner: dict[str, set[tuple[str, ...]]] = {}
+    for selector in referenced:
+        if selector:
+            referenced_by_owner.setdefault(selector[0], set()).add(selector)
+
+    for producer_id, raw_node in nodes_by_id.items():
+        producer_parent = _existing_parent(raw_node)
+        selectors = {(producer_id, name) for name in declared_outputs(dict(raw_node))}
+        selectors.update(referenced_by_owner.get(producer_id, set()))
+        for selector in sorted(selectors):
+            if len(selector) < 2:
+                continue
+            value_type = declared_output_type(dict(raw_node), ".".join(selector[1:]))
+            if value_type is None:
+                continue
+            declarations.append(
+                VariableDeclaration(
+                    selector=selector,
+                    value_type=value_type,
+                    owner_container_id=producer_parent,
+                    producer_layer=1 if producer_id == node_id else 0,
+                    guaranteed=True,
+                )
+            )
+
+    sys_types = {
+        "files": "array[file]",
+        "query": "string",
+        "dialogue_count": "number",
+        "timestamp": "number",
+    }
+    known.add("sys")
+    declarations.extend(
+        VariableDeclaration(
+            selector=("sys", name),
+            value_type=sys_types.get(name, "string"),
+            owner_container_id=None,
+            producer_layer=-1,
+            guaranteed=True,
+        )
+        for name in sorted(system_variable_names(context.env.mode))
+    )
+
+    if context.env.environment_variables is not None:
+        known.add("env")
+        declarations.extend(
+            VariableDeclaration(
+                selector=("env", name),
+                value_type="string",
+                owner_container_id=None,
+                producer_layer=-1,
+                guaranteed=True,
+            )
+            for name in sorted(context.env.environment_variables)
+        )
+
+    if context.env.conversation_variable_types is not None:
+        known.add("conversation")
+        writable = context.env.writable_conversation_variables or frozenset()
+        declarations.extend(
+            VariableDeclaration(
+                selector=("conversation", name),
+                value_type=value_type,
+                owner_container_id=None,
+                producer_layer=-1,
+                guaranteed=True,
+                writable=name in writable,
+            )
+            for name, value_type in sorted(context.env.conversation_variable_types.items())
+        )
+
+    ancestors = tuple(_ancestor_ids_from_parent(parent, nodes_by_id))
+    return VariableRegistry(
+        declarations,
+        referrers=(
+            VariableReferrer(
+                node_id=node_id,
+                layer=1,
+                ancestor_container_ids=ancestors,
+            ),
+        ),
+        known_node_ids=frozenset(known),
+    )
+
+
 def _build_node_content(
     *,
     node_id: str,
@@ -666,7 +696,7 @@ def _config_effects(
 
 
 def _snapshot_membership_error(call: ToolCall, context: ToolContext, config: dict[str, Any]) -> ToolResult | None:
-    """Reject builder config that names a resource outside this run's snapshot.
+    """Reject compiled config that names a resource outside this run's snapshot.
 
     ``available=false`` / ``installed_*=None`` skips that side. An empty set is
     "the tenant has none", so every id is unknown. Cross-namespace reuse uses
@@ -743,10 +773,10 @@ def _unknown_dify_tools_error(call: ToolCall, context: ToolContext, config: dict
 
 
 def _apply_agent_binding_ids(*, mode: str, config: dict[str, Any], old_config: dict[str, Any]) -> None:
-    """Keep trusted update ids; drop Builder-invented ids on create/replace.
+    """Keep trusted update ids; drop untrusted submitted ids on create/replace.
 
     create/replace always discard ``agent_id`` / ``current_snapshot_id`` from the
-    Builder payload. update restores those fields from the existing node so a
+    submitted payload. update restores those fields from the existing node so a
     later hydrate can refresh the same Agent snapshot instead of minting a new
     Agent.
     """

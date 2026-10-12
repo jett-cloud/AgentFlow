@@ -33,11 +33,6 @@ from core.workflow.generator.compiler.intents.container_intent import (
 )
 from core.workflow.generator.graph.graph_ops import find_node
 from core.workflow.generator.graph.id_policy import validate_mutation_node_id
-from core.workflow.generator.model_io.budget import (
-    ModelCallBudgetExceededError,
-    RunCancelledError,
-    budgeted_llm_json_client,
-)
 
 
 @dataclass(frozen=True)
@@ -233,17 +228,22 @@ def _compile_container_request(
         knowledge_entries=tuple(context.env.knowledge_entries),
         installed_tools=context.env.installed_tools,
         generation_mode=context.env.mode,
+        model_entries=context.env.agent_model_entries if context.env.models_available else None,
+        installed_dataset_ids=(
+            frozenset(context.env.installed_dataset_ids)
+            if context.env.knowledge_available and context.env.installed_dataset_ids is not None
+            else None
+        ),
+        http_credential_reference_ids=context.env.http_credential_reference_ids,
+        human_input_delivery_capabilities=context.env.human_input_delivery_capabilities,
+        human_input_member_reference_ids=context.env.human_input_member_reference_ids,
+        conversation_variable_types=context.env.conversation_variable_types,
+        writable_conversation_variables=context.env.writable_conversation_variables,
         title=title,
         compile_cache=context.state.compile_cache,
-        builder_client=budgeted_llm_json_client(context.env.llm_client, context.state.model_call_budget),
-        builder_input=context.env.builder_input,
     )
     try:
         compiled = compile_container_subgraph(request)
-    except RunCancelledError:
-        return error(call, "RUN_ABORTED", "Run cancelled before container Builder completed")
-    except ModelCallBudgetExceededError:
-        return error(call, "MODEL_CALL_BUDGET_EXHAUSTED", "Agent model-call limit reached")
     except ContainerCompileError as exc:
         return _container_error(
             call,
