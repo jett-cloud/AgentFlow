@@ -1,13 +1,13 @@
 """In-memory acceptance runner for workflow assist.
 
-Default ``simulated`` mode classifies nodes and never calls tenant tools or
-LLMs, so usage counts stay 0. ``live`` may invoke an injected graph executor
-which tests spy on. Production does not persist WorkflowRun rows.
+Default ``simulated`` mode delegates to an executor that rewrites external
+nodes and explores bounded branch/action scenarios without calling tenant tools
+or LLMs, so usage counts stay 0. ``live`` may invoke real external providers.
+Production does not persist WorkflowRun rows.
 
 GraphEngine is optional via ``execute_graph``. Production injects it through
-``build_acceptance_runner``. Simulated graphs that still contain unverified
-nodes never call it; local-only graphs do. ``executed`` is true only when the
-executor actually ran. Core never imports this module.
+``build_acceptance_runner``. ``executed`` is true only when the executor
+actually ran. Core never imports this module.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from typing import Literal
 from uuid import uuid4
 
 from core.workflow.generator.acceptance.evidence import (
+    AcceptanceAssertionResult,
     AcceptanceAttempt,
     AcceptanceMode,
     Evidence,
@@ -27,9 +28,9 @@ from core.workflow.generator.acceptance.evidence import (
 from core.workflow.generator.graph.types import MinimalGraphDict
 from services.workflow_assist.acceptance_cases import AcceptanceCase, index_acceptance_cases
 from services.workflow_assist.effect_policy import classify_node_effect, execution_policy_errors
-from services.workflow_assist.runtime_contract import evaluate_runtime_contract
+from services.workflow_assist.runtime_contract import BusinessAssertion, evaluate_runtime_contract
 
-GraphExecutor = Callable[[MinimalGraphDict, AcceptanceMode, Mapping[str, object]], list[FailedNodeTrace]]
+GraphExecutor = Callable[[MinimalGraphDict, AcceptanceMode, Mapping[str, object]], GraphExecutionTrace]
 
 
 class WorkflowAssistAcceptanceRunner:
@@ -94,7 +95,7 @@ class WorkflowAssistAcceptanceRunner:
                     self._count_metered(prepared)
                     failed_nodes = self._execute_graph(prepared, mode, inputs)
                     executed = True
-            elif self._execute_graph is not None and not effect_unverified:
+            elif self._execute_graph is not None:
                 failed_nodes = self._execute_graph(prepared, mode, inputs)
                 executed = True
             executed_ids = (
@@ -104,7 +105,7 @@ class WorkflowAssistAcceptanceRunner:
                 str(node["id"]) for node in prepared.get("nodes") or [] if node["id"] not in executed_ids
             )
             trace = failed_nodes if isinstance(failed_nodes, GraphExecutionTrace) else GraphExecutionTrace()
-            assertions = evaluate_runtime_contract(prepared, trace, business_specs)
+            assertions = _evaluate_scenario_contracts(prepared, trace, business_specs)
             runtime_contract_passed = all(item["passed"] for item in assertions if item["kind"] != "business")
             business_results = [item for item in assertions if item["kind"] == "business"]
             business_verified = bool(business_results) and all(item["passed"] for item in business_results)
@@ -136,6 +137,7 @@ class WorkflowAssistAcceptanceRunner:
                     "assertions": assertions,
                     "runtime_contract_passed": runtime_contract_passed,
                     "business_verified": business_verified,
+                    "scenario_results": list(getattr(trace, "scenario_results", [])),
                 }
             )
         return attempts
@@ -179,6 +181,33 @@ def build_acceptance_runner(
             live_authorized=live_authorized,
         ),
     )
+
+
+def _evaluate_scenario_contracts(
+    graph: MinimalGraphDict,
+    trace: GraphExecutionTrace,
+    business_specs: Sequence[BusinessAssertion],
+) -> list[AcceptanceAssertionResult]:
+    if not trace.scenario_results:
+        return evaluate_runtime_contract(graph, trace, business_specs)
+
+    assertions: list[AcceptanceAssertionResult] = []
+    for scenario in trace.scenario_results:
+        scenario_trace = GraphExecutionTrace()
+        scenario_trace.executed_node_ids.update(scenario["executed_node_ids"])
+        scenario_trace.node_outputs.update(scenario.get("node_outputs", {}))
+        scenario_trace.graph_outputs = dict(scenario["graph_outputs"])
+        scenario_assertions = evaluate_runtime_contract(graph, scenario_trace, business_specs)
+        scenario_passed = all(item["passed"] for item in scenario_assertions)
+        scenario["passed"] = scenario["passed"] and scenario_passed
+        for assertion in scenario_assertions:
+            assertions.append(
+                {
+                    **assertion,
+                    "path": f"scenarios.{scenario['scenario_id']}.{assertion['path']}",
+                }
+            )
+    return assertions
 
 
 def _sandbox_evidence(

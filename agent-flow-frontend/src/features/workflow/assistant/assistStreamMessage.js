@@ -482,15 +482,22 @@ function isEmptyActivity(message) {
 
 export function groupAssistTimeline(messages) {
   const groups = []
-  for (const message of Array.isArray(messages) ? messages : []) {
-    if (message?.kind === 'assistant_text' && !String(message.text || '').trim())
+  const source = Array.isArray(messages) ? messages : []
+  for (let messageIndex = 0; messageIndex < source.length; messageIndex += 1) {
+    const message = source[messageIndex]
+    if (message?.kind === 'assistant_text'
+      && !String(message.text || '').trim()
+      && !String(message.reasoning || '').trim())
       continue
     if (message?.role === 'user' || message?.kind === 'clarification' || message?.kind === 'status') {
       groups.push({ kind: 'single', message })
       continue
     }
     if (TURN_BLOCK_KINDS.has(message?.kind)) {
-      if (isEmptyActivity(message))
+      const hasFollowingTurnBlock = source
+        .slice(messageIndex + 1)
+        .some(candidate => TURN_BLOCK_KINDS.has(candidate?.kind) && !isEmptyActivity(candidate))
+      if (isEmptyActivity(message) && (message.status !== 'running' || hasFollowingTurnBlock))
         continue
       const last = groups[groups.length - 1]
       if (last?.kind === 'turn')

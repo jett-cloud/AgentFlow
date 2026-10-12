@@ -120,6 +120,7 @@ class GraphPostprocessor:
         # Persisted if-else cases are authoritative. Canvas branch metadata is
         # derived so stale model-authored labels cannot disagree with Handles.
         cls._derive_if_else_branches(nodes=nodes)
+        cls._derive_human_input_branches(nodes=nodes)
 
         # ``parentId`` → set of inner-node ids, so edges between siblings can be
         # marked ``isInIteration`` / ``isInLoop`` with the right container id.
@@ -326,6 +327,22 @@ class GraphPostprocessor:
                 {"id": case_id, "name": f"CASE {index + 1}" if multiple_cases else "IF"}
                 for index, case_id in enumerate(case_ids)
             ] + [{"id": "false", "name": "ELSE"}]
+
+    @classmethod
+    def _derive_human_input_branches(cls, *, nodes: list[dict[str, Any]]) -> None:
+        """Rebuild canvas-only Human Input branches from actions and timeout."""
+
+        for node in nodes:
+            data = node.get("data") or {}
+            if data.get("type") != BuiltinNodeTypes.HUMAN_INPUT:
+                continue
+            branches = [
+                {"id": action_id, "name": str(action.get("title") or action_id)}
+                for action in (data.get("user_actions") or [])
+                if isinstance(action, dict) and isinstance((action_id := action.get("id")), str) and action_id
+            ]
+            branches.append({"id": "__timeout", "name": "Timeout"})
+            data["_targetBranches"] = branches
 
     @classmethod
     def _ensure_container_starts(cls, *, nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> None:

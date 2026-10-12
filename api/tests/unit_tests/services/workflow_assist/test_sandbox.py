@@ -238,7 +238,7 @@ def test_advanced_chat_answer_checks_terminal_output_type() -> None:
     assert assertion["actual"] == "object"
 
 
-def test_simulated_acceptance_does_not_execute_tool_nodes() -> None:
+def test_simulated_acceptance_executes_prepared_graph_but_marks_tool_unverified() -> None:
     from unittest.mock import Mock
 
     execute = Mock(return_value=[])
@@ -250,10 +250,10 @@ def test_simulated_acceptance_does_not_execute_tool_nodes() -> None:
         case_ids=["default"],
         mode="simulated",
     )
-    execute.assert_not_called()
+    execute.assert_called_once()
     assert runner.tool_calls == 0
     assert attempts[0]["passed"] is True
-    assert attempts[0]["executed"] is False
+    assert attempts[0]["executed"] is True
     assert "tool" in attempts[0]["unverified_nodes"]
 
 

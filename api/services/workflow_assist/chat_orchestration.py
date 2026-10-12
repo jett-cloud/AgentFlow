@@ -310,7 +310,6 @@ def _run_fenced_loop(
     run_limits = limits or _limits_from_config()
     token_counter = _token_counter(runtime.model_instance)
     terminal: str | None = None
-    assert context.env.builder_input is not None
 
     for event_name, payload in iter_agent_events(
         agent_session,
@@ -319,7 +318,7 @@ def _run_fenced_loop(
         cancellation,
         run_limits,
         compact=runtime.compact,
-        system_text=chat_system_prompt(context.env.builder_input.output_language),
+        system_text=chat_system_prompt(context.env.output_language),
         token_counter=token_counter,
         token_limits=runtime.token_limits,
     ):

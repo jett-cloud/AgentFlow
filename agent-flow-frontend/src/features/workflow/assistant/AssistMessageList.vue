@@ -16,9 +16,17 @@
             v-if="block.kind === 'assistant_text'"
             class="turn-text markdown-body"
           >
+            <details v-if="block.reasoning" class="thought" :open="block.reasoningStreaming">
+              <summary>{{ block.reasoningStreaming ? copy.thinking : copy.thought }}</summary>
+              <pre class="thought-body">{{ block.reasoning }}</pre>
+            </details>
             <div v-if="block.text" v-html="assistantHtml(block.text)" />
           </div>
           <ul v-else-if="block.kind === 'activity' || block.kind === 'operations'" class="turn-ops">
+            <li v-if="!block.items?.length">
+              <span class="activity-item-dot is-running" aria-hidden="true" />
+              {{ block.message || copy.thinking }}
+            </li>
             <li v-for="(operation, operationIndex) in block.items" :key="operation.key || operationIndex">
               <span :class="['activity-item-dot', `is-${operation.status || 'done'}`]" aria-hidden="true" />
               {{ operation.message || operation.action || copy.statusWorking }}
@@ -52,6 +60,10 @@
         v-else-if="group.message.kind === 'assistant_text' || (group.message.role === 'assistant' && group.message.text)"
         class="bubble markdown-body"
       >
+        <details v-if="group.message.reasoning" class="thought" :open="group.message.reasoningStreaming">
+          <summary>{{ group.message.reasoningStreaming ? copy.thinking : copy.thought }}</summary>
+          <pre class="thought-body">{{ group.message.reasoning }}</pre>
+        </details>
         <div v-if="group.message.text" v-html="assistantHtml(group.message.text)" />
       </div>
 
@@ -69,7 +81,8 @@
       <div v-for="(error, index) in friendlyErrors" :key="index" class="error-item">
         <p class="error-title">{{ error.text || copy.globalError }}</p>
         <p v-if="error.hint" class="error-hint">{{ error.hint }}</p>
-        <details v-if="error.raw && error.raw !== error.text" class="error-details">
+        <p v-if="error.code" class="error-code">{{ error.code }}</p>
+        <details v-if="error.raw && error.raw !== error.text" class="error-details" :open="error.openRaw">
           <summary>{{ copy.rawError }}</summary>
           <div class="error-detail-toolbar">
             <button type="button" class="error-copy-button" @click="copyError(index, error.raw)">
@@ -141,7 +154,7 @@ const streamingText = computed(() => {
   for (let index = props.messages.length - 1; index >= 0; index -= 1) {
     const message = props.messages[index]
     if (message?.kind === 'assistant_text' && message.streaming)
-      return String(message.text || '')
+      return String(message.text || message.reasoning || '')
   }
   return ''
 })
@@ -538,6 +551,16 @@ onBeforeUnmount(() => {
   color: #912018;
   font-size: 13px;
   line-height: 1.5;
+}
+
+.error-code {
+  display: inline-block;
+  margin: 6px 0 0;
+  border-radius: 4px;
+  background: #fee4e2;
+  padding: 2px 6px;
+  color: #912018;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
 .error-details {

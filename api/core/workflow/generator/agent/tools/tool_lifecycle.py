@@ -4,8 +4,9 @@
 completion claim was accepted (hydrate is idempotent review, ``valid=true``,
 revision aligned, and — when an ``AcceptanceRunner`` is injected — current
 revision+hash Evidence passed). ``run_acceptance`` hydrates first so Evidence
-is recorded against the bound graph, and requires a current passing
-``run_workflow`` observation when graph execution is available.
+is recorded against the bound graph, and requires either a current passing
+``run_workflow`` observation or an explicit ``structural_only`` skip for a node
+without a registered verification capability when graph execution is available.
 """
 
 import logging
@@ -245,6 +246,7 @@ def run_acceptance(call: ToolCall, context: ToolContext) -> ToolResult:
     unverified: list[str] = []
     unexecuted: list[str] = []
     assertions: list[object] = []
+    scenario_results: list[object] = []
     for attempt in attempts:
         _bind_attempt_to_completion_context(attempt, context)
         context.state.attempts[attempt["attempt_id"]] = attempt
@@ -252,6 +254,7 @@ def run_acceptance(call: ToolCall, context: ToolContext) -> ToolResult:
         unverified.extend(str(item) for item in (attempt.get("unverified_nodes") or []) if isinstance(item, str))
         unexecuted.extend(str(item) for item in (attempt.get("unexecuted_node_ids") or []) if isinstance(item, str))
         assertions.extend(attempt.get("assertions") or [])
+        scenario_results.extend(attempt.get("scenario_results") or [])
     passed = bool(attempts) and all(attempt["passed"] for attempt in attempts)
     executed = bool(attempts) and all(bool(attempt.get("executed")) for attempt in attempts)
     content: dict[str, object] = {
@@ -271,6 +274,7 @@ def run_acceptance(call: ToolCall, context: ToolContext) -> ToolResult:
         "business_verified": bool(attempts)
         and all(bool(attempt.get("business_verified", False)) for attempt in attempts),
         "assertions": assertions,
+        "scenarios": scenario_results,
     }
     if attempts:
         last = attempts[-1]
@@ -298,11 +302,17 @@ def _current_workflow_execution_error(
             "WORKFLOW_EXECUTION_REQUIRED",
             "Call run_workflow and inspect its outputs before run_acceptance for the current candidate",
         )
-    if not execution.passed:
+    if execution.passed is False:
         return error(
             call,
             "WORKFLOW_EXECUTION_REQUIRED",
             "The current run_workflow failed; repair the graph and run it again before run_acceptance",
+        )
+    if execution.passed is None and execution.verification_level != "structural_only":
+        return error(
+            call,
+            "WORKFLOW_EXECUTION_REQUIRED",
+            "The current workflow execution has no usable result",
         )
     return None
 

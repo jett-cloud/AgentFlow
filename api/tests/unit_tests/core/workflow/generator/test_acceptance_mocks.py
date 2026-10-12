@@ -5,6 +5,7 @@ from core.workflow.generator.acceptance.mocks import (
     MockGraphError,
     build_mocked_graph,
     build_node_probe_graph,
+    build_simulated_graph_scenarios,
     describe_mock_target,
 )
 from core.workflow.generator.graph.graph_ops import connect, empty_graph, upsert_node
@@ -110,6 +111,61 @@ def test_question_classifier_cannot_be_mocked() -> None:
     with pytest.raises(MockGraphError) as caught:
         build_mocked_graph(connect(graph, source="start", target="qc"), {})
     assert caught.value.code == "MOCK_UNSUPPORTED_NODE"
+
+
+def test_scenario_builder_covers_each_classifier_branch() -> None:
+    graph = upsert_node(
+        empty_graph(),
+        node_id="start",
+        node_type="start",
+        title="Start",
+        desc="",
+        config={"variables": [{"variable": "query", "type": "text-input", "required": True}]},
+    )
+    graph = upsert_node(
+        graph,
+        node_id="classifier",
+        node_type="question-classifier",
+        title="Classify",
+        desc="",
+        config={
+            "classes": [{"id": "yes", "name": "Yes"}, {"id": "no", "name": "No"}],
+            "query_variable_selector": ["start", "query"],
+        },
+    )
+    graph = upsert_node(graph, node_id="yes_end", node_type="end", title="Yes", desc="", config={})
+    graph = upsert_node(graph, node_id="no_end", node_type="end", title="No", desc="", config={})
+    graph = connect(graph, source="start", target="classifier")
+    graph = connect(graph, source="classifier", target="yes_end", source_handle="yes")
+    graph = connect(graph, source="classifier", target="no_end", source_handle="no")
+
+    scenarios = build_simulated_graph_scenarios(graph, {})
+
+    assert [scenario["selections"][0]["value"] for scenario in scenarios] == ["yes", "no"]
+    for scenario in scenarios:
+        selection = scenario["selections"][0]["value"]
+        classifier = next(node for node in scenario["graph"]["nodes"] if node["id"] == "classifier")
+        outgoing = [edge for edge in scenario["graph"]["edges"] if edge["source"] == "classifier"]
+        assert classifier["data"]["type"] == "code"
+        assert _run_fixture(classifier["data"]["code"])["class_id"] == selection
+        assert outgoing == [{"source": "classifier", "target": f"{selection}_end"}]
+
+
+def test_scenario_builder_preserves_human_input_for_pause_resume() -> None:
+    graph = upsert_node(
+        empty_graph(),
+        node_id="review",
+        node_type="human-input",
+        title="Review",
+        desc="",
+        config={"user_actions": [{"id": "approve", "title": "Approve"}]},
+    )
+
+    scenarios = build_simulated_graph_scenarios(graph, {})
+
+    assert len(scenarios) == 1
+    assert scenarios[0]["graph"]["nodes"][0]["data"]["type"] == "human-input"
+    assert scenarios[0]["fixtures"] == {}
 
 
 def test_probe_graph_keeps_start_fixes_ancestors_and_drops_descendants() -> None:

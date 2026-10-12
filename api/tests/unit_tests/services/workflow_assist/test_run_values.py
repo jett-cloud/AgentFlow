@@ -8,7 +8,7 @@ def test_tool_call_projects_server_owned_display_text() -> None:
     )
 
     assert projected["name"] == "run_workflow"
-    assert projected["display"] == {"visible": True, "text": "正在试运行工作流…"}
+    assert projected["display"] == {"visible": True, "text": "正在试运行工作流场景…"}
 
 
 def test_internal_tool_is_hidden_by_server_presentation() -> None:

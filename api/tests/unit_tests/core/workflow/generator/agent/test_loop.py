@@ -26,10 +26,21 @@ from tests.unit_tests.core.workflow.generator.node_fixtures import builder_confi
 
 
 def _intent(objective: str, *outputs: str, inputs: list[dict[str, object]] | None = None) -> dict[str, object]:
+    declared_inputs = inputs or []
+    references = " ".join(
+        "{{#" + ".".join(str(part) for part in source) + "#}}"
+        for item in declared_inputs
+        if isinstance((source := item.get("source")), list)
+    )
+    prompt = f"{objective} {references}".strip()
     return {
         "objective": objective,
-        "inputs": inputs or [],
         "outputs": [{"name": name} for name in outputs],
+        "structure": {
+            "kind": "llm",
+            "model": {"provider": "openai", "name": "gpt-4o"},
+            "prompt": [{"role": "user", "text": prompt}],
+        },
     }
 
 
@@ -198,7 +209,20 @@ def test_protocol_retry_can_commit_requested_start_update(loop_harness: SimpleNa
                 "arguments": {
                     "id": "start",
                     "mode": "update",
-                    "intent": _intent("删除 source_query，保留 eval_count。"),
+                    "intent": {
+                        "objective": "删除 source_query，保留 eval_count。",
+                        "structure": {
+                            "kind": "start",
+                            "variables": [
+                                {
+                                    "name": "eval_count",
+                                    "label": "评估次数",
+                                    "type": "number",
+                                    "required": True,
+                                }
+                            ],
+                        },
+                    },
                 },
             },
         ]
@@ -643,23 +667,25 @@ def test_max_model_calls_while_using_tools_is_error_not_done(loop_harness) -> No
     assert events[-1][1]["usage"]["model_calls"] == 1
 
 
-def test_builder_model_call_counts_toward_shared_run_budget(loop_harness) -> None:
+def test_typed_node_compile_does_not_consume_shared_model_budget(loop_harness) -> None:
     loop_harness.limits.max_model_calls = 2
-    loop_harness.context.env = replace(loop_harness.context.env, llm_client=_FakeLLM())  # type: ignore[arg-type]
+    client = _RecordingLoopLLM()
+    loop_harness.context.env = replace(loop_harness.context.env, llm_client=client)  # type: ignore[arg-type]
     loop_harness.invoker.queue_tool_calls([_create_call("create", "llm1")])
     loop_harness.invoker.queue_text("Created.")
 
     events = list(iter_agent_events(**loop_harness.kwargs))
 
-    assert events[-1][0] == "error"
-    assert events[-1][1]["termination_reason"] == "max_model_calls"
-    assert events[-1][1]["usage"]["model_calls"] == 2
-    assert loop_harness.invoker.invoke_count == 1
+    assert events[-1][0] == "turn_complete"
+    assert loop_harness.invoker.invoke_count == 2
+    assert client.user_prompts == []
+    assert find_node(loop_harness.context.state.graph, "llm1") is not None
 
 
-def test_container_child_builder_counts_toward_shared_run_budget(loop_harness) -> None:
+def test_typed_container_child_compile_does_not_consume_shared_model_budget(loop_harness) -> None:
     loop_harness.limits.max_model_calls = 2
-    loop_harness.context.env = replace(loop_harness.context.env, llm_client=_FakeLLM())  # type: ignore[arg-type]
+    client = _RecordingLoopLLM()
+    loop_harness.context.env = replace(loop_harness.context.env, llm_client=client)  # type: ignore[arg-type]
     call = _loop_create_call("loop-call", "loop1")
     call["arguments"]["logical_operator"] = "and"
     call["arguments"]["children"] = [
@@ -675,13 +701,12 @@ def test_container_child_builder_counts_toward_shared_run_budget(loop_harness) -
 
     events = list(iter_agent_events(**loop_harness.kwargs))
 
-    assert events[-1][0] == "error", [
+    assert events[-1][0] == "turn_complete", [
         events,
         [message.payload for message in loop_harness.session.messages if message.event_type == "tool_result"],
     ]
-    assert events[-1][1]["termination_reason"] == "max_model_calls"
-    assert events[-1][1]["usage"]["model_calls"] == 2
-    assert loop_harness.invoker.invoke_count == 1
+    assert loop_harness.invoker.invoke_count == 2
+    assert client.user_prompts == []
     assert "done" not in {name for name, _ in events}
 
 
@@ -808,15 +833,6 @@ class _FakeLLM:
     def iter_json(self, *, messages, stage):
         yield from ()
         return {"config": builder_config(messages, self.config)}
-
-
-class _QueuedFakeLLM:
-    def __init__(self, configs: list[dict[str, Any]]) -> None:
-        self.configs = list(configs)
-
-    def iter_json(self, *, messages, stage):
-        yield from ()
-        return {"config": builder_config(messages, self.configs.pop(0))}
 
 
 class _RecordingLoopLLM:
@@ -1425,9 +1441,7 @@ def test_next_build_does_not_see_previous_pending(loop_harness) -> None:
     assert loop_harness.context.state.pending_plan_nodes == ()
 
 
-def test_same_turn_consumer_builder_sees_confirmed_producer_outputs(loop_harness) -> None:
-    import json
-
+def test_same_turn_consumer_compiles_against_confirmed_producer_outputs(loop_harness) -> None:
     client = _RecordingLoopLLM()
     loop_harness.context.env = replace(loop_harness.context.env, llm_client=client)  # type: ignore[arg-type]
     start_purpose = (
@@ -1478,17 +1492,13 @@ def test_same_turn_consumer_builder_sees_confirmed_producer_outputs(loop_harness
     )
     loop_harness.invoker.queue_text("先这样")
     list(iter_agent_events(**loop_harness.kwargs))
-    assert any("id=llm1, type=llm" in prompt for prompt in client.user_prompts), [
-        client.user_prompts,
-        [message.payload for message in loop_harness.session.messages if message.event_type == "tool_result"],
-    ]
-    llm_prompt = next(prompt for prompt in client.user_prompts if "id=llm1, type=llm" in prompt)
-    marker = "# Normalized plan and topology"
-    _, _, rest = llm_prompt.partition(marker)
-    plan = json.loads(rest.strip().split("\n\n", 1)[0])
-    start = next(node for node in plan["nodes"] if node["id"] == "start")
-    assert start["outputs"] == ["query"]
-    assert start["outputs_kind"] == "confirmed"
+    assert client.user_prompts == []
+    start = find_node(loop_harness.context.state.graph, "start")
+    consumer = find_node(loop_harness.context.state.graph, "llm1")
+    assert start is not None
+    assert consumer is not None
+    assert start["data"]["variables"][0]["variable"] == "query"
+    assert "{{#start.query#}}" in consumer["data"]["prompt_template"][0]["text"]
 
 
 def test_same_turn_forward_dependency_requests_producer_first_without_mutation(loop_harness) -> None:
@@ -1576,8 +1586,6 @@ def test_loop_variable_selector_is_a_same_turn_data_dependency(loop_harness) -> 
 
 
 def test_three_level_dependency_chain_compiles_only_after_each_producer_commit(loop_harness) -> None:
-    import json
-
     client = _RecordingLoopLLM({"prompt_template": [{"role": "user", "text": "{{#transform.mid#}}"}]})
     loop_harness.context.env = replace(loop_harness.context.env, llm_client=client)  # type: ignore[arg-type]
     start = {
@@ -1640,16 +1648,13 @@ def test_three_level_dependency_chain_compiles_only_after_each_producer_commit(l
 
     list(iter_agent_events(**loop_harness.kwargs))
 
-    assert any("id=answer, type=llm" in prompt for prompt in client.user_prompts), [
-        client.user_prompts,
-        [message.payload for message in loop_harness.session.messages if message.event_type == "tool_result"],
-    ]
-    answer_prompt = next(prompt for prompt in client.user_prompts if "id=answer, type=llm" in prompt)
-    _, _, plan_text = answer_prompt.partition("# Normalized plan and topology")
-    plan = json.loads(plan_text.strip().split("\n\n", 1)[0])
-    producer = next(node for node in plan["nodes"] if node["id"] == "transform")
-    assert producer["outputs"] == ["mid"]
-    assert producer["outputs_kind"] == "confirmed"
+    assert client.user_prompts == []
+    producer = find_node(loop_harness.context.state.graph, "transform")
+    answer_node = find_node(loop_harness.context.state.graph, "answer")
+    assert producer is not None
+    assert answer_node is not None
+    assert producer["data"]["outputs"] == {"mid": {"type": "string", "children": None}}
+    assert "{{#transform.mid#}}" in answer_node["data"]["prompt_template"][0]["text"]
     assert loop_harness.session.candidate_revision == 3
 
 
@@ -1721,19 +1726,6 @@ def test_same_turn_tool_consumer_uses_confirmed_producer_output_type(loop_harnes
 
 
 def test_failed_producer_prevents_dependent_consumer_compile(loop_harness) -> None:
-    class FailingProducerBuilder:
-        def __init__(self) -> None:
-            self.targets: list[str] = []
-
-        def iter_json(self, *, messages, stage):
-            del stage
-            prompt = str(messages[-1].content)
-            self.targets.append("start" if "id=start, type=start" in prompt else "consumer")
-            raise RuntimeError("builder unavailable")
-            yield
-
-    client = FailingProducerBuilder()
-    loop_harness.context.env = replace(loop_harness.context.env, llm_client=client)  # type: ignore[arg-type]
     producer = {
         "id": "producer-call",
         "name": "build_node",
@@ -1742,7 +1734,7 @@ def test_failed_producer_prevents_dependent_consumer_compile(loop_harness) -> No
             "id": "start",
             "type": "start",
             "title": "Start",
-            "intent": _intent("Accept query", "query"),
+            "intent": {"objective": "Accept query"},
         },
     }
     consumer = {
@@ -1766,46 +1758,27 @@ def test_failed_producer_prevents_dependent_consumer_compile(loop_harness) -> No
     list(iter_agent_events(**loop_harness.kwargs))
 
     results = [message.payload for message in loop_harness.session.messages if message.event_type == "tool_result"]
-    assert client.targets == ["start"]
-    assert [result["error_code"] for result in results] == ["CAPABILITY_UNAVAILABLE", "DEPENDENCY_FAILED"]
+    assert [result["error_code"] for result in results] == ["MISSING_NODE_STRUCTURE"]
     assert loop_harness.session.candidate_revision == 0
+    assert find_node(loop_harness.context.state.graph, "consumer") is None
 
 
-def test_cancellation_during_producer_compile_discards_dependency_batch(loop_harness) -> None:
-    class CancellingBuilder:
-        def __init__(self) -> None:
-            self.targets: list[str] = []
+def test_cancellation_during_producer_compile_discards_dependency_batch(
+    loop_harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    compiled_ids: list[str] = []
+    real_compile = create_scheduler.compile_build_node
 
-        def iter_json(self, *, messages, stage):
-            del stage
-            prompt = str(messages[-1].content)
-            target = "start" if "id=start, type=start" in prompt else "consumer"
-            self.targets.append(target)
-            if target == "start":
-                loop_harness.cancellation.abort("user_abort")
-                yield from ()
-                return {
-                    "config": builder_config(
-                        messages,
-                        {
-                            "variables": [
-                                {
-                                    "variable": "query",
-                                    "label": "Query",
-                                    "type": "paragraph",
-                                    "required": True,
-                                    "max_length": 4096,
-                                    "options": [],
-                                }
-                            ]
-                        },
-                    )
-                }
+    def cancelling_compile(call, context):
+        node_id = call["arguments"]["id"]
+        compiled_ids.append(node_id)
+        if node_id != "start":
             raise AssertionError("cancelled dependency consumer must not compile")
-            yield
+        compiled = real_compile(call, context)
+        loop_harness.cancellation.abort("user_abort")
+        return compiled
 
-    client = CancellingBuilder()
-    loop_harness.context.env = replace(loop_harness.context.env, llm_client=client)  # type: ignore[arg-type]
+    monkeypatch.setattr(create_scheduler, "compile_build_node", cancelling_compile)
     producer = {
         "id": "producer-call",
         "name": "build_node",
@@ -1814,7 +1787,13 @@ def test_cancellation_during_producer_compile_discards_dependency_batch(loop_har
             "id": "start",
             "type": "start",
             "title": "Start",
-            "intent": _intent("Accept query", "query"),
+            "intent": {
+                "objective": "Accept query",
+                "structure": {
+                    "kind": "start",
+                    "variables": [{"name": "query", "label": "Query", "type": "paragraph"}],
+                },
+            },
         },
     }
     consumer = {
@@ -1837,7 +1816,7 @@ def test_cancellation_during_producer_compile_discards_dependency_batch(loop_har
     events = list(iter_agent_events(**loop_harness.kwargs))
 
     results = [message.payload for message in loop_harness.session.messages if message.event_type == "tool_result"]
-    assert client.targets == ["start"]
+    assert compiled_ids == ["start"]
     assert [result["error_code"] for result in results] == ["RUN_ABORTED", "RUN_ABORTED"]
     assert events[-1] == ("aborted", {"termination_reason": "user_abort"})
     assert loop_harness.session.candidate_revision == 0
@@ -1952,6 +1931,26 @@ def test_completion_reports_live_workflow_observation_separately_from_simulated_
     assert _verification_payload(loop_harness.context, structure_ok=True) == {
         "structure": "passed",
         "runtime": "live_passed",
+        "business": "unverified",
+    }
+
+
+def test_completion_reports_structural_only_skip_as_not_run(loop_harness) -> None:
+    graph = _connected_start_end()
+    graph_hash = canonical_graph_hash(graph)
+    loop_harness.context.state.graph = graph
+    loop_harness.context.state.candidate_revision = 4
+    loop_harness.context.state.graph_hash = graph_hash
+    loop_harness.context.state.last_workflow_execution = WorkflowExecutionRecord(
+        revision=4,
+        graph_hash=graph_hash,
+        passed=None,
+        verification_level="structural_only",
+    )
+
+    assert _verification_payload(loop_harness.context, structure_ok=True) == {
+        "structure": "passed",
+        "runtime": "not_run",
         "business": "unverified",
     }
 
@@ -2457,16 +2456,9 @@ def test_typed_tool_intent_self_repairs_missing_prompt_with_same_create_id_and_m
     assert sum(node["id"] == "image_1" for node in loop_harness.context.state.graph["nodes"]) == 1
 
 
-def test_non_tool_empty_prompt_is_repaired_once_and_committed_atomically(loop_harness) -> None:
-    loop_harness.context.env = replace(
-        loop_harness.context.env,
-        llm_client=_QueuedFakeLLM(
-            [
-                {"prompt_template": [{"role": "user", "text": ""}]},
-                {"prompt_template": [{"role": "user", "text": "总结输入。"}]},
-            ]
-        ),
-    )
+def test_missing_structure_is_rejected_without_model_repair(loop_harness) -> None:
+    client = _RecordingLoopLLM()
+    loop_harness.context.env = replace(loop_harness.context.env, llm_client=client)  # type: ignore[arg-type]
     loop_harness.invoker.queue_tool_calls(
         [
             {
@@ -2477,12 +2469,12 @@ def test_non_tool_empty_prompt_is_repaired_once_and_committed_atomically(loop_ha
                     "id": "llm_1",
                     "type": "llm",
                     "title": "摘要",
-                    "intent": _intent("总结输入"),
+                    "intent": {"objective": "总结输入"},
                 },
             }
         ]
     )
-    loop_harness.invoker.queue_text("已修复")
+    loop_harness.invoker.queue_text("需要补充结构。")
 
     list(iter_agent_events(**loop_harness.kwargs))
 
@@ -2491,10 +2483,11 @@ def test_non_tool_empty_prompt_is_repaired_once_and_committed_atomically(loop_ha
         for message in loop_harness.session.messages
         if message.event_type == "tool_result" and message.payload.get("name") == "build_node"
     ]
-    assert [result.get("error_code") for result in build_results] == [None]
-    assert loop_harness.session.candidate_revision == 1
-    assert loop_harness.context.state.candidate_revision == 1
-    assert sum(node["id"] == "llm_1" for node in loop_harness.context.state.graph["nodes"]) == 1
+    assert [result.get("error_code") for result in build_results] == ["MISSING_NODE_STRUCTURE"]
+    assert loop_harness.session.candidate_revision == 0
+    assert loop_harness.context.state.candidate_revision == 0
+    assert find_node(loop_harness.context.state.graph, "llm_1") is None
+    assert client.user_prompts == []
 
 
 def test_typed_tool_update_failure_is_atomic_and_revision_advances_only_after_repair(loop_harness) -> None:
@@ -2591,19 +2584,17 @@ class _FailThenPassRunner:
         ]
 
 
-class _ParseThenFixLLM:
-    def __init__(self) -> None:
-        self.parse_attempts = 0
-
-    def iter_json(self, *, messages, stage):
-        yield from ()
-        text = str(messages[-1].content)
-        if "id=node_parse" in text:
-            self.parse_attempts += 1
-            if self.parse_attempts == 1:
-                return {"config": {"outputs": {"questions": {"type": "array"}}}}
-            return {"config": builder_config(messages, {"outputs": {"questions": {"type": "array[object]"}}})}
-        return {"config": builder_config(messages)}
+def _code_intent(output_type: str) -> dict[str, object]:
+    return {
+        "objective": "Parse questions",
+        "outputs": [{"name": "questions", "type": output_type}],
+        "structure": {
+            "kind": "code",
+            "language": "python3",
+            "code": "def main():\n    return {'questions': []}",
+            "bindings": [],
+        },
+    }
 
 
 def test_invalid_code_create_retries_then_validates_and_finishes(loop_harness) -> None:
@@ -2616,7 +2607,6 @@ def test_invalid_code_create_retries_then_validates_and_finishes(loop_harness) -
     loop_harness.session.candidate_graph = graph
     loop_harness.context.env = replace(
         loop_harness.context.env,
-        llm_client=_ParseThenFixLLM(),  # type: ignore[arg-type]
         acceptance_runner=_PassRunner(),
     )
     loop_harness.invoker.queue_tool_calls(
@@ -2640,7 +2630,7 @@ def test_invalid_code_create_retries_then_validates_and_finishes(loop_harness) -
                     "id": "node_parse",
                     "type": "code",
                     "title": "解析",
-                    "intent": _intent("解析问题"),
+                    "intent": _code_intent("array"),
                 },
             },
             {"id": "e1", "name": "connect", "arguments": {"source": "start", "target": "node_parse"}},
@@ -2656,7 +2646,7 @@ def test_invalid_code_create_retries_then_validates_and_finishes(loop_harness) -
                     "id": "node_parse",
                     "type": "code",
                     "title": "解析",
-                    "intent": _intent("questions must be array[object]"),
+                    "intent": _code_intent("array[object]"),
                 },
             },
             {"id": "e2", "name": "connect", "arguments": {"source": "start", "target": "node_parse"}},
@@ -2674,7 +2664,7 @@ def test_invalid_code_create_retries_then_validates_and_finishes(loop_harness) -
     results = [message.payload for message in loop_harness.session.messages if message.event_type == "tool_result"]
     assert "waiting_user" not in names
     assert names[-1] == "done"
-    error_index = next(index for index, item in enumerate(results) if item.get("error_code") == "INVALID_CODE_OUTPUT")
+    error_index = next(index for index, item in enumerate(results) if item.get("error_code") == "INVALID_ARGUMENT")
     assert results[error_index]["retryable"] is True
     assert not any(item.get("name") == "connect" for item in results[: error_index + 1])
     assert any(item.get("name") == "connect" and item.get("ok") is True for item in results[error_index + 1 :])
@@ -2772,7 +2762,13 @@ def test_skill_lifecycle_empty_graph_create_validate_finish(loop_harness) -> Non
                     "id": "start",
                     "type": "start",
                     "title": "开始",
-                    "intent": _intent("accept query"),
+                    "intent": {
+                        "objective": "accept query",
+                        "structure": {
+                            "kind": "start",
+                            "variables": [{"name": "query", "label": "Query", "type": "paragraph"}],
+                        },
+                    },
                 },
             },
             {
@@ -2783,7 +2779,13 @@ def test_skill_lifecycle_empty_graph_create_validate_finish(loop_harness) -> Non
                     "id": "end",
                     "type": "end",
                     "title": "结束",
-                    "intent": _intent("return result"),
+                    "intent": {
+                        "objective": "return result",
+                        "structure": {
+                            "kind": "end",
+                            "outputs": [{"name": "result", "source": ["start", "query"]}],
+                        },
+                    },
                 },
             },
         ]
@@ -2840,18 +2842,24 @@ def test_skill_lifecycle_bind_resources_passes_exact_dataset_id(loop_harness) ->
                     "id": "kr",
                     "type": "knowledge-retrieval",
                     "title": "检索",
-                    "intent": _intent(
-                        "retrieve docs with dataset_ids=ds-exact",
-                        "result",
-                        inputs=[{"source": ["start", "query"], "role": "query"}],
-                    ),
+                    "intent": {
+                        "objective": "retrieve docs with dataset_ids=ds-exact",
+                        "structure": {
+                            "kind": "knowledge-retrieval",
+                            "dataset_ids": ["ds-exact"],
+                            "query": ["start", "query"],
+                        },
+                    },
                 },
             }
         ]
     )
     loop_harness.invoker.queue_text("先这样")
     list(iter_agent_events(**loop_harness.kwargs))
-    assert any("ds-exact" in prompt for prompt in client.user_prompts)
+    assert client.user_prompts == []
+    node = find_node(loop_harness.context.state.graph, "kr")
+    assert node is not None
+    assert node["data"]["dataset_ids"] == ["ds-exact"]
 
 
 def test_skill_lifecycle_local_edit_reads_then_updates(loop_harness) -> None:
@@ -2887,7 +2895,6 @@ def test_skill_lifecycle_invalid_code_activates_repair_and_recreates(loop_harnes
     loop_harness.limits.max_model_calls = 16
     loop_harness.context.env = replace(
         loop_harness.context.env,
-        llm_client=_ParseThenFixLLM(),  # type: ignore[arg-type]
         acceptance_runner=_PassRunner(),
     )
     loop_harness.invoker.queue_tool_calls([_activate_call("act", "create-from-scratch")])
@@ -2901,7 +2908,7 @@ def test_skill_lifecycle_invalid_code_activates_repair_and_recreates(loop_harnes
                     "id": "node_parse",
                     "type": "code",
                     "title": "解析",
-                    "intent": _intent("解析问题"),
+                    "intent": _code_intent("array"),
                 },
             },
             {"id": "e1", "name": "connect", "arguments": {"source": "start", "target": "node_parse"}},
@@ -2918,7 +2925,7 @@ def test_skill_lifecycle_invalid_code_activates_repair_and_recreates(loop_harnes
                     "id": "node_parse",
                     "type": "code",
                     "title": "解析",
-                    "intent": _intent("questions must be array[object]"),
+                    "intent": _code_intent("array[object]"),
                 },
             },
             {"id": "e2", "name": "connect", "arguments": {"source": "start", "target": "node_parse"}},
@@ -2933,7 +2940,7 @@ def test_skill_lifecycle_invalid_code_activates_repair_and_recreates(loop_harnes
     results = [message.payload for message in loop_harness.session.messages if message.event_type == "tool_result"]
     assert "waiting_user" not in names
     assert names[-1] == "done"
-    assert any(item.get("error_code") == "INVALID_CODE_OUTPUT" for item in results)
+    assert any(item.get("error_code") == "INVALID_ARGUMENT" for item in results)
     recreates = [
         message.payload
         for message in loop_harness.session.messages

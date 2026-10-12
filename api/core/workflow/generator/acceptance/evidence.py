@@ -61,6 +61,18 @@ class AcceptanceAssertionResult(TypedDict):
     actual: object
 
 
+class VerificationScenarioResult(TypedDict):
+    """One bounded branch/action scenario observed by the Assist executor."""
+
+    scenario_id: str
+    selections: list[dict[str, str]]
+    passed: bool
+    executed_node_ids: list[str]
+    node_outputs: NotRequired[dict[str, dict[str, object]]]
+    graph_outputs: dict[str, object]
+    failed_nodes: list[FailedNodeTrace]
+
+
 class AcceptanceAttempt(TypedDict):
     """One sandbox case run against a frozen candidate."""
 
@@ -80,6 +92,7 @@ class AcceptanceAttempt(TypedDict):
     assertions: NotRequired[list[AcceptanceAssertionResult]]
     runtime_contract_passed: NotRequired[bool]
     business_verified: NotRequired[bool]
+    scenario_results: NotRequired[list[VerificationScenarioResult]]
     contract_revision: NotRequired[int]
     contract_hash: NotRequired[str]
     app_mode: NotRequired[str]
@@ -95,12 +108,14 @@ class GraphExecutionTrace(list[FailedNodeTrace]):  # noqa: FURB189 -- preserve J
     executed_node_ids: set[str]
     node_outputs: dict[str, dict[str, object]]
     graph_outputs: dict[str, object]
+    scenario_results: list[VerificationScenarioResult]
 
     def __init__(self) -> None:
         super().__init__()
         self.executed_node_ids: set[str] = set()
         self.node_outputs = {}
         self.graph_outputs = {}
+        self.scenario_results = []
 
 
 class AcceptanceRunner(Protocol):

@@ -16,9 +16,9 @@ from core.app.app_config.entities import WorkflowUIBasedAppConfig
 from core.app.entities.app_invoke_entities import InvokeFrom, WorkflowAppGenerateEntity
 from core.app.entities.task_entities import StreamEvent
 from core.app.layers.pause_state_persist_layer import WorkflowResumptionContext, _WorkflowGenerateEntityWrapper
-from core.workflow.nodes.human_input.human_input_policy import FormDisposition, HumanInputSurface
 from core.workflow.nodes.human_input.entities import SelectInputConfig, StringListSource
 from core.workflow.nodes.human_input.enums import ValueSourceType
+from core.workflow.nodes.human_input.human_input_policy import FormDisposition, HumanInputSurface
 from core.workflow.nodes.human_input.pause_reason import HumanInputRequired
 from graphon.enums import WorkflowExecutionStatus, WorkflowNodeExecutionStatus
 from graphon.runtime import GraphRuntimeState, VariablePool
@@ -137,8 +137,7 @@ def _build_resumption_context(task_id: str, *, select_options: list[str] | None 
     runtime_state = GraphRuntimeState(variable_pool=VariablePool(), start_at=0.0)
     if select_options is not None:
         runtime_state.variable_pool.add(("start", "options"), select_options)
-    runtime_state.register_paused_node("node-1")
-    runtime_state.outputs = {"result": "value"}
+    runtime_state.set_output("result", "value")
     wrapper = _WorkflowGenerateEntityWrapper(entity=generate_entity)
     return WorkflowResumptionContext(
         generate_entity=wrapper,
@@ -243,7 +242,7 @@ def _build_resumption_context_additional(task_id: str) -> WorkflowResumptionCont
         workflow_execution_id="run-1",
     )
     runtime_state = GraphRuntimeState(variable_pool=VariablePool(), start_at=0.0)
-    runtime_state.outputs = {"answer": "ok"}
+    runtime_state.set_output("answer", "ok")
     wrapper = _WorkflowGenerateEntityWrapper(entity=generate_entity)
     return WorkflowResumptionContext(
         generate_entity=wrapper,
@@ -805,6 +804,7 @@ def test_build_snapshot_events_preserves_public_form_token(monkeypatch: pytest.M
     assert events[-2]["data"]["form_token"] == "wtok"
     assert events[-2]["data"]["expiration_time"] == int(datetime(2024, 1, 1, tzinfo=UTC).timestamp())
     pause_data = events[-1]["data"]
+    assert pause_data["paused_nodes"] == ["node-1"]
     assert pause_data["reasons"][0]["form_token"] == "wtok"
     assert pause_data["reasons"][0]["expiration_time"] == int(datetime(2024, 1, 1, tzinfo=UTC).timestamp())
 

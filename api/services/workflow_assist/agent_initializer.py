@@ -3,9 +3,8 @@
 HTTP SSE and durable Celery runs share this initializer so ``core`` stays free of
 service imports. Catalogue snapshots are captured once per run (``limit=None``)
 onto ``ToolContext``. Discovery is ``search_*``; a failed pull sets that side
-``available=false`` and ``installed_*=None``. The frozen ``BuilderInput`` does
-not contain the Tool catalogue. Agent-node builds receive only their explicitly
-selected short entries; Tool nodes bypass the Builder entirely.
+``available=false`` and ``installed_*=None``. Ordinary nodes are compiled from
+typed intent; Tool and Agent nodes continue through their dedicated compilers.
 
 Runaway thresholds are ``WorkflowConfig`` fields on ``dify_config``
 (``WORKFLOW_ASSIST_MAX_MODEL_CALLS`` and siblings), not getattr fallbacks.
@@ -20,6 +19,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass
 from typing import Any, Literal, Protocol, cast
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from configs import dify_config
@@ -32,7 +32,6 @@ from core.workflow.generator.agent.loop import SYSTEM_PROMPT, iter_agent_events
 from core.workflow.generator.agent.session import WorkflowAssistMessageRow, apply_user_turn, restore_session
 from core.workflow.generator.agent.tools.tools import TOOL_SCHEMAS, ToolContext, ToolEnv, ToolTurnState
 from core.workflow.generator.agent.types import AgentEvent, AgentMessage, AgentSession, CandidateState
-from core.workflow.generator.compiler.node_builder import BuilderInput
 from core.workflow.generator.graph.graph_ops import empty_graph
 from core.workflow.generator.graph.types import MinimalGraphDict
 from core.workflow.generator.model_io.llm_response import LLMJsonClient, ModelInvoker
@@ -44,7 +43,6 @@ from core.workflow.generator.prompts.output_language import (
 )
 from core.workflow.generator.resources.knowledge_catalogue import (
     KnowledgeCatalogueEntry,
-    format_knowledge_catalogue,
     installed_dataset_keys,
 )
 from core.workflow.generator.resources.model_catalogue import AgentModelCatalogueEntry
@@ -56,8 +54,9 @@ from graphon.model_runtime.entities.message_entities import (
     UserPromptMessage,
 )
 from graphon.model_runtime.entities.model_entities import ModelFeature, ModelType
-from models import Account, App
+from models import Account, AccountStatus, App, TenantAccountJoin
 from models.workflow_assist import WorkflowAssistConversation, WorkflowAssistMessage
+from services.feature_service import FeatureService
 from services.workflow_assist.graph_executor import build_acceptance_graph_executor
 from services.workflow_assist.hydrate import hydrate_agent_bindings
 from services.workflow_assist.knowledge_catalogue_loader import build_knowledge_catalogue
@@ -71,7 +70,7 @@ from services.workflow_assist.model_catalogue import build_agent_model_catalogue
 from services.workflow_assist.run_types import AGENT_RESPONSE_OUTBOX_KEY, RunLease, RunOwner
 from services.workflow_assist.sandbox import build_acceptance_runner
 from services.workflow_assist.tool_catalogue_loader import build_tool_catalogue
-from services.workflow_assist.turn_references import append_hard_bound_resources, bind_session_references
+from services.workflow_assist.turn_references import bind_session_references
 from services.workflow_assist.validation_context import namespace_names
 from services.workflow_service import WorkflowService
 
@@ -377,27 +376,96 @@ def _agent_model_catalogue_snapshot(
         return (), False
 
 
+def _human_input_capability_snapshot(
+    tenant_id: str,
+    session: Session,
+) -> tuple[frozenset[str] | None, frozenset[str] | None]:
+    """Return delivery capabilities and real member ids without email addresses."""
+    capabilities = {"webapp"}
+    if not dify_config.MAIL_TYPE:
+        return frozenset(capabilities), frozenset()
+    try:
+        features = FeatureService.get_features(tenant_id, exclude_vector_space=True)
+        if features.human_input_email_delivery_enabled:
+            capabilities.add("email")
+    except Exception:
+        logger.exception("Workflow assist: Human Input capability snapshot failed for tenant %s", tenant_id)
+        return None, None
+    if "email" not in capabilities:
+        return frozenset(capabilities), frozenset()
+    try:
+        member_ids = session.scalars(
+            select(Account.id)
+            .join(TenantAccountJoin, TenantAccountJoin.account_id == Account.id)
+            .where(
+                TenantAccountJoin.tenant_id == tenant_id,
+                Account.status == AccountStatus.ACTIVE,
+            )
+        ).all()
+    except Exception:
+        logger.exception("Workflow assist: workspace member snapshot failed for tenant %s", tenant_id)
+        return frozenset(capabilities), None
+    return frozenset(capabilities), frozenset(str(item) for item in member_ids)
+
+
 def _namespace_names_from_serialized(raw: str) -> set[str]:
     """Collect variable names from draft JSON without decrypting Secret values."""
     return namespace_names(raw)
 
 
-def _draft_namespace_names(app_model: App, session: Session) -> tuple[set[str] | None, set[str] | None]:
-    """Return env/conversation names, or ``None`` when that side could not load."""
+def _draft_variable_snapshots(
+    app_model: App,
+    session: Session,
+) -> tuple[
+    set[str] | None,
+    set[str] | None,
+    dict[str, str] | None,
+    frozenset[str] | None,
+]:
+    """Load names, conversation types, and writability from one draft snapshot."""
     try:
         draft = WorkflowService().get_draft_workflow(app_model=app_model, session=session)
     except Exception:
         logger.exception("Workflow assist: failed to load draft namespaces for app %s", app_model.id)
-        return None, None
+        return None, None, None, None
     if draft is None:
-        return None, None
+        return None, None, None, None
     try:
         env_names = _namespace_names_from_serialized(getattr(draft, "_environment_variables", "") or "{}")
-        conv_names = _namespace_names_from_serialized(getattr(draft, "_conversation_variables", "") or "{}")
+        raw_conversation = getattr(draft, "_conversation_variables", "") or "{}"
+        conv_names = _namespace_names_from_serialized(raw_conversation)
+        payload = json.loads(raw_conversation)
+        if not isinstance(payload, dict):
+            raise ValueError("conversation variable namespace must be an object")
+        types = {
+            str(item["name"]): str(item["value_type"])
+            for item in payload.values()
+            if isinstance(item, dict)
+            and isinstance(item.get("name"), str)
+            and item["name"]
+            and isinstance(item.get("value_type"), str)
+            and item["value_type"]
+        }
     except Exception:
         logger.exception("Workflow assist: failed to parse draft namespaces for app %s", app_model.id)
-        return None, None
-    return env_names, conv_names
+        return None, None, None, None
+    writable = frozenset(name for name, value_type in types.items() if value_type != "secret")
+    return env_names, conv_names, types, writable
+
+
+def _draft_namespace_names(app_model: App, session: Session) -> tuple[set[str] | None, set[str] | None]:
+    """Compatibility projection of the combined draft variable snapshot."""
+    environment, conversation, _types, _writable = _draft_variable_snapshots(app_model, session)
+    return environment, conversation
+
+
+def _draft_conversation_variable_metadata(
+    app_model: App,
+    session: Session,
+) -> tuple[dict[str, str] | None, frozenset[str] | None]:
+    """Compatibility projection of conversation metadata without values."""
+    _environment, _conversation, types, writable = _draft_variable_snapshots(app_model, session)
+    return types, writable
 
 
 def _draft_workflow_id(app_model: App, session: Session) -> str:
@@ -446,41 +514,6 @@ def session_output_language(session: AgentSession, instruction: str) -> OutputLa
         if isinstance(text, str):
             instructions.append(text)
     return resolve_output_language([*instructions, instruction])
-
-
-def _builder_input(
-    model_config: ModelConfig | None,
-    generation_mode: WorkflowGenerationMode,
-    instruction: str,
-    current_graph: dict[str, Any] | None,
-    *,
-    output_language: OutputLanguage,
-    tool_entries: list[ToolCatalogueEntry],
-    knowledge_entries: list[KnowledgeCatalogueEntry],
-    tools_available: bool,
-    knowledge_available: bool,
-    references: list[dict[str, Any]] | None = None,
-) -> BuilderInput:
-    """Create frozen Builder context without copying the Tool snapshot.
-
-    The complete Tool catalogue lives only on ``ToolEnv``. ``compile_build_node``
-    derives a per-Agent-node BuilderInput containing selected short entries.
-    """
-    return BuilderInput(
-        provider=model_config.provider if model_config else "openai",
-        model_name=model_config.name if model_config else "gpt-4o",
-        model_mode=str(model_config.mode) if model_config else "chat",
-        mode=generation_mode,
-        instruction=append_hard_bound_resources(instruction, references),
-        ideal_output="",
-        plan_nodes=[],
-        plan_edges=[],
-        tool_catalogue_text="",
-        knowledge_catalogue_text=format_knowledge_catalogue(knowledge_entries) if knowledge_available else "",
-        start_inputs=[],
-        current_graph=current_graph,
-        output_language=output_language,
-    )
 
 
 _USE_CONVERSATION_PROTOCOL = object()
@@ -626,7 +659,15 @@ def build_http_tool_context(
     )
     bound_hydrate = hydrate_graph if hydrate_graph is not None else _bind_hydrate(db_session, app_model, account)
     graph = agent_session.candidate_graph if isinstance(agent_session.candidate_graph, dict) else empty_graph()
-    environment_variables, conversation_variables = _draft_namespace_names(app_model, db_session)
+    (
+        environment_variables,
+        conversation_variables,
+        conversation_variable_types,
+        writable_conversation_variables,
+    ) = _draft_variable_snapshots(app_model, db_session)
+    human_delivery_capabilities, human_member_reference_ids = _human_input_capability_snapshot(
+        str(app_model.tenant_id), db_session
+    )
     draft_workflow_id = _draft_workflow_id(app_model, db_session)
     context = ToolContext(
         env=ToolEnv(
@@ -639,21 +680,10 @@ def build_http_tool_context(
             installed_dataset_ids=installed_datasets,
             knowledge_available=knowledge_available,
             tools_available=tools_available,
-            builder_input=_builder_input(
-                model_config,
-                generation_mode,
-                message,
-                current_graph,
-                output_language=session_output_language(agent_session, message),
-                tool_entries=tool_entries,
-                knowledge_entries=knowledge_entries,
-                tools_available=tools_available,
-                knowledge_available=knowledge_available,
-                references=references,
-            ),
             llm_client=runtime.json_client,
             agent_model_entries=agent_model_entries,
             models_available=models_available,
+            output_language=session_output_language(agent_session, message),
             hydrate_graph=bound_hydrate,
             acceptance_runner=build_acceptance_runner(
                 tenant_id=str(app_model.tenant_id),
@@ -663,6 +693,11 @@ def build_http_tool_context(
             ),
             environment_variables=environment_variables,
             conversation_variables=conversation_variables,
+            conversation_variable_types=conversation_variable_types,
+            writable_conversation_variables=writable_conversation_variables,
+            http_credential_reference_ids=frozenset(),
+            human_input_delivery_capabilities=human_delivery_capabilities,
+            human_input_member_reference_ids=human_member_reference_ids,
             contract_rollout_stage=str(dify_config.WORKFLOW_ASSIST_CONTRACT_ROLLOUT),
         ),
         state=ToolTurnState(
@@ -721,8 +756,16 @@ def run_workflow_assist_agent(
         graph = session.candidate_graph if isinstance(session.candidate_graph, dict) else empty_graph()
         bound_hydrate = hydrate_graph or _bind_durable_hydrate(context)
         with session_factory.create_session() as db_session:
-            environment_variables, conversation_variables = _draft_namespace_names(context.app_model, db_session)
+            (
+                environment_variables,
+                conversation_variables,
+                conversation_variable_types,
+                writable_conversation_variables,
+            ) = _draft_variable_snapshots(context.app_model, db_session)
             draft_workflow_id = _draft_workflow_id(context.app_model, db_session)
+            human_delivery_capabilities, human_member_reference_ids = _human_input_capability_snapshot(
+                str(context.app_model.tenant_id), db_session
+            )
         live_record = getattr(context.run, "live_acceptance", None)
         consent_mode = normalize_execution_consent_mode(getattr(context.run, "execution_consent_mode", None))
         tool_context = ToolContext(
@@ -736,21 +779,10 @@ def run_workflow_assist_agent(
                 installed_dataset_ids=installed_dataset_keys(knowledge_entries),
                 knowledge_available=True,
                 tools_available=True,
-                builder_input=_builder_input(
-                    model_config,
-                    generation_mode,
-                    str(context.run.input),
-                    dict(graph),
-                    output_language=output_language,
-                    tool_entries=tool_entries,
-                    knowledge_entries=knowledge_entries,
-                    tools_available=True,
-                    knowledge_available=True,
-                    references=getattr(context.run, "references", None),
-                ),
                 llm_client=runtime.json_client,
                 agent_model_entries=agent_model_entries,
                 models_available=models_available,
+                output_language=output_language,
                 hydrate_graph=bound_hydrate,
                 acceptance_runner=build_acceptance_runner(
                     tenant_id=str(context.app_model.tenant_id),
@@ -762,6 +794,11 @@ def run_workflow_assist_agent(
                 authorize_live_acceptance=_durable_live_authorizer(context),
                 environment_variables=environment_variables,
                 conversation_variables=conversation_variables,
+                conversation_variable_types=conversation_variable_types,
+                writable_conversation_variables=writable_conversation_variables,
+                http_credential_reference_ids=frozenset(),
+                human_input_delivery_capabilities=human_delivery_capabilities,
+                human_input_member_reference_ids=human_member_reference_ids,
                 run_id=str(context.run.id),
                 run_epoch=context.run.epoch,
                 contract_rollout_stage=str(getattr(context.run, "contract_rollout_stage", None) or "default"),

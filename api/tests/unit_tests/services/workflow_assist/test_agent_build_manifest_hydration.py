@@ -5,12 +5,11 @@ from typing import Any, cast
 import pytest
 from sqlalchemy import func, select
 
-from core.workflow.generator.graph.graph_ops import connect, empty_graph, find_node, upsert_node
 from core.workflow.generator.agent.tools.tool_context import ToolEnv, ToolTurnState
 from core.workflow.generator.agent.tools.tools import ToolContext, dispatch
 from core.workflow.generator.agent.types import ToolCall
+from core.workflow.generator.graph.graph_ops import connect, empty_graph, find_node, upsert_node
 from core.workflow.generator.model_io.llm_response import LLMJsonClient, ModelInvoker
-from core.workflow.generator.compiler.node_builder import BuilderInput
 from models.agent import Agent, AgentConfigRevision, AgentConfigSnapshot, AgentScope, AgentSource, AgentStatus
 from models.agent_config_entities import AgentSoulConfig
 from services.agent.errors import InvalidComposerConfigError
@@ -186,24 +185,6 @@ def _call(name: str, **arguments: object) -> ToolCall:
     return {"id": "c1", "name": name, "arguments": arguments}
 
 
-def _builder_input() -> BuilderInput:
-    return BuilderInput(
-        provider="openai",
-        model_name="gpt-4o",
-        model_mode="chat",
-        mode="workflow",
-        instruction="生成工作流",
-        ideal_output="",
-        plan_nodes=[],
-        plan_edges=[],
-        tool_catalogue_text="",
-        knowledge_catalogue_text="",
-        start_inputs=[],
-        current_graph=None,
-        output_language="zh-Hans",
-    )
-
-
 def _tool_context(graph: dict[str, Any]) -> ToolContext:
     return ToolContext(
         env=ToolEnv(
@@ -215,7 +196,6 @@ def _tool_context(graph: dict[str, Any]) -> ToolContext:
             installed_dataset_ids={"ds-1"},
             knowledge_available=True,
             tools_available=True,
-            builder_input=_builder_input(),
             llm_client=LLMJsonClient(model_instance=cast("ModelInvoker", object()), model_parameters={}),
             agent_model_entries=(
                 {
@@ -226,6 +206,7 @@ def _tool_context(graph: dict[str, Any]) -> ToolContext:
                 },
             ),
             models_available=True,
+            output_language="zh-Hans",
             hydrate_graph=None,
         ),
         state=ToolTurnState(graph=graph),

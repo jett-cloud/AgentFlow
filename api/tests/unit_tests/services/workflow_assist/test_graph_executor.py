@@ -24,7 +24,7 @@ from services.workflow_assist.graph_executor import (
     execute_acceptance_graph,
     failed_traces_from_events,
 )
-from services.workflow_assist.sandbox import build_acceptance_runner
+from services.workflow_assist.sandbox import WorkflowAssistAcceptanceRunner, build_acceptance_runner
 
 
 def _start_end():
@@ -268,7 +268,7 @@ def test_execute_acceptance_graph_uses_draft_workflow_id(monkeypatch) -> None:
 
     def _capture(graph, **kwargs):
         captured.update(kwargs)
-        return MagicMock()
+        return MagicMock(), MagicMock()
 
     monkeypatch.setattr("services.workflow_assist.graph_executor._build_acceptance_engine", _capture)
     monkeypatch.setattr(
@@ -290,7 +290,7 @@ def test_execute_acceptance_graph_uses_draft_workflow_id(monkeypatch) -> None:
 def test_execute_acceptance_graph_maps_engine_failures(monkeypatch) -> None:
     monkeypatch.setattr(
         "services.workflow_assist.graph_executor._build_acceptance_engine",
-        lambda graph, **kwargs: MagicMock(),
+        lambda graph, **kwargs: (MagicMock(), MagicMock()),
     )
     monkeypatch.setattr(
         "services.workflow_assist.graph_executor.iter_dify_graph_engine_events",
@@ -305,6 +305,146 @@ def test_execute_acceptance_graph_maps_engine_failures(monkeypatch) -> None:
     )
     assert traces[0]["id"] == "code"
     assert traces[0]["error"] == "Acceptance execution failed (runtime)"
+
+
+def _prepared_human_input_branches():
+    graph = assemble_graph(
+        plan_nodes=[
+            {"id": "start", "label": "Start", "node_type": "start", "purpose": "Start"},
+            {
+                "id": "review",
+                "label": "Review",
+                "node_type": "human-input",
+                "purpose": "Ask a person",
+            },
+            {
+                "id": "approve_end",
+                "label": "Approved",
+                "node_type": "end",
+                "purpose": "Finish approve",
+            },
+            {
+                "id": "reject_end",
+                "label": "Rejected",
+                "node_type": "end",
+                "purpose": "Finish reject",
+            },
+        ],
+        plan_edges=[
+            {"source": "start", "target": "review"},
+            {"source": "review", "target": "approve_end", "source_handle": "approve"},
+            {"source": "review", "target": "reject_end", "source_handle": "reject"},
+        ],
+        configs_by_id={
+            "start": {"variables": []},
+            "review": {
+                "delivery_methods": [{"type": "webapp", "enabled": True}],
+                "form_content": "Please review {{#$output.comment#}}",
+                "inputs": [
+                    {
+                        "type": "paragraph",
+                        "output_variable_name": "comment",
+                        "default": {"type": "constant", "selector": [], "value": ""},
+                    }
+                ],
+                "user_actions": [
+                    {"id": "approve", "title": "Approve", "button_style": "primary"},
+                    {"id": "reject", "title": "Reject", "button_style": "default"},
+                ],
+                "timeout": 3,
+                "timeout_unit": "day",
+            },
+            "approve_end": {
+                "outputs": [
+                    {
+                        "variable": "action",
+                        "value_selector": ["review", "__action_id"],
+                        "value_type": "string",
+                    }
+                ]
+            },
+            "reject_end": {
+                "outputs": [
+                    {
+                        "variable": "action",
+                        "value_selector": ["review", "__action_id"],
+                        "value_type": "string",
+                    }
+                ]
+            },
+        },
+        existing_by_id={},
+    )
+    return postprocess_graph(graph=graph, mode="workflow")
+
+
+def test_execute_acceptance_graph_resumes_every_human_input_action() -> None:
+    graph = _prepared_human_input_branches()
+    assert validate_graph(graph=graph, mode="workflow") == []
+
+    trace = execute_acceptance_graph(
+        graph,
+        tenant_id="tenant",
+        app_id="app",
+        user_id="user",
+        mode="simulated",
+    )
+
+    assert trace == []
+    assert len(trace.scenario_results) == 2
+    by_action = {
+        result["selections"][-1]["value"]: result
+        for result in trace.scenario_results
+    }
+    assert set(by_action) == {"approve", "reject"}
+    assert by_action["approve"]["passed"] is True
+    assert "approve_end" in by_action["approve"]["executed_node_ids"]
+    assert "reject_end" not in by_action["approve"]["executed_node_ids"]
+    assert by_action["reject"]["passed"] is True
+    assert "reject_end" in by_action["reject"]["executed_node_ids"]
+    assert "approve_end" not in by_action["reject"]["executed_node_ids"]
+
+
+def test_acceptance_evaluates_terminal_contract_for_each_human_action() -> None:
+    graph = _prepared_human_input_branches()
+    runner = WorkflowAssistAcceptanceRunner(
+        execute_graph=lambda candidate, mode, inputs: execute_acceptance_graph(
+            candidate,
+            tenant_id="tenant",
+            app_id="app",
+            user_id="user",
+            mode=mode,
+            start_inputs=inputs,
+        )
+    )
+
+    attempt = runner.run(
+        graph=graph,
+        revision=1,
+        graph_hash="hash",
+        case_ids=["default"],
+        mode="simulated",
+    )[0]
+
+    assert attempt["passed"] is True
+    assert len(attempt["scenario_results"]) == 2
+    assert all(result["passed"] for result in attempt["scenario_results"])
+    assertion_paths = {item["path"] for item in attempt["assertions"]}
+    assert any(path.endswith("outputs.action") for path in assertion_paths)
+
+
+def test_live_human_input_action_enumeration_is_rejected() -> None:
+    trace = execute_acceptance_graph(
+        _prepared_human_input_branches(),
+        tenant_id="tenant",
+        app_id="app",
+        user_id="user",
+        mode="live",
+        live_authorized=True,
+    )
+
+    assert trace[0]["category"] == "policy"
+    assert "requires simulated mode" in trace[0]["error"]
 
 
 def test_execute_acceptance_graph_does_not_attach_persistence(monkeypatch) -> None:

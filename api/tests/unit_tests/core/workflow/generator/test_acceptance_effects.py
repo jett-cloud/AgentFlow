@@ -1,4 +1,9 @@
-from core.workflow.generator.acceptance.effects import classify_effect, classify_node_effect, external_node_ids
+from core.workflow.generator.acceptance.effects import (
+    classify_effect,
+    classify_node_effect,
+    external_node_ids,
+    workflow_execution_blockers,
+)
 from services.workflow_assist import effect_policy
 
 
@@ -32,3 +37,27 @@ def test_external_node_ids_lists_every_node_that_is_not_free() -> None:
 def test_service_policy_reexports_core_classification() -> None:
     assert effect_policy.classify_node_effect is classify_node_effect
     assert effect_policy.classify_effect is classify_effect
+
+
+def test_workflow_execution_blockers_only_reports_unregistered_node_types() -> None:
+    graph = {
+        "nodes": [
+            {"id": "start", "data": {"type": "start"}},
+            {"id": "extract", "data": {"type": "document-extractor"}},
+            {"id": "review", "data": {"type": "human-input"}},
+            {"id": "llm", "data": {"type": "llm"}},
+            {"id": "http", "data": {"type": "http-request"}},
+            {"id": "future", "data": {"type": "future-plugin"}},
+            {"id": "end", "data": {"type": "end"}},
+        ],
+        "edges": [],
+        "viewport": {"x": 0, "y": 0, "zoom": 1},
+    }
+
+    assert workflow_execution_blockers(graph) == [
+        {
+            "node_id": "future",
+            "type": "future-plugin",
+            "reason": "no Workflow Assist verification capability is registered",
+        },
+    ]

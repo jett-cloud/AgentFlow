@@ -280,7 +280,9 @@ def _verification_payload(context: ToolContext, *, structure_ok: bool) -> dict[s
         and execution.graph_hash == context.state.graph_hash
         else None
     )
-    if current_execution is not None and not current_execution.passed:
+    if current_execution is not None and current_execution.verification_level == "structural_only":
+        runtime = "not_run"
+    elif current_execution is not None and not current_execution.passed:
         runtime = "failed"
     elif current_execution is not None and current_execution.verification_level == "live":
         runtime = "live_passed"

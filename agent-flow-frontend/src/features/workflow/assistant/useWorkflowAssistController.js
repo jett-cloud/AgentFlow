@@ -1,6 +1,7 @@
 import {
   assistErrorAction,
   assistErrorsFromAxios,
+  assistErrorsFromStreamEvent,
 } from './assistErrors.js'
 import {
   appendAssistStatusMessage,
@@ -516,8 +517,10 @@ export function useWorkflowAssistController({
       dispatch({ type: 'SSE', ...normalized })
     if (event?.event === 'failed' || event?.event === 'aborted' || event?.event === 'error') {
       messages.value = failAssistActivity(messages.value)
-      const streamErrors = Array.isArray(normalized.errors) ? normalized.errors : []
-      if (event?.event === 'error' && streamErrors.length)
+      const streamErrors = event?.event === 'aborted'
+        ? []
+        : assistErrorsFromStreamEvent(normalized, currentLanguage())
+      if (streamErrors.length)
         onErrors(streamErrors)
       const statusText = state.value.statusMessage || normalized.reason || normalized.message || ''
       const errorDetail = String(streamErrors[0]?.detail || '')

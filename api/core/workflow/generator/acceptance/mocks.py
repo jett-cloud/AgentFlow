@@ -16,7 +16,8 @@ import re
 from collections import deque
 from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any
+from itertools import product
+from typing import Any, TypedDict
 
 from core.workflow.generator.acceptance.effects import classify_node_effect, external_node_ids
 from core.workflow.generator.graph.types import MinimalGraphDict, MinimalGraphEdgeDict, MinimalGraphNodeDict
@@ -24,6 +25,9 @@ from core.workflow.generator.variables.declarations import declared_output_schem
 
 PROBE_END_ID = "assist_probe_end"
 MOCK_UNSUPPORTED_NODE_TYPES = frozenset({"question-classifier", "human-input"})
+_SCENARIO_BRANCH_NODE_TYPES = frozenset({"question-classifier"})
+_SCENARIO_PRESERVED_NODE_TYPES = frozenset({"human-input"})
+_MAX_VERIFICATION_SCENARIOS = 12
 _PROBE_UNSUPPORTED_TYPES = frozenset({"start", "end", "answer", "loop", "iteration"})
 _SCOPE_KEYS = ("isInIteration", "isInLoop", "iteration_id", "loop_id")
 _FILE_TYPES = frozenset({"file", "files", "file-list", "array[file]", "arrayFile"})
@@ -60,6 +64,13 @@ _EXCERPT_CHARS = 600
 _PLACEHOLDER_DEPTH = 4
 
 Fixtures = dict[str, dict[str, object]]
+
+
+class SimulatedGraphScenario(TypedDict):
+    scenario_id: str
+    graph: MinimalGraphDict
+    fixtures: Fixtures
+    selections: list[dict[str, str]]
 
 
 class MockGraphError(ValueError):
@@ -167,6 +178,105 @@ def build_mocked_graph(
         "viewport": deepcopy(graph["viewport"]),
     }
     return mocked, applied
+
+
+def build_simulated_graph_scenarios(
+    graph: MinimalGraphDict,
+    mocks: Mapping[str, Mapping[str, object]],
+    *,
+    max_scenarios: int = _MAX_VERIFICATION_SCENARIOS,
+) -> list[SimulatedGraphScenario]:
+    """Build bounded simulated graphs while preserving Human Input pause semantics.
+
+    Ordinary external nodes become fixed-output Code nodes. Every Question
+    Classifier class becomes a branch scenario by retaining only the matching
+    outgoing edge. Human Input nodes remain real so the service executor can
+    pause, clone the runtime snapshot and resume once per configured action.
+    """
+
+    by_id = {node["id"]: node for node in graph.get("nodes") or []}
+    external = set(external_node_ids(graph))
+    mockable = {
+        node_id
+        for node_id in external
+        if _node_type(by_id[node_id]) not in _SCENARIO_BRANCH_NODE_TYPES | _SCENARIO_PRESERVED_NODE_TYPES
+    }
+    unknown = sorted(set(mocks) - mockable)
+    if unknown:
+        raise MockGraphError(
+            "INVALID_MOCK_OUTPUT",
+            f"{unknown[0]} does not accept a direct fixture in scenario verification",
+        )
+
+    branch_options: list[tuple[str, list[dict[str, str]]]] = []
+    for node in graph.get("nodes") or []:
+        if _node_type(node) != "question-classifier":
+            continue
+        classes = [
+            {
+                "id": str(item.get("id") or ""),
+                "name": str(item.get("name") or ""),
+                "label": str(item.get("label") or ""),
+            }
+            for item in (node.get("data") or {}).get("classes") or []
+            if isinstance(item, Mapping) and item.get("id")
+        ]
+        if not classes:
+            raise MockGraphError("MOCK_UNSUPPORTED_NODE", f"{node['id']} has no classifier branches")
+        branch_options.append((node["id"], classes))
+
+    combinations = list(product(*(options for _, options in branch_options))) if branch_options else [()]
+    if len(combinations) > max_scenarios:
+        raise MockGraphError(
+            "MOCK_UNSUPPORTED_NODE",
+            f"Classifier branch scenarios exceed the verification limit of {max_scenarios}",
+        )
+
+    scenarios: list[SimulatedGraphScenario] = []
+    for index, combination in enumerate(combinations, start=1):
+        selected = {node_id: option for (node_id, _), option in zip(branch_options, combination)}
+        nodes: list[MinimalGraphNodeDict] = []
+        applied: Fixtures = {}
+        selections: list[dict[str, str]] = []
+        for node in graph.get("nodes") or []:
+            node_id = node["id"]
+            node_type = _node_type(node)
+            if node_type == "question-classifier":
+                option = selected[node_id]
+                outputs: dict[str, object] = {
+                    "class_name": option["name"],
+                    "class_label": option["label"],
+                    "class_id": option["id"],
+                    "usage": {},
+                }
+                applied[node_id] = outputs
+                nodes.append(_fixed_output_node(node, outputs))
+                selections.append({"node_id": node_id, "kind": "classifier", "value": option["id"]})
+            elif node_id in mockable:
+                outputs = resolve_mock_outputs(node, mocks.get(node_id) or {})
+                applied[node_id] = outputs
+                nodes.append(_fixed_output_node(node, outputs))
+            else:
+                nodes.append(deepcopy(node))
+
+        edges: list[MinimalGraphEdgeDict] = []
+        for raw_edge in graph.get("edges") or []:
+            edge = deepcopy(raw_edge)
+            option = selected.get(edge["source"])
+            if option is not None:
+                if str(edge.get("sourceHandle") or "source") != option["id"]:
+                    continue
+                edge.pop("sourceHandle", None)
+            edges.append(edge)
+        scenarios.append(
+            {
+                "scenario_id": f"branch-{index}",
+                "graph": {"nodes": nodes, "edges": edges, "viewport": deepcopy(graph.get("viewport") or {})},
+                "fixtures": applied,
+                "selections": selections,
+            }
+        )
+    return scenarios
 
 
 def build_node_probe_graph(

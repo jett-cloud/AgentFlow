@@ -16,6 +16,8 @@ test('friendlyAssistError keeps the provider exception as raw detail', () => {
   assert.equal(result.text, '模型请求过于频繁（HTTP 429）。')
   assert.equal(result.hint, '请稍后重试，或切换到限额更充足的模型。')
   assert.equal(result.raw, '429 rate limit')
+  assert.equal(result.code, 'provider_error')
+  assert.equal(result.openRaw, true)
 })
 
 test('friendlyAssistError exposes an actionable balance error above the raw provider traceback', () => {
@@ -26,6 +28,8 @@ test('friendlyAssistError exposes an actionable balance error above the raw prov
     text: '模型账户余额不足（HTTP 402）。',
     hint: '请充值或切换到有可用额度的模型后重试。',
     raw: detail,
+    code: 'provider_error',
+    openRaw: true,
   })
 })
 
@@ -36,6 +40,8 @@ test('friendlyAssistError distinguishes provider authentication and timeout fail
       text: '模型服务鉴权失败（HTTP 401/403）。',
       hint: '请检查模型凭据和访问权限，或切换模型后重试。',
       raw: 'HTTP 401 Unauthorized: invalid API key',
+      code: 'provider_error',
+      openRaw: true,
     },
   )
   assert.deepEqual(
@@ -44,6 +50,8 @@ test('friendlyAssistError distinguishes provider authentication and timeout fail
       text: '模型服务请求超时。',
       hint: '请检查网络或稍后重试。',
       raw: 'upstream request timed out',
+      code: 'provider_error',
+      openRaw: true,
     },
   )
 })

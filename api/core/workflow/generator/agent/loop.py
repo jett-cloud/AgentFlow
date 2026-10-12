@@ -106,7 +106,7 @@ def iter_agent_events(
     token_counter: Callable[[list[object]], int] | None = None,
     token_limits: TokenLimits | None = None,
 ) -> Iterator[AgentEvent]:
-    """Run with one shared budget for main, compactor, and nested Builder calls."""
+    """Run with one shared budget for the main Agent and compactor calls."""
     budget = ModelCallBudget(_require_max_model_calls(limits), cancellation_reason=cancellation.reason)
     context.state.model_call_budget = budget
     try:

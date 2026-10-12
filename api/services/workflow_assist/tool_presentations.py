@@ -118,15 +118,15 @@ TOOL_PRESENTATIONS: dict[str, ToolPresentation] = {
     },
     "run_workflow": {
         "visible": True,
-        "running": "正在试运行工作流…",
-        "success": "工作流试运行完成",
-        "failure": "工作流试运行失败",
+        "running": "正在试运行工作流场景…",
+        "success": "工作流场景试运行完成",
+        "failure": "工作流场景试运行失败",
     },
     "run_node": {
         "visible": True,
-        "running": "正在试运行节点…",
-        "success": "节点试运行完成",
-        "failure": "节点试运行失败",
+        "running": "正在验证可安全运行的节点…",
+        "success": "节点运行验证完成",
+        "failure": "节点运行验证失败",
     },
     "finish": {
         "visible": True,

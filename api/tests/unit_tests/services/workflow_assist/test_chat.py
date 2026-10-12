@@ -611,12 +611,11 @@ def test_catalogue_pull_failure_marks_side_unavailable(
     assert captured_ctx["installed_tools"] is None
     assert captured_ctx["knowledge_available"] is False
     assert captured_ctx["installed_dataset_ids"] is None
-    assert captured_ctx["builder_input"].tool_catalogue_text == ""
-    assert captured_ctx["builder_input"].knowledge_catalogue_text == ""
+    assert "builder_input" not in captured_ctx
 
 
 @pytest.mark.parametrize("sqlite_session", [TABLES], indirect=True)
-def test_builder_input_keeps_full_tool_snapshot_out_of_frozen_prompt(
+def test_typed_compiler_keeps_catalogues_as_frozen_snapshots(
     sqlite_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -667,12 +666,12 @@ def test_builder_input_keeps_full_tool_snapshot_out_of_frozen_prompt(
     invoker.queue_tool_calls([_ASK_USER_CALL])
     list(chat_mod.iter_chat_events(**_chat_kwargs(sqlite_session, conversation, invoker)))
 
-    builder_input = captured_ctx["builder_input"]
     assert len(captured_ctx["tool_entries"]) == 100
     assert captured_ctx["tool_entries"][-1]["tool_name"] == "tool-099"
-    assert builder_input.tool_catalogue_text == ""
-    assert "id=ds-1" in builder_input.knowledge_catalogue_text
-    assert "Product Docs" in builder_input.knowledge_catalogue_text
+    assert captured_ctx["knowledge_entries"] == [
+        {"id": "ds-1", "name": "Product Docs", "description": "Documentation."}
+    ]
+    assert "builder_input" not in captured_ctx
 
 
 def test_token_counter_uses_model_not_constant_one() -> None:
@@ -854,10 +853,6 @@ def test_fenced_loop_binds_selected_node_and_references(
     assert [item["id"] for item in session.referenced_nodes] == ["n1"]
     assert [item["id"] for item in session.referenced_tools] == ["time/current_time"]
     assert [item["id"] for item in session.referenced_datasets] == ["ds-uuid"]
-    instruction = captured["tool_context"].env.builder_input.instruction
-    assert "Bound user references (HARD)" in instruction
-    assert "time/current_time" in instruction
-    assert "ds-uuid" in instruction
 
 
 def test_durable_agent_binds_run_references_and_selected_node(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -868,7 +863,7 @@ def test_durable_agent_binds_run_references_and_selected_node(monkeypatch: pytes
 
     def fake_iter(session, tool_context, *args: Any, **kwargs: Any):
         captured["session"] = session
-        captured["instruction"] = tool_context.env.builder_input.instruction
+        captured["output_language"] = tool_context.env.output_language
         return iter(())
 
     monkeypatch.setattr(init_mod, "iter_agent_events", fake_iter)
@@ -925,8 +920,7 @@ def test_durable_agent_binds_run_references_and_selected_node(monkeypatch: pytes
     assert [item["id"] for item in session.referenced_nodes] == ["n1"]
     assert [item["id"] for item in session.referenced_tools] == ["time/current_time"]
     assert [item["id"] for item in session.referenced_datasets] == ["ds-uuid"]
-    assert "Bound user references (HARD)" in captured["instruction"]
-    assert "time/current_time" in captured["instruction"]
+    assert captured["output_language"] == "zh-Hans"
 
 
 def test_durable_stream_attaches_the_completed_reply_to_its_terminal_event(
@@ -960,7 +954,11 @@ def test_durable_stream_attaches_the_completed_reply_to_its_terminal_event(
     monkeypatch.setattr(init_mod, "iter_agent_events", fake_iter)
     monkeypatch.setattr(init_mod, "build_tool_catalogue", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(init_mod, "build_knowledge_catalogue", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(init_mod, "_draft_namespace_names", lambda *_args, **_kwargs: (set(), set()))
+    monkeypatch.setattr(
+        init_mod,
+        "_draft_variable_snapshots",
+        lambda *_args, **_kwargs: (set(), set(), {}, frozenset()),
+    )
     context = SimpleNamespace(
         app_model=SimpleNamespace(tenant_id="tenant-1", id="app-1", mode="workflow"),
         account=SimpleNamespace(id="account-1"),
@@ -1061,7 +1059,11 @@ def test_durable_protocol_notice_owns_pending_recovery_before_retry_reasoning(
     monkeypatch.setattr(init_mod, "iter_agent_events", fake_iter)
     monkeypatch.setattr(init_mod, "build_tool_catalogue", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(init_mod, "build_knowledge_catalogue", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(init_mod, "_draft_namespace_names", lambda *_args, **_kwargs: (set(), set()))
+    monkeypatch.setattr(
+        init_mod,
+        "_draft_variable_snapshots",
+        lambda *_args, **_kwargs: (set(), set(), {}, frozenset()),
+    )
     context = SimpleNamespace(
         app_model=SimpleNamespace(tenant_id="tenant-1", id="app-1", mode="workflow"),
         account=SimpleNamespace(id="account-1"),

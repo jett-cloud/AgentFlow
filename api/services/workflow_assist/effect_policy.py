@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from core.workflow.generator.acceptance.effects import EffectClass, classify_effect, classify_node_effect
+from core.workflow.generator.acceptance.effects import (
+    LIVE_EXECUTABLE_NODE_TYPES,
+    EffectClass,
+    classify_effect,
+    classify_node_effect,
+)
 from core.workflow.generator.acceptance.evidence import AcceptanceMode, FailedNodeTrace
 from core.workflow.generator.graph.types import MinimalGraphDict
 
@@ -10,7 +15,11 @@ __all__ = ["EffectClass", "classify_effect", "classify_node_effect", "execution_
 
 
 def execution_policy_errors(
-    graph: MinimalGraphDict, mode: AcceptanceMode, *, live_authorized: bool = False
+    graph: MinimalGraphDict,
+    mode: AcceptanceMode,
+    *,
+    live_authorized: bool = False,
+    allow_human_input_pause: bool = False,
 ) -> list[FailedNodeTrace]:
     """Fail closed before engine construction, including direct executor calls."""
     errors: list[FailedNodeTrace] = []
@@ -18,10 +27,12 @@ def execution_policy_errors(
         data = node.get("data") or {}
         node_type = str(data.get("type") or "")
         effect = classify_node_effect(node)
+        if allow_human_input_pause and node_type == "human-input":
+            continue
         if (
             mode == "live"
             and live_authorized
-            and node_type in {"llm", "knowledge-retrieval", "tool", "agent", "http-request"}
+            and node_type in LIVE_EXECUTABLE_NODE_TYPES
         ):
             continue
         if effect == "simulate_always" or (mode == "simulated" and effect == "metered"):

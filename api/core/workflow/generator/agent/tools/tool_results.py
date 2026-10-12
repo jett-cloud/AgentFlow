@@ -57,6 +57,10 @@ RETRYABLE_BY_ERROR_CODE: dict[str, bool] = {
     "INVALID_AGENT_NODE": True,
     "AGENT_BINDING_MISSING": True,
     "VARIABLE_TYPE_MISMATCH": True,
+    "OUTPUT_TYPE_UNAVAILABLE": True,
+    "VARIABLE_NOT_WRITABLE": True,
+    "NODE_STRUCTURE_KIND_MISMATCH": True,
+    "MISSING_NODE_STRUCTURE": True,
     "TOOL_OUTPUT_SCHEMA_UNAVAILABLE": True,
     "TOOL_NODE_REQUIRES_BUILD_TOOL_NODE": True,
     "AGENT_NODE_REQUIRES_BUILD_AGENT_NODE": True,
@@ -128,7 +132,9 @@ def error(
     path: str | None = None,
     child_ref: str | None = None,
     cause: dict[str, object] | None = None,
+    hint: str | None = None,
 ) -> ToolResult:
+    retry_allowed = retryable(error_code)
     result: dict[str, object] = {
         "tool_call_id": call["id"],
         "name": call["name"],
@@ -137,14 +143,18 @@ def error(
         "content": None,
         "error": message,
         "error_code": error_code,
-        "retryable": retryable(error_code),
+        "retryable": retry_allowed,
+        "path": path or "$",
+        "cause": cause or {"error_code": error_code, "error": message},
+        "hint": hint
+        or (
+            "Correct the indicated intent field and retry"
+            if retry_allowed
+            else "Inspect the reported capability or permission before retrying"
+        ),
     }
-    if path is not None:
-        result["path"] = path
     if child_ref is not None:
         result["child_ref"] = child_ref
-    if cause is not None:
-        result["cause"] = cause
     return result  # type: ignore[return-value]
 
 

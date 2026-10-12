@@ -596,14 +596,22 @@ test('composer send during waiting_user resolves the pending clarification card'
 })
 
 test('failed stream does not enable apply', async () => {
+  const captured = []
   const { controller, state } = harness(async (_payload, { onEvent }) => {
-    onEvent({ event: 'failed', reason: 'cannot continue' })
+    onEvent({
+      event: 'failed',
+      reason: 'cannot continue',
+      errors: [{ code: 'MODEL_ERROR', detail: 'upstream closed the stream' }],
+    })
+  }, {
+    onErrors: errors => captured.push(errors),
   })
 
   await controller.submitMessage('build a workflow')
 
   assert.equal(state.value.phase, 'idle')
   assert.equal(state.value.applyEnabled, false)
+  assert.deepEqual(captured, [[{ code: 'MODEL_ERROR', detail: 'upstream closed the stream' }]])
 })
 
 test('cancelled or late request events cannot mutate a newer conversation', async () => {

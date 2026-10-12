@@ -290,7 +290,11 @@ def test_reloaded_durable_run_enforces_persisted_contract(
     monkeypatch.setattr(initializer, "build_tool_catalogue", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(initializer, "build_knowledge_catalogue", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(initializer, "build_agent_model_catalogue", lambda *_args, **_kwargs: ())
-    monkeypatch.setattr(initializer, "_draft_namespace_names", lambda *_args, **_kwargs: (set(), set()))
+    monkeypatch.setattr(
+        initializer,
+        "_draft_variable_snapshots",
+        lambda *_args, **_kwargs: (set(), set(), {}, frozenset()),
+    )
     monkeypatch.setattr(initializer, "_draft_workflow_id", lambda *_args, **_kwargs: None)
     context = type("Context", (), {})()
     context.app_model = type("App", (), {"tenant_id": "tenant-1", "id": "app-1", "mode": "workflow"})()
@@ -306,17 +310,15 @@ def test_reloaded_durable_run_enforces_persisted_contract(
             "mode": "workflow",
             "selected_node": None,
             "references": [],
-                "input": "Build a workflow",
-                "contract_protocol_version": 1,
-            },
+            "input": "Build a workflow",
+            "contract_protocol_version": 1,
+        },
     )()
     context.conversation = snapshot.conversation
     context.messages = tuple(snapshot.messages)
     context.should_stop = lambda: False
 
-    events = list(
-        chat_module.run_workflow_assist_agent(context, invoker=Invoker(), hydrate_graph=lambda graph: graph)
-    )
+    events = list(chat_module.run_workflow_assist_agent(context, invoker=Invoker(), hydrate_graph=lambda graph: graph))
 
     tool_results = [payload for name, payload in events if name == "tool_result"]
     rejection = next(payload for payload in tool_results if payload["id"] == "build-extra")

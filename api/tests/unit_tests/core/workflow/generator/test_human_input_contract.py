@@ -200,15 +200,22 @@ def _run_graph(
     return list(entry.run()), pool
 
 
-def test_generated_human_input_graph_validates_without_target_branches() -> None:
+def test_generated_human_input_graph_derives_target_branches() -> None:
     graph = _generated_human_input_graph()
     review = next(node for node in graph["nodes"] if node["id"] == "review")
-    assert "_targetBranches" not in review["data"]
+    assert review["data"]["_targetBranches"] == [
+        {"id": "approve", "name": "Approve"},
+        {"id": "reject", "name": "Reject"},
+        {"id": "__timeout", "name": "Timeout"},
+    ]
     assert validate_graph(graph=graph, mode="workflow") == []
     handles = [edge["sourceHandle"] for edge in graph["edges"] if edge["source"] == "review"]
     assert sorted(handles) == ["__timeout", "approve", "reject"]
 
     review["data"]["_targetBranches"] = [{"id": "stale", "name": "STALE"}]
+    graph = postprocess_graph(graph=graph, mode="workflow")
+    review = next(node for node in graph["nodes"] if node["id"] == "review")
+    assert review["data"]["_targetBranches"][-1] == {"id": "__timeout", "name": "Timeout"}
     assert validate_graph(graph=graph, mode="workflow") == []
     assert sorted(edge["sourceHandle"] for edge in graph["edges"] if edge["source"] == "review") == [
         "__timeout",

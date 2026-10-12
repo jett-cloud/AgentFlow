@@ -135,6 +135,24 @@ def test_always_execute_runs_live_without_a_grant_and_ignores_stale_decline(prep
     assert executor.calls[0]["mode"] == "live"
 
 
+def test_human_input_forces_simulated_scenario_execution(prepared: ToolContext) -> None:
+    prepared.state.graph["nodes"].append(
+        {"id": "review", "data": {"type": "human-input", "title": "人工确认"}}
+    )
+    executor = _FakeExecutor()
+    set_env(prepared, execute_graph=executor, execution_consent_mode="always_execute")
+
+    result = dispatch(_call("run_workflow"), prepared)
+
+    assert result["ok"] is True
+    assert result["content"]["passed"] is True
+    assert result["content"]["execution_status"] == "passed"
+    assert result["content"]["verification_level"] == "mock"
+    assert executor.calls[0]["mode"] == "simulated"
+    assert prepared.state.last_workflow_execution is not None
+    assert prepared.state.last_workflow_execution.passed is True
+
+
 def test_declined_hash_falls_back_to_mock_without_consuming_a_grant(prepared: ToolContext) -> None:
     executor = _FakeExecutor(node_outputs={"llm": {"text": "差评"}, "code": {"result": "差评!"}})
     reserved: list[tuple[int, str]] = []
@@ -191,6 +209,7 @@ def test_engine_failure_is_returned_to_the_agent_not_completed(prepared: ToolCon
     result = dispatch(_call("run_workflow"), prepared)
     assert result["ok"] is True
     assert result["content"]["passed"] is False
+    assert result["content"]["execution_status"] == "failed"
     assert result["content"]["failed_nodes"] == failed
 
 

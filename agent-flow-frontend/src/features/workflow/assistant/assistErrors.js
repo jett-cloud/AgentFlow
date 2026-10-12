@@ -82,16 +82,16 @@ export function friendlyAssistError(error, language = 'zh-Hans') {
     const providerRule = PROVIDER_ERROR_RULES.find(item => item.match.test(detail))
     const providerCopy = providerRule ? copy.providerErrors?.[providerRule.copyKey] : null
     if (providerCopy)
-      return { text: providerCopy.text, hint: providerCopy.hint, raw: detail }
+      return { text: providerCopy.text, hint: providerCopy.hint, raw: detail, code, openRaw: true }
   }
   const codedText = copy.errorCodes[code]
   if (codedText)
-    return { text: codedText, raw: detail }
+    return { text: codedText, raw: detail, code, openRaw: code === 'provider_error' }
   if (!detail)
-    return { text: copy.defaultError, raw: '' }
+    return { text: copy.defaultError, raw: '', code }
 
   const rule = FRIENDLY_ERROR_RULES.find(item => item.match.test(detail))
-  return { text: rule ? copy.errorRules[rule.copyKey] : detail, raw: detail }
+  return { text: rule ? copy.errorRules[rule.copyKey] : detail, raw: detail, code }
 }
 
 export async function copyAssistErrorText(value, writeText) {

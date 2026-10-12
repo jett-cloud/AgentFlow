@@ -2,36 +2,33 @@
 
 ``local_execute`` nodes need no provider credentials and have no external side
 effects. ``metered`` nodes consume tenant model or retrieval quota. Everything
-else, including tools, HTTP, extractors and unknown plugin types, is
-``simulate_always``: the service runs it only under a live grant. Unknown
+else is ``simulate_always``. Known external, branch-selecting and interactive
+nodes are covered by capability-specific verification strategies. Unknown
 shapes fail closed.
 """
 
 from typing import Literal
 
+from core.workflow.generator.acceptance.capabilities import LOCAL_NODE_TYPES
 from core.workflow.generator.graph.types import MinimalGraphDict
 
 EffectClass = Literal["local_execute", "metered", "simulate_always"]
 
-LOCAL_EXECUTE_NODE_TYPES = frozenset(
+LOCAL_EXECUTE_NODE_TYPES = LOCAL_NODE_TYPES
+_METERED_NODE_TYPES = frozenset({"llm", "knowledge-retrieval", "agent"})
+LIVE_EXECUTABLE_NODE_TYPES = frozenset(
     {
-        "start",
-        "end",
-        "answer",
-        "code",
-        "if-else",
-        "iteration",
-        "iteration-start",
-        "loop",
-        "loop-start",
-        "loop-end",
-        "template-transform",
-        "assigner",
-        "variable-aggregator",
-        "list-operator",
+        "llm",
+        "knowledge-retrieval",
+        "tool",
+        "agent",
+        "http-request",
+        "document-extractor",
+        "parameter-extractor",
+        "question-classifier",
+        "human-input",
     }
 )
-_METERED_NODE_TYPES = frozenset({"llm", "knowledge-retrieval", "agent"})
 
 
 def classify_effect(node_type: str) -> EffectClass:
@@ -63,3 +60,10 @@ def external_node_ids(graph: MinimalGraphDict) -> list[str]:
         for node in graph.get("nodes") or []
         if isinstance(node, dict) and classify_node_effect(node) != "local_execute"
     ]
+
+
+def workflow_execution_blockers(graph: MinimalGraphDict) -> list[dict[str, str]]:
+    """Return nodes without a registered Workflow Assist verification strategy."""
+    from core.workflow.generator.acceptance.capabilities import workflow_verification_blockers
+
+    return workflow_verification_blockers(graph)

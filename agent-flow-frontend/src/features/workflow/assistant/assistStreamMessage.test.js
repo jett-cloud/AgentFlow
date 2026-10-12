@@ -654,11 +654,23 @@ test('empty reasoning.delta does not render a thought bubble', () => {
   assert.equal(messages.length, 0)
 })
 
-test('reasoning-only messages stay out of the visible timeline', () => {
+test('reasoning-only messages remain visible in the timeline while the model thinks', () => {
   const messages = applyAssistStreamEvent([], {
     event: 'reasoning.delta',
     data: { text: '内部分析过程', message_id: 'reasoning-1' },
   })
 
-  assert.deepEqual(groupAssistTimeline(messages), [])
+  const timeline = groupAssistTimeline(messages)
+  assert.equal(timeline.length, 1)
+  assert.equal(timeline[0].kind, 'turn')
+  assert.equal(timeline[0].blocks[0].reasoning, '内部分析过程')
+  assert.equal(timeline[0].blocks[0].reasoningStreaming, true)
+})
+
+test('an empty running activity remains visible as immediate feedback', () => {
+  const timeline = groupAssistTimeline(beginAssistActivity([]))
+
+  assert.equal(timeline.length, 1)
+  assert.equal(timeline[0].kind, 'turn')
+  assert.equal(timeline[0].blocks[0].status, 'running')
 })

@@ -18,13 +18,18 @@ import logging
 from collections.abc import Mapping
 from typing import Literal, cast
 
-from core.workflow.generator.acceptance.effects import classify_node_effect, external_node_ids
+from core.workflow.generator.acceptance.effects import (
+    classify_node_effect,
+    external_node_ids,
+    workflow_execution_blockers,
+)
 from core.workflow.generator.acceptance.evidence import AcceptanceMode, GraphExecutionTrace, canonical_graph_hash
 from core.workflow.generator.acceptance.mocks import (
     Fixtures,
     MockGraphError,
-    build_mocked_graph,
+    SimulatedGraphScenario,
     build_node_probe_graph,
+    build_simulated_graph_scenarios,
     describe_mock_target,
 )
 from core.workflow.generator.agent.tools.tool_context import (
@@ -66,8 +71,50 @@ def run_workflow(call: ToolCall, context: ToolContext) -> ToolResult:
     graph = context.state.graph
     graph_hash = canonical_graph_hash(graph)
     context.state.graph_hash = graph_hash
+    blockers = workflow_execution_blockers(graph)
+    if blockers:
+        context.state.last_workflow_execution = WorkflowExecutionRecord(
+            revision=context.state.candidate_revision,
+            graph_hash=graph_hash,
+            passed=None,
+            verification_level="structural_only",
+        )
+        return ok(
+            call,
+            changed=changed,
+            content={
+                "passed": None,
+                "execution_status": "skipped",
+                "verification_level": "structural_only",
+                "revision": context.state.candidate_revision,
+                "graph_hash": graph_hash,
+                "failed_nodes": [],
+                "blocked_nodes": blockers,
+                "executed_node_ids": [],
+                "unexecuted_node_ids": sorted(
+                    str(node.get("id") or "")
+                    for node in graph.get("nodes") or []
+                    if isinstance(node, dict) and node.get("id")
+                ),
+                "graph_outputs": {},
+                "node_outputs": {},
+                "node_outputs_truncated": False,
+                "mocked_outputs": {},
+            },
+        )
     has_external = bool(external_node_ids(graph))
-    strategy = _resolve_workflow_execution_strategy(context, graph_hash, has_external)
+    has_human_input = any(
+        isinstance(node, dict)
+        and isinstance(node.get("data"), dict)
+        and node["data"].get("type") == "human-input"
+        for node in graph.get("nodes") or []
+    )
+    strategy = _resolve_workflow_execution_strategy(
+        context,
+        graph_hash,
+        has_external,
+        has_human_input=has_human_input,
+    )
     if strategy == "requires_consent":
         return error(
             call,
@@ -79,14 +126,24 @@ def run_workflow(call: ToolCall, context: ToolContext) -> ToolResult:
     engine_mode: AcceptanceMode = "simulated"
     if strategy == "mock":
         try:
-            run_graph, mocked = build_mocked_graph(graph, cast(Mapping[str, Mapping[str, object]], mocks))
+            scenarios = build_simulated_graph_scenarios(
+                graph,
+                cast(Mapping[str, Mapping[str, object]], mocks),
+            )
         except MockGraphError as exc:
             return error(call, exc.code, exc.detail)
+        trace, mocked = _execute_simulated_scenarios(call, execute_graph, scenarios, start_inputs)
+        if not isinstance(trace, list):
+            return trace
     elif strategy == "live":
         engine_mode = "live"
-    trace = _execute(call, execute_graph, run_graph, engine_mode, start_inputs)
-    if not isinstance(trace, list):
-        return trace
+        trace = _execute(call, execute_graph, run_graph, engine_mode, start_inputs)
+        if not isinstance(trace, list):
+            return trace
+    else:
+        trace = _execute(call, execute_graph, run_graph, engine_mode, start_inputs)
+        if not isinstance(trace, list):
+            return trace
     node_outputs = _node_outputs(trace)
     context.state.last_node_outputs = {**node_outputs, **mocked}
     context.state.last_workflow_execution = WorkflowExecutionRecord(
@@ -98,6 +155,7 @@ def run_workflow(call: ToolCall, context: ToolContext) -> ToolResult:
     clipped, truncated = _clip_node_outputs({key: value for key, value in node_outputs.items() if key not in mocked})
     content: dict[str, object] = {
         "passed": not trace,
+        "execution_status": "passed" if not trace else "failed",
         "verification_level": strategy,
         "revision": context.state.candidate_revision,
         "graph_hash": graph_hash,
@@ -107,6 +165,7 @@ def run_workflow(call: ToolCall, context: ToolContext) -> ToolResult:
         "node_outputs": clipped,
         "node_outputs_truncated": truncated,
         "mocked_outputs": _clip_node_outputs(mocked)[0],
+        "scenarios": _present_scenarios(getattr(trace, "scenario_results", [])),
     }
     return ok(call, changed=changed, content=content)
 
@@ -217,8 +276,17 @@ def _parse_start_inputs(call: ToolCall) -> dict[str, object] | str:
 
 
 def _resolve_workflow_execution_strategy(
-    context: ToolContext, graph_hash: str, has_external: bool
+    context: ToolContext,
+    graph_hash: str,
+    has_external: bool,
+    *,
+    has_human_input: bool = False,
 ) -> _WorkflowExecutionStrategy:
+    # Complete action coverage forks one paused snapshot into multiple resumes.
+    # Force the whole run into simulation so one live grant never multiplies
+    # downstream provider calls across those branches.
+    if has_human_input:
+        return "mock"
     if not has_external:
         return "local_only"
     if context.env.execution_consent_mode == "always_execute":
@@ -270,11 +338,92 @@ def _execute(
         return error(call, "CAPABILITY_UNAVAILABLE", "Workflow execution failed to start")
 
 
+def _execute_simulated_scenarios(
+    call: ToolCall,
+    execute_graph: GraphExecuteFn,
+    scenarios: list[SimulatedGraphScenario],
+    start_inputs: Mapping[str, object],
+) -> tuple[GraphExecutionTrace | ToolResult, Fixtures]:
+    combined = GraphExecutionTrace()
+    mocked: Fixtures = {}
+    graph_outputs: list[dict[str, object]] = []
+    try:
+        for scenario in scenarios:
+            graph = scenario.get("graph")
+            if not isinstance(graph, dict):
+                return error(call, "CAPABILITY_UNAVAILABLE", "Invalid simulated scenario"), mocked
+            trace = execute_graph(cast(MinimalGraphDict, graph), "simulated", start_inputs)
+            combined.extend(trace)
+            combined.executed_node_ids.update(getattr(trace, "executed_node_ids", set()))
+            combined.node_outputs.update(_node_outputs(trace))
+            if getattr(trace, "graph_outputs", {}):
+                graph_outputs.append(dict(trace.graph_outputs))
+            scenario_selections = [
+                dict(item) for item in scenario.get("selections", []) if isinstance(item, Mapping)
+            ]
+            nested_results = list(getattr(trace, "scenario_results", []))
+            if nested_results:
+                for nested in nested_results:
+                    combined.scenario_results.append(
+                        {
+                            **nested,
+                            "scenario_id": f"{scenario.get('scenario_id')}:{nested['scenario_id']}",
+                            "selections": [*scenario_selections, *nested.get("selections", [])],
+                        }
+                    )
+            else:
+                combined.scenario_results.append(
+                    {
+                        "scenario_id": str(scenario.get("scenario_id") or "scenario"),
+                        "selections": scenario_selections,
+                        "passed": not trace,
+                        "executed_node_ids": sorted(getattr(trace, "executed_node_ids", set())),
+                        "node_outputs": _node_outputs(trace),
+                        "graph_outputs": dict(getattr(trace, "graph_outputs", {})),
+                        "failed_nodes": list(trace),
+                    }
+                )
+            fixture_values = scenario.get("fixtures")
+            if isinstance(fixture_values, Mapping):
+                for node_id, values in fixture_values.items():
+                    if isinstance(node_id, str) and isinstance(values, Mapping):
+                        mocked[node_id] = dict(values)
+    except Exception:
+        logger.exception("Workflow agent: simulated scenario execution failed")
+        return error(call, "CAPABILITY_UNAVAILABLE", "Workflow scenario execution failed"), mocked
+    if len(graph_outputs) == 1:
+        combined.graph_outputs = graph_outputs[0]
+    elif graph_outputs:
+        combined.graph_outputs = {"scenarios": graph_outputs}
+    return combined, mocked
+
+
 def _node_outputs(trace: GraphExecutionTrace) -> dict[str, dict[str, object]]:
     outputs = getattr(trace, "node_outputs", None)
     if not isinstance(outputs, Mapping):
         return {}
     return {str(node_id): dict(values) for node_id, values in outputs.items() if isinstance(values, Mapping)}
+
+
+def _present_scenarios(scenarios: object) -> list[dict[str, object]]:
+    if not isinstance(scenarios, list):
+        return []
+    presented: list[dict[str, object]] = []
+    for raw in scenarios:
+        if not isinstance(raw, Mapping):
+            continue
+        graph_outputs = raw.get("graph_outputs")
+        presented.append(
+            {
+                "scenario_id": str(raw.get("scenario_id") or "scenario"),
+                "selections": list(raw.get("selections") or []),
+                "passed": bool(raw.get("passed")),
+                "executed_node_ids": list(raw.get("executed_node_ids") or []),
+                "graph_outputs": _clip_mapping(graph_outputs if isinstance(graph_outputs, Mapping) else {}),
+                "failed_nodes": list(raw.get("failed_nodes") or []),
+            }
+        )
+    return presented
 
 
 def _clip_value(value: object) -> object:
