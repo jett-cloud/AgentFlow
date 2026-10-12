@@ -69,6 +69,11 @@ test('sandbox verifies and publishes the current session with ephemeral credenti
   assert.match(sandbox, /真实调用外部 API/)
   assert.match(sandbox, /authorization\.token/)
   assert.match(api, /test-authorization/)
+  assert.match(api, /publish-jobs\/\$\{encodeURIComponent\(jobId\)\}/)
+  assert.match(sandbox, /waitForPublishJob/)
+  assert.match(sandbox, /publishJob\.can_cancel/)
+  assert.match(sandbox, /外部 API 调用/)
+  assert.match(sandbox, /nodeData\.value\.credentials\[key\] = ''/)
 })
 
 test('studio wires streaming agent turn with stop support', () => {

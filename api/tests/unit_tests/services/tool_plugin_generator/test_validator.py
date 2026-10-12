@@ -54,7 +54,7 @@ def test_validator_rejects_fetch_file_with_remediation():
     assert ".blob" in joined
 
 
-def test_validator_rejects_session_http_and_image_blob_message():
+def test_validator_rejects_session_http_while_sdk_calls_are_checked_by_preflight():
     files = _base_files(
         tool_py=(
             "self.session.post('https://example.com')\n"
@@ -66,8 +66,7 @@ def test_validator_rejects_session_http_and_image_blob_message():
     joined = " ".join(exc_info.value.errors)
     assert "self.session.post" in joined
     assert "httpx" in joined
-    assert "create_image_message(blob=" in joined
-    assert "create_blob_message" in joined
+    assert "create_image_message(blob=" not in joined
 
 
 def test_validator_rejects_non_object_yaml_root():

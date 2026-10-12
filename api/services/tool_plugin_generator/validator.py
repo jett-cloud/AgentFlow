@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import re
+from dataclasses import dataclass
 
 import yaml
 
@@ -35,11 +36,6 @@ FORBIDDEN_CODE_PATTERNS: tuple[tuple[str, str], ...] = (
         "self.session.request",
         "self.session is the plugin runtime Session, not HTTP — use httpx or requests",
     ),
-    (
-        "create_image_message(blob=",
-        "create_image_message accepts a URL string only — return bytes with "
-        "create_blob_message(blob=..., meta={'mime_type': 'image/png'})",
-    ),
 )
 
 # Backward-compatible alias for callers/tests that still import the old name.
@@ -54,62 +50,120 @@ class ToolPluginValidationError(Exception):
         super().__init__("; ".join(errors))
 
 
-def validate_plugin_files(
+@dataclass(frozen=True)
+class ToolPluginFileIssue:
+    code: str
+    message: str
+    path: str | None = None
+    line: int | None = None
+
+
+def collect_plugin_file_issues(
     files: dict[str, str],
     *,
     author: str | None = None,
     plugin_name: str | None = None,
-) -> None:
-    errors: list[str] = []
+) -> list[ToolPluginFileIssue]:
+    issues: list[ToolPluginFileIssue] = []
 
     for required_path in REQUIRED_PATHS:
         if required_path not in files:
-            errors.append(f"Missing required file: {required_path}")
+            issues.append(
+                ToolPluginFileIssue(
+                    code="MISSING_REQUIRED_FILE",
+                    path=required_path,
+                    message=f"Missing required file: {required_path}",
+                )
+            )
 
     tool_yaml_paths = [path for path in files if _TOOL_YAML_RE.match(path)]
     if not tool_yaml_paths:
-        errors.append("Missing required tool YAML under tools/")
+        issues.append(
+            ToolPluginFileIssue(
+                code="MISSING_TOOL_YAML",
+                path="tools/",
+                message="Missing required tool YAML under tools/",
+            )
+        )
     for yaml_path in tool_yaml_paths:
         match = _TOOL_YAML_RE.match(yaml_path)
-        if not match:
-            continue
-        tool_name = match.group(1)
-        py_path = f"tools/{tool_name}.py"
-        if py_path not in files:
-            errors.append(f"Missing required tool Python file: {py_path}")
+        if match and f"tools/{match.group(1)}.py" not in files:
+            py_path = f"tools/{match.group(1)}.py"
+            issues.append(
+                ToolPluginFileIssue(
+                    code="MISSING_TOOL_SOURCE",
+                    path=py_path,
+                    message=f"Missing required tool Python file: {py_path}",
+                )
+            )
 
     for path, content in files.items():
         if path.endswith((".yaml", ".yml")):
             try:
                 loaded = yaml.safe_load(content)
             except yaml.YAMLError as exc:
-                errors.append(f"Invalid YAML in {path}: {exc}")
+                issues.append(
+                    ToolPluginFileIssue(
+                        code="INVALID_YAML",
+                        path=path,
+                        message=f"Invalid YAML in {path}: {exc}",
+                    )
+                )
                 continue
             if not isinstance(loaded, dict):
-                errors.append(f"{path}: YAML root must be an object")
+                issues.append(
+                    ToolPluginFileIssue(
+                        code="INVALID_YAML_ROOT",
+                        path=path,
+                        message=f"{path}: YAML root must be an object",
+                    )
+                )
                 continue
             if path.startswith("tools/"):
                 parameters = loaded.get("parameters") or []
                 if isinstance(parameters, list):
                     for index, parameter in enumerate(parameters):
                         if not isinstance(parameter, dict):
-                            errors.append(f"{path}: parameters[{index}] must be an object")
-                            continue
-                        if not parameter.get("form"):
-                            errors.append(
-                                f"{path}: parameters[{index}] ({parameter.get('name')}) missing required field 'form'"
+                            issues.append(
+                                ToolPluginFileIssue(
+                                    code="INVALID_TOOL_PARAMETER",
+                                    path=path,
+                                    message=f"{path}: parameters[{index}] must be an object",
+                                )
+                            )
+                        elif not parameter.get("form"):
+                            issues.append(
+                                ToolPluginFileIssue(
+                                    code="MISSING_PARAMETER_FORM",
+                                    path=path,
+                                    message=(
+                                        f"{path}: parameters[{index}] ({parameter.get('name')}) "
+                                        "missing required field 'form'"
+                                    ),
+                                )
                             )
 
-    for path, content in files.items():
-        if not path.endswith(".py"):
-            continue
-        for pattern, hint in FORBIDDEN_CODE_PATTERNS:
-            if pattern in content:
-                errors.append(f"Forbidden pattern '{pattern}' found in {path}: {hint}")
-        try:
-            ast.parse(content)
-        except SyntaxError as exc:
-            errors.append(f"Invalid Python syntax in {path}: {exc.msg} (line {exc.lineno})")
+        if path.endswith(".py"):
+            for pattern, hint in FORBIDDEN_CODE_PATTERNS:
+                if pattern in content:
+                    issues.append(
+                        ToolPluginFileIssue(
+                            code="FORBIDDEN_CODE_PATTERN",
+                            path=path,
+                            message=f"Forbidden pattern '{pattern}' found in {path}: {hint}",
+                        )
+                    )
+            try:
+                ast.parse(content)
+            except SyntaxError as exc:
+                issues.append(
+                    ToolPluginFileIssue(
+                        code="INVALID_PYTHON_SYNTAX",
+                        path=path,
+                        line=exc.lineno,
+                        message=f"Invalid Python syntax in {path}: {exc.msg} (line {exc.lineno})",
+                    )
+                )
 
     if author is not None and plugin_name is not None:
         manifest_content = files.get("manifest.yaml") or files.get("manifest.yml") or ""
@@ -127,7 +181,22 @@ def validate_plugin_files(
                 sanitize_plugin_id_segment(plugin_name),
             )
             if actual_identity != expected_identity:
-                errors.append("Manifest identity must match the server-owned studio session identity")
+                issues.append(
+                    ToolPluginFileIssue(
+                        code="MANIFEST_IDENTITY_MISMATCH",
+                        path="manifest.yaml",
+                        message="Manifest identity must match the server-owned studio session identity",
+                    )
+                )
+    return issues
 
-    if errors:
-        raise ToolPluginValidationError(errors)
+
+def validate_plugin_files(
+    files: dict[str, str],
+    *,
+    author: str | None = None,
+    plugin_name: str | None = None,
+) -> None:
+    issues = collect_plugin_file_issues(files, author=author, plugin_name=plugin_name)
+    if issues:
+        raise ToolPluginValidationError([issue.message for issue in issues])

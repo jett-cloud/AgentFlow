@@ -39,26 +39,31 @@ from services.tool_plugin_generator.agent_runner import (
     iter_agent_turn,
     run_agent_turn,
 )
+from services.tool_plugin_generator.candidate_builder import prepare_candidate_source
 from services.tool_plugin_generator.llm_fill import (
     LLMFillClient,
     LLMFillConfigurationError,
     LLMFillResponseError,
     TenantLLMFillClient,
 )
+from services.tool_plugin_generator.preflight import ToolPluginPreflightError
 from services.tool_plugin_generator.preview_mapper import normalize_plugin_provider_id, sanitize_plugin_id_segment
-from services.tool_plugin_generator.publish_service import (
-    publish_tool_plugin,
-    redact_sensitive_text,
-    rollback_published_candidate,
+from services.tool_plugin_generator.publish_job_service import (
+    PublishJobCancellationError,
+    PublishJobNotFoundError,
+    create_publish_job,
+    get_publish_job,
+    publish_job_to_dict,
+    request_job_cancel,
+    update_publish_job,
 )
+from services.tool_plugin_generator.publish_service import redact_sensitive_text
 from services.tool_plugin_generator.service import (
-    ToolPluginOwnershipError,
     generate_tool_plugin,
     test_tool_plugin,
 )
 from services.tool_plugin_generator.session_service import (
     ToolPluginStudioSessionError,
-    acquire_plugin_publish_lock,
     acquire_session_operation_lock,
     create_session,
     delete_session,
@@ -82,7 +87,8 @@ from services.tool_plugin_generator.uninstall_service import (
     purge_installations_for_plugin_id,
     uninstall_plugin_with_studio_sessions,
 )
-from services.tool_plugin_generator.validator import ToolPluginValidationError, validate_plugin_files
+from services.tool_plugin_generator.validator import ToolPluginValidationError
+from tasks.tool_plugin_publish_task import tool_plugin_publish_task
 
 
 class ToolPluginFile(BaseModel):
@@ -264,6 +270,8 @@ class ToolPluginGenerateResponse(ResponseModel):
 class ToolPluginValidationResponse(ResponseModel):
     valid: bool
     errors: list[str]
+    diagnostics: list[dict[str, Any]] = Field(default_factory=list)
+    build_trace: dict[str, Any] | None = None
 
 
 class ToolPluginTestResponse(ResponseModel):
@@ -284,6 +292,23 @@ class ToolPluginPublishResponse(ResponseModel):
     elapsed_ms: int
     diagnostic: dict[str, Any] | None
     rollback_succeeded: bool | None
+    build_trace: dict[str, Any] | None = None
+
+
+class ToolPluginPublishJobResponse(ResponseModel):
+    id: str
+    session_id: str
+    status: str
+    publish_mode: str
+    attempt_id: str | None = None
+    candidate_id: str | None = None
+    cancel_requested: bool
+    can_cancel: bool
+    trace: dict[str, Any] | None = None
+    diagnostic: dict[str, Any] | None = None
+    result: dict[str, Any] | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 class ToolPluginTestAuthorizationResponse(ResponseModel):
@@ -330,6 +355,7 @@ register_response_schema_models(
     ToolPluginValidationResponse,
     ToolPluginTestResponse,
     ToolPluginPublishResponse,
+    ToolPluginPublishJobResponse,
     ToolPluginTestAuthorizationResponse,
     ToolPluginAgentTurnResponse,
     ToolPluginUninstallResponse,
@@ -1045,19 +1071,26 @@ class ToolPluginValidateApi(Resource):
         del tenant_id
         payload = ToolPluginFilesPayload.model_validate(console_ns.payload or {})
         try:
-            validate_plugin_files(_files_to_mapping(payload.files))
+            prepare_candidate_source(_files_to_mapping(payload.files), resolve_dependencies=True)
+        except ToolPluginPreflightError as exc:
+            return {
+                "valid": False,
+                "errors": exc.errors,
+                "diagnostics": [item.to_dict() for item in exc.diagnostics],
+                "build_trace": exc.build_trace(),
+            }
         except ToolPluginValidationError as exc:
-            return {"valid": False, "errors": exc.errors}
-        return {"valid": True, "errors": []}
+            return {"valid": False, "errors": exc.errors, "diagnostics": []}
+        return {"valid": True, "errors": [], "diagnostics": []}
 
 
 @console_ns.route("/workspaces/current/tool-plugin/sessions/<string:session_id>/publish")
 class ToolPluginPublishApi(Resource):
     @console_ns.expect(console_ns.models[ToolPluginPublishPayload.__name__])
     @console_ns.response(
-        200,
-        "Tool plugin published",
-        console_ns.models[ToolPluginPublishResponse.__name__],
+        202,
+        "Tool plugin publish queued",
+        console_ns.models[ToolPluginPublishJobResponse.__name__],
     )
     @setup_required
     @login_required
@@ -1074,7 +1107,6 @@ class ToolPluginPublishApi(Resource):
             account_id=account_id,
             session_id=session_id,
         )
-        plugin_lock = None
         try:
             studio_session = get_session(
                 tenant_id=tenant_id,
@@ -1107,91 +1139,70 @@ class ToolPluginPublishApi(Resource):
             )
             if not all(plugin_identity):
                 raise BadRequest("Session author and plugin_name must be valid before publishing")
-            plugin_id = "/".join(plugin_identity)
+            job = create_publish_job(
+                tenant_id=tenant_id,
+                account_id=account_id,
+                session_id=session_id,
+                publish_mode=payload.publish_mode,
+                tool_name=payload.tool_name,
+                expected_revision=payload.expected_revision,
+                parameters=payload.parameters,
+                credentials=credentials,
+            )
             try:
-                plugin_lock = acquire_plugin_publish_lock(tenant_id=tenant_id, plugin_id=plugin_id)
-            except ToolPluginStudioSessionError as exc:
-                _raise_session_error(exc)
-            try:
-                result = publish_tool_plugin(
-                    files=studio_session.files,
-                    published_files=studio_session.published_files,
-                    tenant_id=tenant_id,
-                    user_id=account_id,
-                    owned_installation_id=studio_session.installation_id,
-                    owned_plugin_unique_identifier=studio_session.plugin_unique_identifier,
-                    author=studio_session.author,
-                    plugin_name=studio_session.plugin_name,
-                    tool_name=payload.tool_name,
-                    parameters=payload.parameters,
-                    credentials=credentials,
-                    publish_mode=payload.publish_mode,
+                async_result = tool_plugin_publish_task.delay(job.id)
+                update_publish_job(job, celery_task_id=str(async_result.id))
+            except Exception as exc:
+                update_publish_job(
+                    job,
+                    status="publish_failed",
+                    diagnostic={"stage": "queue", "message": str(exc), "tool_name": payload.tool_name},
+                    clear_credentials=True,
                 )
-            except ToolPluginOwnershipError as exc:
-                raise Conflict(str(exc)) from exc
-
-            try:
-                persisted = update_session(
-                    tenant_id=tenant_id,
-                    account_id=account_id,
-                    session_id=session_id,
-                    expected_revision=payload.expected_revision,
-                    patch={
-                        "published_files": studio_session.files if result.ok else studio_session.published_files,
-                        "plugin_unique_identifier": result.plugin_unique_identifier,
-                        "installation_id": result.installation_id,
-                        "plugin_status": result.status,
-                        "last_publish_diagnostic": result.diagnostic,
-                    },
-                )
-            except Exception as persistence_error:
-                if not result.ok:
-                    raise
-                result = rollback_published_candidate(
-                    tenant_id=tenant_id,
-                    user_id=account_id,
-                    candidate_installation_id=result.installation_id,
-                    published_files=studio_session.published_files,
-                    tool_name=payload.tool_name,
-                )
-                try:
-                    current_session = get_session(
-                        tenant_id=tenant_id,
-                        account_id=account_id,
-                        session_id=session_id,
-                    )
-                    persisted = update_session(
-                        tenant_id=tenant_id,
-                        account_id=account_id,
-                        session_id=session_id,
-                        expected_revision=current_session.revision,
-                        patch={
-                            "plugin_unique_identifier": result.plugin_unique_identifier,
-                            "installation_id": result.installation_id,
-                            "plugin_status": result.status,
-                            "last_publish_diagnostic": result.diagnostic,
-                        },
-                    )
-                except Exception:
-                    if isinstance(persistence_error, ToolPluginStudioSessionError):
-                        _raise_session_error(persistence_error)
-                    raise persistence_error
-            response = ToolPluginPublishResponse(
-                ok=result.ok,
-                status=result.status,
-                revision=persisted.revision,
-                plugin_unique_identifier=result.plugin_unique_identifier,
-                installation_id=result.installation_id,
-                output_text=result.output_text,
-                elapsed_ms=result.elapsed_ms,
-                diagnostic=result.diagnostic,
-                rollback_succeeded=result.rollback_succeeded,
-            ).model_dump(mode="json")
-            return response if result.ok else (response, 422)
+                raise
+            return ToolPluginPublishJobResponse.model_validate(publish_job_to_dict(job)).model_dump(mode="json"), 202
         finally:
-            if plugin_lock is not None:
-                release_session_operation_lock(plugin_lock)
             release_session_operation_lock(lock)
+
+
+@console_ns.route("/workspaces/current/tool-plugin/publish-jobs/<string:job_id>")
+class ToolPluginPublishJobApi(Resource):
+    @console_ns.response(200, "Tool plugin publish job", console_ns.models[ToolPluginPublishJobResponse.__name__])
+    @setup_required
+    @login_required
+    @is_admin_or_owner_required
+    @rbac_permission_required(RBACResourceScope.WORKSPACE, RBACPermission.TOOL_MANAGE, resource_required=False)
+    @account_initialization_required
+    @with_current_tenant_id
+    def get(self, tenant_id: str, job_id: str):
+        current_user, _ = current_account_with_tenant()
+        try:
+            job = get_publish_job(tenant_id=tenant_id, account_id=str(current_user.id), job_id=job_id)
+        except PublishJobNotFoundError as exc:
+            raise NotFound(str(exc)) from exc
+        return ToolPluginPublishJobResponse.model_validate(publish_job_to_dict(job)).model_dump(mode="json")
+
+    @setup_required
+    @login_required
+    @is_admin_or_owner_required
+    @rbac_permission_required(RBACResourceScope.WORKSPACE, RBACPermission.TOOL_MANAGE, resource_required=False)
+    @account_initialization_required
+    @with_current_tenant_id
+    def delete(self, tenant_id: str, job_id: str):
+        current_user, _ = current_account_with_tenant()
+        try:
+            job = get_publish_job(
+                tenant_id=tenant_id,
+                account_id=str(current_user.id),
+                job_id=job_id,
+                for_update=True,
+            )
+            request_job_cancel(job)
+        except PublishJobNotFoundError as exc:
+            raise NotFound(str(exc)) from exc
+        except PublishJobCancellationError as exc:
+            raise Conflict(str(exc)) from exc
+        return ToolPluginPublishJobResponse.model_validate(publish_job_to_dict(job)).model_dump(mode="json")
 
 
 @console_ns.route("/workspaces/current/tool-plugin/sessions/<string:session_id>/test-authorization")

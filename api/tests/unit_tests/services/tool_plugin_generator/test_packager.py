@@ -74,6 +74,26 @@ def test_package_plugin_files_rewrites_legacy_dify_plugin_pin(monkeypatch: pytes
     assert result == b"PK_FAKE_DIFYPKG"
 
 
+def test_package_plugin_files_rewrites_underscore_dify_plugin_pin(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(files_dir: str) -> bytes:
+        requirements = (Path(files_dir) / "requirements.txt").read_text(encoding="utf-8")
+        assert requirements.strip().splitlines() == [
+            "dify-plugin>=0.9.0,<0.10.0",
+            "httpx>=0.27.0",
+        ]
+        return b"PK_FAKE_DIFYPKG"
+
+    monkeypatch.setattr(packager, "_run_plugin_package_cli", fake_run)
+
+    result = packager.package_plugin_files(
+        {
+            "requirements.txt": "dify_plugin>=0.0.1b70,<0.1.0\nhttpx>=0.27.0\n",
+        }
+    )
+
+    assert result == b"PK_FAKE_DIFYPKG"
+
+
 def test_package_plugin_files_rewrites_loose_dify_plugin_pin(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(files_dir: str) -> bytes:
         requirements = (Path(files_dir) / "requirements.txt").read_text(encoding="utf-8")
@@ -118,6 +138,46 @@ def test_package_plugin_files_rewrites_bare_main_py(monkeypatch: pytest.MonkeyPa
         {
             "main.py": "from dify_plugin import Plugin\n\nplugin = Plugin()\n",
         }
+    )
+
+    assert result == b"PK_FAKE_DIFYPKG"
+
+
+def test_package_plugin_files_does_not_silently_rewrite_python_business_logic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(files_dir: str) -> bytes:
+        tool_py = (Path(files_dir) / "tools" / "demo.py").read_text(encoding="utf-8")
+        assert "from dify_plugin.errors.tool import ToolInvokeError" in tool_py
+        assert "raise ToolInvokeError('request failed')" in tool_py
+        return b"PK_FAKE_DIFYPKG"
+
+    monkeypatch.setattr(packager, "_run_plugin_package_cli", fake_run)
+    result = packager.package_plugin_files(
+        {
+            "tools/demo.py": (
+                "from dify_plugin.errors.tool import ToolInvokeError\n\n"
+                "raise ToolInvokeError('request failed')\n"
+            )
+        }
+    )
+
+    assert result == b"PK_FAKE_DIFYPKG"
+
+
+def test_package_plugin_files_can_package_an_already_canonical_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(files_dir: str) -> bytes:
+        requirements = (Path(files_dir) / "requirements.txt").read_text(encoding="utf-8")
+        assert requirements == "dify_plugin==custom\n"
+        return b"PK_FAKE_DIFYPKG"
+
+    monkeypatch.setattr(packager, "_run_plugin_package_cli", fake_run)
+
+    result = packager.package_plugin_files(
+        {"requirements.txt": "dify_plugin==custom\n"},
+        normalize=False,
     )
 
     assert result == b"PK_FAKE_DIFYPKG"

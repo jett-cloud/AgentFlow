@@ -46,6 +46,14 @@ jobs:
       - name: Install dependencies
         run: uv sync --project api --dev
 
+      - name: Check generated plugin SDK contract
+        run: |
+          uv run --with dify-plugin==0.9.1 \
+            python api/services/tool_plugin_generator/sdk_contract_generator.py \
+            --compatible-requirement ">=0.9.0,<0.10.0" \
+            --base-contract api/services/tool_plugin_generator/resources/dify_plugin_sdk_0_9.json \
+            --check api/services/tool_plugin_generator/resources/dify_plugin_sdk_0_9.json
+
       # The complete upstream Dify suite is kept in the repository but is not
       # part of AgentFlow's required CI while the source snapshot is curated.
       - name: Run AgentFlow backend tests

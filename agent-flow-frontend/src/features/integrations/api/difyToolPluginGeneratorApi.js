@@ -149,7 +149,15 @@ export function updateToolPluginSession(sessionId, payload) {
 }
 
 export function publishToolPluginSession(sessionId, payload) {
-  return difyClient.post(`/workspaces/current/tool-plugin/sessions/${sessionId}/publish`, payload, LONG_TIMEOUT)
+  return difyClient.post(`/workspaces/current/tool-plugin/sessions/${sessionId}/publish`, payload)
+}
+
+export function getToolPluginPublishJob(jobId) {
+  return difyClient.get(`/workspaces/current/tool-plugin/publish-jobs/${encodeURIComponent(jobId)}`)
+}
+
+export function cancelToolPluginPublishJob(jobId) {
+  return difyClient.delete(`/workspaces/current/tool-plugin/publish-jobs/${encodeURIComponent(jobId)}`)
 }
 
 export function authorizeToolPluginTest(sessionId, payload) {

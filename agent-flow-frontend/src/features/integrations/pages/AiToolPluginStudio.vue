@@ -830,7 +830,13 @@ async function validateFiles({ notify = true } = {}) {
   try {
     const result = await validateToolPlugin(filesPayload())
     if (!result.valid) {
-      status.value = (result.errors || []).join('；') || '插件文件校验失败。'
+      const diagnostics = result.diagnostics || []
+      status.value = diagnostics.length
+        ? diagnostics.map((item) => {
+            const location = item.path ? `${item.path}${item.line ? `:${item.line}` : ''}：` : ''
+            return `[${item.code || item.stage}] ${location}${item.message}`
+          }).join('；')
+        : (result.errors || []).join('；') || '插件文件校验失败。'
       statusError.value = true
       return false
     }

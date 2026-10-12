@@ -31,7 +31,11 @@ class PluginPackagingError(RuntimeError):
 
 # 0.10.0 on PyPI is broken (imports LLMPollingResult missing from llm.py).
 # Keep Studio plugins on the last known-good 0.9.x line.
-_DIFY_PLUGIN_REQ_RE = re.compile(r"(?m)^[ \t]*dify-plugin[^\n]*$")
+# Python package names are normalized per PEP 503, so ``dify_plugin`` and
+# ``dify-plugin`` identify the same distribution.  Match either spelling (and
+# the less common dot form) before adding our canonical pin; otherwise uv sees
+# two mutually exclusive requirements and refuses to create the plugin venv.
+_DIFY_PLUGIN_REQ_RE = re.compile(r"(?im)^[ \t]*dify[-_.]plugin(?:[ \t]*[^\n]*)?$")
 _CURRENT_DIFY_PLUGIN_PIN = "dify-plugin>=0.9.0,<0.10.0"
 _BARE_PLUGIN_CTOR_RE = re.compile(r"Plugin\s*\(\s*\)")
 _CANONICAL_MAIN_PY = """from dify_plugin import Plugin, DifyPluginEnv
@@ -184,13 +188,13 @@ def _run_plugin_package_cli(files_dir: str) -> bytes:
     return package_path.read_bytes()
 
 
-def package_plugin_files(files: dict[str, str]) -> bytes:
+def package_plugin_files(files: dict[str, str], *, normalize: bool = True) -> bytes:
     """Write a plugin source tree to temporary storage and return its packaged bytes."""
     with tempfile.TemporaryDirectory() as temp_dir:
         plugin_dir = Path(temp_dir) / "plugin"
         plugin_dir.mkdir()
 
-        prepared = normalize_plugin_source_files(files)
+        prepared = normalize_plugin_source_files(files) if normalize else dict(files)
         for relative_path, content in prepared.items():
             destination = (plugin_dir / relative_path).resolve()
             if not destination.is_relative_to(plugin_dir.resolve()):

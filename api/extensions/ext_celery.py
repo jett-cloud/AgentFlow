@@ -167,6 +167,7 @@ def init_app(app: DifyApp) -> Celery:
         "tasks.regenerate_summary_index_task",  # summary index regeneration
         "tasks.initialize_created_app_rbac_access_task",  # app access initialization
         "tasks.install_default_plugins_task",  # tenant default plugin installation
+        "tasks.tool_plugin_publish_task",  # durable Studio tool-plugin publication
         "tasks.app_generate.resume_agent_app_task",  # ENG-635: Agent v2 chat ask_human resume
         "tasks.workflow_assist_run_task",  # durable Workflow Assist worker
         "tasks.workflow_assist_run_reaper_task",  # stale Workflow Assist run recovery

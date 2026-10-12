@@ -356,6 +356,13 @@ def enrich_install_error_message(message: str) -> str:
             "no module named 'dify_plugin",
         )
     ):
+        if "requirements are unsatisfiable" in lowered or "no solution found when resolving dependencies" in lowered:
+            return (
+                f"{text}\n"
+                "The plugin declares incompatible Python dependencies. Studio normalizes "
+                "dify-plugin/dify_plugin SDK pins on the next「重新安装」; timeout and mirror "
+                "changes do not resolve version conflicts."
+            )
         return (
             f"{text}\n"
             "cwd/.venv may be incomplete (uv deps timed out or network broken). "
@@ -503,13 +510,15 @@ def install_tool_plugin(
     tenant_id: str,
     user_id: str,
     previous_installation_id: str | None = None,
+    files_are_canonical: bool = False,
 ) -> InstallResult:
     """Install a candidate only when every same-name installation is owned by this session."""
     del user_id  # reserved for audit / future ownership checks
     try:
-        files = normalize_plugin_source_files(files)
+        if not files_are_canonical:
+            files = normalize_plugin_source_files(files)
         validate_plugin_files(files)
-        package = package_plugin_files(files)
+        package = package_plugin_files(files, normalize=False)
         decoded = PluginService.upload_pkg(tenant_id, package)
     except ToolPluginValidationError:
         raise

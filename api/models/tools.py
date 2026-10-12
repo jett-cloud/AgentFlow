@@ -558,6 +558,7 @@ class ToolPluginStudioSession(TypeBase):
     revision: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0, server_default=sa.text("0"))
     published_files_json: Mapped[str] = mapped_column(LongText, nullable=False, default="{}", server_default="{}")
     last_publish_diagnostic_json: Mapped[str | None] = mapped_column(LongText, nullable=True, default=None)
+    last_publish_trace_json: Mapped[str | None] = mapped_column(LongText, nullable=True, default=None)
     is_hidden: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, server_default=sa.text("false"), default=False)
     title: Mapped[str | None] = mapped_column(String(255), nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(
@@ -629,6 +630,16 @@ class ToolPluginStudioSession(TypeBase):
             return None
         return raw if isinstance(raw, dict) else None
 
+    @property
+    def last_publish_trace(self) -> dict[str, Any] | None:
+        if not self.last_publish_trace_json:
+            return None
+        try:
+            raw = json.loads(self.last_publish_trace_json)
+        except json.JSONDecodeError:
+            return None
+        return raw if isinstance(raw, dict) else None
+
 
 def _redact_tool_plugin_message_credentials(value: Any) -> Any:
     """Remove legacy runtime credential values before studio history reaches a browser or LLM."""
@@ -643,6 +654,50 @@ def _redact_tool_plugin_message_credentials(value: Any) -> Any:
         else:
             redacted[key] = _redact_tool_plugin_message_credentials(item)
     return redacted
+
+
+class ToolPluginPublishJob(TypeBase):
+    """Durable state for an asynchronous Studio publish attempt."""
+
+    __tablename__ = "tool_plugin_publish_jobs"
+    __table_args__ = (
+        sa.PrimaryKeyConstraint("id", name="tool_plugin_publish_job_pkey"),
+        sa.Index("tool_plugin_publish_job_session_created_idx", "session_id", "created_at"),
+        sa.Index("tool_plugin_publish_job_status_lease_idx", "status", "lease_expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        StringUUID, insert_default=lambda: str(uuid4()), default_factory=lambda: str(uuid4()), init=False
+    )
+    tenant_id: Mapped[str] = mapped_column(StringUUID, nullable=False)
+    account_id: Mapped[str] = mapped_column(StringUUID, nullable=False)
+    session_id: Mapped[str] = mapped_column(StringUUID, nullable=False)
+    publish_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    expected_revision: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    parameters_json: Mapped[str] = mapped_column(LongText, nullable=False, default="{}")
+    encrypted_credentials_json: Mapped[str] = mapped_column(LongText, nullable=False, default="{}")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    celery_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True, default=None)
+    attempt_id: Mapped[str | None] = mapped_column(StringUUID, nullable=True, default=None)
+    candidate_id: Mapped[str | None] = mapped_column(String(255), nullable=True, default=None)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(sa.DateTime, nullable=True, default=None)
+    cancel_requested: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, server_default=sa.text("false"), default=False
+    )
+    trace_json: Mapped[str | None] = mapped_column(LongText, nullable=True, default=None)
+    diagnostic_json: Mapped[str | None] = mapped_column(LongText, nullable=True, default=None)
+    result_json: Mapped[str | None] = mapped_column(LongText, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime, nullable=False, server_default=func.current_timestamp(), init=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+        init=False,
+    )
 
 
 @deprecated

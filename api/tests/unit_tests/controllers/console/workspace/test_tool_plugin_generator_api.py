@@ -16,6 +16,7 @@ from controllers.console.workspace.tool_plugin_generator import (
     ToolPluginDownloadApi,
     ToolPluginGenerateApi,
     ToolPluginPublishApi,
+    ToolPluginPublishJobApi,
     ToolPluginTestAuthorizationApi,
     ToolPluginValidateApi,
     _agent_request_message,
@@ -24,7 +25,6 @@ from controllers.console.workspace.tool_plugin_generator import (
 )
 from libs.external_api import ExternalApi
 from services.tool_plugin_generator.agent_runner import AgentTurnResult
-from services.tool_plugin_generator.publish_service import PublishResult
 from services.tool_plugin_generator.service import GenerateResult
 from services.tool_plugin_generator.validator import ToolPluginValidationError
 
@@ -137,7 +137,7 @@ def test_validate_returns_validation_errors(app: Flask) -> None:
     with (
         app.test_request_context("/", json={"files": [{"path": "main.py", "content": "pass"}]}),
         patch(
-            "controllers.console.workspace.tool_plugin_generator.validate_plugin_files",
+            "controllers.console.workspace.tool_plugin_generator.prepare_candidate_source",
             side_effect=ToolPluginValidationError(["Missing required file: manifest.yaml"]),
         ),
     ):
@@ -146,6 +146,7 @@ def test_validate_returns_validation_errors(app: Flask) -> None:
     assert response == {
         "valid": False,
         "errors": ["Missing required file: manifest.yaml"],
+        "diagnostics": [],
     }
 
 
@@ -202,7 +203,7 @@ def test_test_authorization_returns_one_shot_token(app: Flask) -> None:
     )
 
 
-def test_direct_publish_needs_no_live_test_authorization(app: Flask) -> None:
+def test_direct_publish_queues_job_without_live_test_authorization(app: Flask) -> None:
     api = ToolPluginPublishApi()
     method = unwrap(api.post)
     account = MagicMock(id="user-1")
@@ -216,16 +217,22 @@ def test_direct_publish_needs_no_live_test_authorization(app: Flask) -> None:
         installation_id=None,
         plugin_unique_identifier=None,
     )
-    published = PublishResult(
-        ok=True,
-        status="published",
-        plugin_unique_identifier="acme/demo:0.0.1@new",
-        installation_id="install-1",
-        output_text="未执行真实 API 测试。",
-        elapsed_ms=0,
-        diagnostic=None,
-    )
-    persisted = MagicMock(revision=5)
+    job = MagicMock(id="job-1")
+    queued = {
+        "id": "job-1",
+        "session_id": "session-1",
+        "status": "queued",
+        "publish_mode": "direct",
+        "attempt_id": None,
+        "candidate_id": None,
+        "cancel_requested": False,
+        "can_cancel": True,
+        "trace": None,
+        "diagnostic": None,
+        "result": None,
+        "created_at": None,
+        "updated_at": None,
+    }
 
     with (
         app.test_request_context(
@@ -243,25 +250,66 @@ def test_direct_publish_needs_no_live_test_authorization(app: Flask) -> None:
             return_value=(account, None),
         ),
         patch("controllers.console.workspace.tool_plugin_generator._acquire_session_lock", return_value=MagicMock()),
-        patch(
-            "controllers.console.workspace.tool_plugin_generator.acquire_plugin_publish_lock",
-            return_value=MagicMock(),
-        ),
         patch("controllers.console.workspace.tool_plugin_generator.get_session", return_value=studio_session),
         patch("controllers.console.workspace.tool_plugin_generator.consume_test_authorization") as consume,
-        patch(
-            "controllers.console.workspace.tool_plugin_generator.publish_tool_plugin",
-            return_value=published,
-        ) as publish,
-        patch("controllers.console.workspace.tool_plugin_generator.update_session", return_value=persisted),
+        patch("controllers.console.workspace.tool_plugin_generator.create_publish_job", return_value=job) as create,
+        patch("controllers.console.workspace.tool_plugin_generator.publish_job_to_dict", return_value=queued),
+        patch("controllers.console.workspace.tool_plugin_generator.update_publish_job"),
+        patch("controllers.console.workspace.tool_plugin_generator.tool_plugin_publish_task.delay") as delay,
         patch("controllers.console.workspace.tool_plugin_generator.release_session_operation_lock"),
     ):
+        delay.return_value.id = "celery-1"
         response = method(api, "tenant-1", "session-1")
 
-    assert response["ok"] is True
-    assert response["revision"] == 5
-    assert publish.call_args.kwargs["publish_mode"] == "direct"
+    body, status = response
+    assert status == 202
+    assert body["id"] == "job-1"
+    assert create.call_args.kwargs["publish_mode"] == "direct"
+    delay.assert_called_once_with("job-1")
     consume.assert_not_called()
+
+
+def test_publish_job_query_and_cancel_are_scoped_to_current_account(app: Flask) -> None:
+    api = ToolPluginPublishJobApi()
+    account = MagicMock(id="user-1")
+    job = MagicMock(id="job-1")
+    payload = {
+        "id": "job-1",
+        "session_id": "session-1",
+        "status": "queued",
+        "publish_mode": "direct",
+        "attempt_id": None,
+        "candidate_id": None,
+        "cancel_requested": False,
+        "can_cancel": True,
+        "trace": None,
+        "diagnostic": None,
+        "result": None,
+        "created_at": None,
+        "updated_at": None,
+    }
+
+    with (
+        app.test_request_context("/"),
+        patch(
+            "controllers.console.workspace.tool_plugin_generator.current_account_with_tenant",
+            return_value=(account, None),
+        ),
+        patch("controllers.console.workspace.tool_plugin_generator.get_publish_job", return_value=job) as get_job,
+        patch("controllers.console.workspace.tool_plugin_generator.publish_job_to_dict", return_value=payload),
+        patch("controllers.console.workspace.tool_plugin_generator.request_job_cancel") as cancel,
+    ):
+        queried = unwrap(api.get)(api, "tenant-1", "job-1")
+        cancelled = unwrap(api.delete)(api, "tenant-1", "job-1")
+
+    assert queried["id"] == cancelled["id"] == "job-1"
+    assert get_job.call_args_list[0].kwargs == {
+        "tenant_id": "tenant-1",
+        "account_id": "user-1",
+        "job_id": "job-1",
+    }
+    assert get_job.call_args_list[1].kwargs["for_update"] is True
+    cancel.assert_called_once_with(job)
 
 
 def test_agent_turn_uses_server_owned_draft_and_returns_revision(app: Flask) -> None:

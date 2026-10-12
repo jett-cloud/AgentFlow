@@ -1,0 +1,144 @@
+{
+  "classes": {
+    "dify_plugin.Tool": {
+      "methods": {
+        "create_blob_message": {
+          "optional": [
+            "meta"
+          ],
+          "required": [
+            "blob"
+          ]
+        },
+        "create_image_message": {
+          "optional": [],
+          "required": [
+            "image_url"
+          ]
+        },
+        "create_json_message": {
+          "optional": [],
+          "required": [
+            "json"
+          ]
+        },
+        "create_link_message": {
+          "optional": [],
+          "required": [
+            "link"
+          ]
+        },
+        "create_log_message": {
+          "optional": [
+            "status",
+            "parent",
+            "metadata"
+          ],
+          "required": [
+            "label",
+            "data"
+          ]
+        },
+        "create_retriever_resource_message": {
+          "optional": [],
+          "required": [
+            "retriever_resources",
+            "context"
+          ]
+        },
+        "create_stream_variable_message": {
+          "optional": [],
+          "required": [
+            "variable_name",
+            "variable_value"
+          ]
+        },
+        "create_text_message": {
+          "optional": [],
+          "required": [
+            "text"
+          ]
+        },
+        "create_variable_message": {
+          "optional": [],
+          "required": [
+            "variable_name",
+            "variable_value"
+          ]
+        }
+      }
+    }
+  },
+  "compatible_requirement": ">=0.9.0,<0.10.0",
+  "distribution": "dify-plugin",
+  "generator_version": "1",
+  "modules": {
+    "dify_plugin": {
+      "exports": [
+        "AgentProvider",
+        "AgentStrategy",
+        "DifyPluginEnv",
+        "Endpoint",
+        "File",
+        "LargeLanguageModel",
+        "ModelProvider",
+        "ModerationModel",
+        "OAICompatEmbeddingModel",
+        "OAICompatLargeLanguageModel",
+        "OAICompatProvider",
+        "OAICompatRerankModel",
+        "OAICompatSpeech2TextModel",
+        "OAICompatText2SpeechModel",
+        "Plugin",
+        "RerankModel",
+        "Speech2TextModel",
+        "TTSModel",
+        "TextEmbeddingModel",
+        "Tool",
+        "ToolProvider"
+      ]
+    },
+    "dify_plugin.entities.tool": {
+      "exports": [
+        "CommonParameterType",
+        "CredentialType",
+        "I18nObject",
+        "InvokeMessage",
+        "OAuthSchema",
+        "ParameterAutoGenerate",
+        "ParameterOption",
+        "ParameterTemplate",
+        "PromptMessageTool",
+        "ProviderConfig",
+        "ToolConfiguration",
+        "ToolConfigurationExtra",
+        "ToolDescription",
+        "ToolIdentity",
+        "ToolInvokeMessage",
+        "ToolLabelEnum",
+        "ToolParameter",
+        "ToolParameterOption",
+        "ToolProviderConfiguration",
+        "ToolProviderConfigurationExtra",
+        "ToolProviderIdentity",
+        "ToolProviderType",
+        "ToolRuntime",
+        "ToolSelector",
+        "docs",
+        "load_yaml_file"
+      ]
+    },
+    "dify_plugin.errors.tool": {
+      "exports": [
+        "DatasourceCredentialValidationError",
+        "DatasourceOAuthError",
+        "ToolProviderCredentialValidationError",
+        "ToolProviderOAuthError"
+      ]
+    }
+  },
+  "symbol_suggestions": {
+    "dify_plugin.errors.tool.ToolInvokeError": "Raise RuntimeError instead, or use a currently exported SDK exception where its semantics match."
+  },
+  "version": "0.9.1"
+}

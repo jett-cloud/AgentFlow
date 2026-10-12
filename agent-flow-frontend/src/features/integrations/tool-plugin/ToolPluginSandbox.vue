@@ -50,7 +50,7 @@
           </div>
         </div>
 
-        <p class="direct-publish-hint">直接发布仍会执行本地文件、YAML、Python 语法和插件结构校验。</p>
+        <p class="direct-publish-hint">两种方式都会先用隔离的影子候选完成依赖安装、导入和启动；直接发布只跳过外部 API 调用。</p>
 
         <h3 class="test-parameters-title">真实测试参数（可选）</h3>
 
@@ -201,6 +201,27 @@
           如需真实测试，请先填写必填凭据：凭据只用于本次验证，不会保存。
         </p>
         <p v-if="uploadError" class="test-hint warn">{{ uploadError }}</p>
+        <div v-if="publishJob && !terminalPublishJob" class="publish-progress">
+          <div class="test-result-header">
+            <strong>{{ currentPublishStageLabel }}</strong>
+            <span>{{ publishElapsedMs }} ms</span>
+          </div>
+          <p>后台任务：{{ publishJob.id }}</p>
+          <p v-if="externalCallSummary">{{ externalCallSummary }}</p>
+          <ol v-if="publishStages.length" class="publish-stage-list">
+            <li v-for="stage in publishStages" :key="`${stage.stage}-${stage.started_at}`">
+              {{ stageLabel(stage.stage) }} · {{ stage.duration_ms }} ms
+            </li>
+          </ol>
+          <button
+            v-if="publishJob.can_cancel"
+            type="button"
+            class="secondary-btn"
+            @click="cancelCurrentPublish"
+          >
+            取消发布
+          </button>
+        </div>
         <div v-if="testResult" class="test-result" :class="{ error: !testResult.ok }">
           <div class="test-result-header">
             <strong>{{ publishResultTitle }}</strong>
@@ -209,7 +230,19 @@
           <p v-if="testResult.plugin_unique_identifier" class="test-package">
             实际运行包：{{ testResult.plugin_unique_identifier }}
           </p>
+          <p v-if="testResult.build_trace?.canonical_digest" class="test-package">
+            构建指纹：{{ testResult.build_trace.canonical_digest.slice(0, 16) }}
+          </p>
+          <p v-if="publishFailureStage" class="test-package">失败阶段：{{ publishFailureStage }}</p>
           <pre>{{ testResult.ok ? (testResult.output_text || '（无输出）') : (testResult.diagnostic?.message || testResult.error || '（无错误详情）') }}</pre>
+          <ul v-if="publishDiagnostics.length" class="diagnostic-list">
+            <li v-for="(item, index) in publishDiagnostics" :key="`${item.code || item.stage}-${index}`">
+              <strong>{{ item.code || item.stage }}</strong>
+              <span v-if="item.path">{{ item.path }}<template v-if="item.line">:{{ item.line }}</template></span>
+              <p>{{ item.message }}</p>
+              <small v-if="item.suggestion">建议：{{ item.suggestion }}</small>
+            </li>
+          </ul>
         </div>
         <p v-if="unauthorized" class="authorization-error">
           当前账号无权测试工具。<RouterLink to="/integrations?tab=tools">前往工具授权</RouterLink>
@@ -220,12 +253,14 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { uploadConsoleFile, uploadRemoteFileInfo } from '@/shared/media/difyFilesApi.js'
 import {
   authorizeToolPluginTest,
+  cancelToolPluginPublishJob,
+  getToolPluginPublishJob,
   publishToolPluginSession,
 } from '@/features/integrations/api/difyToolPluginGeneratorApi.js'
 import { isAuthorizationError } from './pluginInstallHelpers.js'
@@ -256,6 +291,8 @@ const uploading = ref(false)
 const uploadError = ref('')
 const testResult = ref(null)
 const unauthorized = ref(false)
+const publishJob = ref(null)
+let publishPollGeneration = 0
 const remoteUrls = reactive({})
 
 watch(
@@ -318,6 +355,107 @@ const publishResultTitle = computed(() => {
   if (!testResult.value?.ok)
     return '发布失败'
   return activePublishMode.value === 'direct' ? '发布成功（未测试）' : '测试并发布成功'
+})
+
+const publishDiagnostics = computed(() => {
+  return testResult.value?.diagnostic?.details?.diagnostics || []
+})
+
+const publishFailureStage = computed(() => {
+  const stage = testResult.value?.diagnostic?.stage
+  return {
+    validate: '发布前预检',
+    stage_cleanup: '清理遗留影子候选',
+    stage_install: '安装并启动影子候选',
+    stage_test: '调用影子候选',
+    install: '切换正式插件',
+    test: '正式插件测试',
+    persist: '保存发布状态',
+  }[stage] || stage || ''
+})
+
+const terminalPublishJob = computed(() => ['published', 'publish_failed', 'rollback_failed', 'cancelled'].includes(publishJob.value?.status))
+const publishStages = computed(() => publishJob.value?.trace?.stages || [])
+const publishElapsedMs = computed(() => publishStages.value.reduce((total, stage) => total + Number(stage.duration_ms || 0), 0))
+const currentPublishStageLabel = computed(() => {
+  if (publishJob.value?.status === 'queued')
+    return '等待后台 worker'
+  return stageLabel(publishJob.value?.trace?.state || 'preparing')
+})
+const externalCallSummary = computed(() => {
+  if (activePublishMode.value === 'direct')
+    return '外部 API 调用：0（直接发布模式）'
+  const called = publishStages.value.some(stage => ['stage_verify', 'test'].includes(stage.stage))
+  return `外部 API 调用：${called ? '已进入真实测试阶段（最多 1 次）' : '尚未调用'}`
+})
+
+const STAGE_LABELS = {
+  preparing: '准备发布',
+  preflight: '校验文件与依赖',
+  stage_cleanup: '清理旧影子候选',
+  stage_install: '安装影子候选',
+  stage_verify: '验证影子候选',
+  commit_install: '安装正式插件',
+  persist: '保存发布状态',
+  cleanup: '清理候选',
+  published: '发布完成',
+  failed: '发布失败',
+  rollback_failed: '回滚失败',
+}
+
+function stageLabel(stage) {
+  return STAGE_LABELS[stage] || stage || '等待开始'
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function waitForPublishJob(initialJob) {
+  const generation = ++publishPollGeneration
+  let transientFailures = 0
+  publishJob.value = initialJob
+  while (!terminalPublishJob.value && generation === publishPollGeneration) {
+    await sleep(1000)
+    try {
+      publishJob.value = await getToolPluginPublishJob(initialJob.id)
+      transientFailures = 0
+    }
+    catch (error) {
+      const status = error?.response?.status
+      if ((status && status < 500) || ++transientFailures > 30)
+        throw error
+      await sleep(Math.min(5000, transientFailures * 500))
+    }
+  }
+  if (generation !== publishPollGeneration)
+    throw new Error('发布状态轮询已停止。')
+  if (publishJob.value.status === 'cancelled') {
+    return {
+      ok: false,
+      status: 'cancelled',
+      elapsed_ms: publishElapsedMs.value,
+      diagnostic: { stage: publishJob.value.trace?.state, message: '发布已安全取消。' },
+      build_trace: publishJob.value.trace,
+    }
+  }
+  return publishJob.value.result || {
+    ok: false,
+    status: publishJob.value.status,
+    elapsed_ms: publishElapsedMs.value,
+    diagnostic: publishJob.value.diagnostic,
+    build_trace: publishJob.value.trace,
+  }
+}
+
+async function cancelCurrentPublish() {
+  if (!publishJob.value?.id)
+    return
+  publishJob.value = await cancelToolPluginPublishJob(publishJob.value.id)
+}
+
+onBeforeUnmount(() => {
+  publishPollGeneration += 1
 })
 
 function parameterLabel(parameter) {
@@ -494,11 +632,14 @@ async function handleTest() {
       },
     )
     const authorization = await authorizeToolPluginTest(props.sessionId, payload)
-    const result = await publishToolPluginSession(props.sessionId, {
+    const job = await publishToolPluginSession(props.sessionId, {
       ...payload,
       publish_mode: 'test',
       authorization_token: authorization.token,
     })
+    for (const key of Object.keys(nodeData.value.credentials || {}))
+      nodeData.value.credentials[key] = ''
+    const result = await waitForPublishJob(job)
     testResult.value = result
     emit('publish-result', { ...result, publish_mode: 'test' })
     unauthorized.value = !result?.ok && isAuthorizationError(result?.error)
@@ -548,7 +689,7 @@ async function handleDirectPublish() {
   emit('publish-start')
   try {
     await ElMessageBox.confirm(
-      '将执行免费的本地静态校验并直接发布，不会调用外部 API，也不会消耗 API 调用次数。该版本未经真实调用验证，运行时仍可能失败。',
+      '将执行完整预检，并用隔离的影子候选验证依赖安装、Python 导入和启动；不会调用外部 API，也不会消耗 API 调用次数。影子验证通过后才会切换正式插件。',
       '确认直接发布',
       {
         type: 'warning',
@@ -557,13 +698,14 @@ async function handleDirectPublish() {
         distinguishCancelAndClose: true,
       },
     )
-    const result = await publishToolPluginSession(
+    const job = await publishToolPluginSession(
       props.sessionId,
       buildDirectPublishPayload({
         expectedRevision: props.expectedRevision,
         toolName: nodeData.value.tool_name,
       }),
     )
+    const result = await waitForPublishJob(job)
     testResult.value = result
     emit('publish-result', { ...result, publish_mode: 'direct' })
   }
@@ -611,6 +753,18 @@ async function handleDirectPublish() {
 }
 .sandbox-header h2 { margin: 0; font-size: 14px; }
 .sandbox-header p { margin: 4px 0 0; color: #667085; font-size: 12px; }
+.publish-progress {
+  margin-top: 12px;
+  border: 1px solid #c7d7fe;
+  border-radius: 10px;
+  background: #f5f8ff;
+  padding: 12px;
+  color: #344054;
+  font-size: 12px;
+}
+.publish-progress p { margin: 6px 0; overflow-wrap: anywhere; }
+.publish-stage-list { margin: 8px 0; padding-left: 20px; }
+.publish-stage-list li { margin: 4px 0; }
 .local-badge {
   flex: none;
   border: 1px solid #c7d7fe;
@@ -867,6 +1021,22 @@ async function handleDirectPublish() {
   white-space: pre-wrap;
   word-break: break-word;
 }
+.diagnostic-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.diagnostic-list li {
+  border-top: 1px solid #fecdca;
+  padding-top: 8px;
+  color: #344054;
+  font-size: 11px;
+}
+.diagnostic-list li > span { margin-left: 8px; color: #667085; font-family: Consolas, Monaco, monospace; }
+.diagnostic-list li > p { margin: 4px 0; }
+.diagnostic-list li > small { color: #667085; }
 .authorization-error { margin: 12px 0 0; color: #b42318; font-size: 12px; }
 .authorization-error a { color: var(--af-brand-strong); }
 @media (max-width: 760px) {

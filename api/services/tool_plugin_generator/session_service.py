@@ -141,6 +141,7 @@ def session_to_detail(row: ToolPluginStudioSession) -> dict[str, Any]:
             "plugin_unique_identifier": row.plugin_unique_identifier,
             "installation_id": row.installation_id,
             "last_publish_diagnostic": row.last_publish_diagnostic,
+            "last_publish_trace": row.last_publish_trace,
         }
     )
     return detail
@@ -356,6 +357,9 @@ def update_session(
     if "last_publish_diagnostic" in patch:
         diagnostic = patch.get("last_publish_diagnostic")
         row.last_publish_diagnostic_json = _dump(diagnostic) if diagnostic is not None else None
+    if "last_publish_trace" in patch:
+        trace = patch.get("last_publish_trace")
+        row.last_publish_trace_json = _dump(trace) if trace is not None else None
 
     row.revision += 1
     row.updated_at = naive_utc_now()

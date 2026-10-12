@@ -97,6 +97,28 @@ def test_create_session_uses_draft_name_and_lists(fake_db: _FakeSession) -> None
     assert row.revision == 0
     assert row.published_files == {}
     assert row.last_publish_diagnostic is None
+    assert row.last_publish_trace is None
+
+
+def test_publish_trace_round_trips_in_session_detail(fake_db: _FakeSession) -> None:
+    row = session_service.create_session(tenant_id="t1", account_id="a1", author="acme")
+    fake_db._store[row.id] = row
+    trace = {
+        "draft_digest": "a" * 64,
+        "canonical_digest": "b" * 64,
+        "completed_stages": ["canonicalize", "preflight"],
+    }
+
+    updated = session_service.update_session(
+        tenant_id="t1",
+        account_id="a1",
+        session_id=row.id,
+        expected_revision=0,
+        patch={"last_publish_trace": trace},
+    )
+
+    assert updated.last_publish_trace == trace
+    assert session_service.session_to_detail(updated)["last_publish_trace"] == trace
 
 
 def test_plugin_publish_lock_is_scoped_by_tenant_and_plugin(monkeypatch: pytest.MonkeyPatch) -> None:
